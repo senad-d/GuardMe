@@ -1,0 +1,50 @@
+name: E2E TUI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tui-e2e:
+    name: GuardMe TUI e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.19.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TUI e2e capture
+        run: npm run test:e2e:tui
+
+      - name: Upload TUI panel capture
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: guardme-tui-panels
+          path: tmp/e2e/guardme-tui-panels.txt
+          if-no-files-found: warn
+
+      - name: Print guardme-tui-panels.txt
+        if: always()
+        run: cat tmp/e2e/guardme-tui-panels.txt

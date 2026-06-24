@@ -1,0 +1,222 @@
+import { POLICY_VERSION } from "../constants.ts";
+import type { PolicyDiagnostic, RuleSource, RuleSourceKind } from "../policy/action.ts";
+import type {
+  CommandRuleSection,
+  GuardMePathRule,
+  GuardMePolicyConfig,
+  GuardMeRule,
+  PathRuleSection,
+  PolicyConfigSection,
+} from "./schema.ts";
+import { createEmptyPolicyConfig } from "./schema.ts";
+
+export type PolicyConfigSourceKind = Extract<RuleSourceKind, "builtin" | "global" | "local">;
+
+export interface PolicyConfigSource {
+  readonly kind: PolicyConfigSourceKind;
+  readonly path?: string;
+  readonly config: GuardMePolicyConfig;
+}
+
+export interface SourcedGuardMeRule extends GuardMeRule {
+  readonly section: PolicyConfigSection;
+  readonly source: RuleSource;
+}
+
+export interface SourcedGuardMePathRule extends GuardMePathRule {
+  readonly section: PathRuleSection;
+  readonly source: RuleSource;
+}
+
+export interface MergedGuardMePolicyConfig {
+  readonly version: number;
+  readonly allowPaths: readonly SourcedGuardMePathRule[];
+  readonly denyPaths: readonly SourcedGuardMePathRule[];
+  readonly zeroAccessPaths: readonly SourcedGuardMePathRule[];
+  readonly readOnlyPaths: readonly SourcedGuardMePathRule[];
+  readonly noDeletePaths: readonly SourcedGuardMePathRule[];
+  readonly allowCommands: readonly SourcedGuardMeRule[];
+  readonly denyCommands: readonly SourcedGuardMeRule[];
+  readonly dangerousCommands: readonly SourcedGuardMeRule[];
+  readonly protectedCredentialPaths: readonly SourcedGuardMePathRule[];
+}
+
+export interface MergePolicyResult {
+  readonly config: MergedGuardMePolicyConfig;
+  readonly diagnostics: readonly PolicyDiagnostic[];
+}
+
+const PATH_SECTIONS: readonly PathRuleSection[] = [
+  "allowPaths",
+  "denyPaths",
+  "zeroAccessPaths",
+  "readOnlyPaths",
+  "noDeletePaths",
+  "protectedCredentialPaths",
+];
+
+const COMMAND_SECTIONS: readonly CommandRuleSection[] = ["allowCommands", "denyCommands", "dangerousCommands"];
+
+const PROTECTION_PATH_SECTIONS: readonly PathRuleSection[] = [
+  "denyPaths",
+  "zeroAccessPaths",
+  "readOnlyPaths",
+  "noDeletePaths",
+  "protectedCredentialPaths",
+];
+
+const DELETE_LIKE_ACTIONS = new Set(["delete", "move", "rename"]);
+const MUTATION_ACTIONS = new Set(["write", "edit", "delete", "move", "rename"]);
+
+export function mergePolicyConfigs(sources: readonly PolicyConfigSource[]): MergePolicyResult {
+  const mutable = createMutableMergedConfig();
+  const diagnostics: PolicyDiagnostic[] = [];
+  const seenBySection = new Map<PolicyConfigSection, Set<string>>();
+  const existingProtections: SourcedGuardMePathRule[] = [];
+
+  for (const source of sources) {
+    for (const section of PATH_SECTIONS) {
+      const rules = source.config[section];
+      for (const [index, rule] of rules.entries()) {
+        const sourcedRule = sourcePathRule(section, rule, source, index);
+        if (source.kind === "local" && section === "allowPaths") {
+          const conflicts = existingProtections.filter((protection) => localAllowConflictsWithProtection(sourcedRule, protection));
+          for (const conflict of conflicts) {
+            diagnostics.push({
+              severity: "warning",
+              code: "merge.localAllowCannotOverrideProtection",
+              message: `Local allow rule '${sourcedRule.pattern}' cannot override ${conflict.source.kind} ${conflict.section} rule '${conflict.pattern}'. Deny/protection still wins.`,
+              source: sourcedRule.source,
+            });
+          }
+        }
+
+        if (appendUnique(mutable[section], sourcedRule, section, seenBySection)) {
+          if (PROTECTION_PATH_SECTIONS.includes(section)) {
+            existingProtections.push(sourcedRule);
+          }
+        }
+      }
+    }
+
+    for (const section of COMMAND_SECTIONS) {
+      const rules = source.config[section];
+      for (const [index, rule] of rules.entries()) {
+        appendUnique(mutable[section], sourceCommandRule(section, rule, source, index), section, seenBySection);
+      }
+    }
+  }
+
+  return { config: mutable, diagnostics };
+}
+
+export function sourcePolicyConfig(kind: PolicyConfigSourceKind, config: GuardMePolicyConfig, path?: string): PolicyConfigSource {
+  return { kind, config, ...(path ? { path } : {}) };
+}
+
+function createMutableMergedConfig(): MutableMergedGuardMePolicyConfig {
+  return {
+    ...createEmptyPolicyConfig(POLICY_VERSION),
+    allowPaths: [],
+    denyPaths: [],
+    zeroAccessPaths: [],
+    readOnlyPaths: [],
+    noDeletePaths: [],
+    allowCommands: [],
+    denyCommands: [],
+    dangerousCommands: [],
+    protectedCredentialPaths: [],
+  };
+}
+
+interface MutableMergedGuardMePolicyConfig extends MergedGuardMePolicyConfig {
+  readonly allowPaths: SourcedGuardMePathRule[];
+  readonly denyPaths: SourcedGuardMePathRule[];
+  readonly zeroAccessPaths: SourcedGuardMePathRule[];
+  readonly readOnlyPaths: SourcedGuardMePathRule[];
+  readonly noDeletePaths: SourcedGuardMePathRule[];
+  readonly allowCommands: SourcedGuardMeRule[];
+  readonly denyCommands: SourcedGuardMeRule[];
+  readonly dangerousCommands: SourcedGuardMeRule[];
+  readonly protectedCredentialPaths: SourcedGuardMePathRule[];
+}
+
+function sourcePathRule(
+  section: PathRuleSection,
+  rule: GuardMePathRule,
+  source: PolicyConfigSource,
+  index: number,
+): SourcedGuardMePathRule {
+  return {
+    ...rule,
+    section,
+    source: ruleSource(source, index),
+  };
+}
+
+function sourceCommandRule(
+  section: CommandRuleSection,
+  rule: GuardMeRule,
+  source: PolicyConfigSource,
+  index: number,
+): SourcedGuardMeRule {
+  return {
+    ...rule,
+    section,
+    source: ruleSource(source, index),
+  };
+}
+
+function ruleSource(source: PolicyConfigSource, index: number): RuleSource {
+  return {
+    kind: source.kind,
+    ...(source.path ? { path: source.path } : {}),
+    index,
+  };
+}
+
+function appendUnique<T extends SourcedGuardMeRule>(
+  target: T[],
+  rule: T,
+  section: PolicyConfigSection,
+  seenBySection: Map<PolicyConfigSection, Set<string>>,
+): boolean {
+  const key = ruleDedupeKey(rule);
+  let seen = seenBySection.get(section);
+  if (!seen) {
+    seen = new Set();
+    seenBySection.set(section, seen);
+  }
+  if (seen.has(key)) {
+    return false;
+  }
+  seen.add(key);
+  target.push(rule);
+  return true;
+}
+
+function ruleDedupeKey(rule: GuardMeRule): string {
+  const actions = [...(rule.actions ?? [])].sort().join(",");
+  return `${rule.pattern}\u0000${actions}\u0000${rule.reason ?? ""}`;
+}
+
+function localAllowConflictsWithProtection(allowRule: SourcedGuardMePathRule, protection: SourcedGuardMePathRule): boolean {
+  if (allowRule.pattern !== protection.pattern) {
+    return false;
+  }
+
+  if (protection.section === "readOnlyPaths") {
+    return actionSetIntersects(allowRule.actions, MUTATION_ACTIONS);
+  }
+  if (protection.section === "noDeletePaths") {
+    return actionSetIntersects(allowRule.actions, DELETE_LIKE_ACTIONS);
+  }
+  return true;
+}
+
+function actionSetIntersects(actions: readonly string[] | undefined, protectedActions: ReadonlySet<string>): boolean {
+  if (!actions || actions.length === 0) {
+    return true;
+  }
+  return actions.some((action) => protectedActions.has(action));
+}

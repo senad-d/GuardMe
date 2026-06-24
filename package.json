@@ -1,0 +1,69 @@
+{
+  "name": "@senad-d/guardme",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Pi extension that enforces IAM-like guardrails for LLM shell and filesystem tool access.",
+  "license": "MIT",
+  "author": "Senad Dizdarević <112484166+senad-d@users.noreply.github.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/senad-d/GuardMe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/senad-d/GuardMe/issues"
+  },
+  "homepage": "https://github.com/senad-d/GuardMe#readme",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "guardrails",
+    "security",
+    "policy",
+    "access-control",
+    "filesystem",
+    "shell",
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "docs/**/*.md",
+    "src/**/*.ts",
+    "scripts/install-global-policy.mjs",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "dev": "pi --no-extensions -e .",
+    "typecheck": "tsc --noEmit",
+    "lint": "npm run typecheck && npm run check",
+    "format:check": "node scripts/check-format.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:e2e:rpc": "node --test test/e2e/guardme-rpc.e2e.mjs",
+    "test:e2e:tui": "node --test test/e2e/guardme-tui-capture.e2e.mjs",
+    "test:e2e": "npm run test:e2e:rpc && npm run test:e2e:tui",
+    "check": "node --check scripts/check-package-contents.mjs",
+    "pack:dry-run": "npm pack --dry-run --json",
+    "postinstall": "node scripts/install-global-policy.mjs",
+    "check:pack": "node scripts/check-package-contents.mjs",
+    "validate": "npm run typecheck && npm run test && npm run check && npm run check:pack"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.79.8",
+    "@types/node": "^25.9.3",
+    "typescript": "^6.0.3"
+  }
+}

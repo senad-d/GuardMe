@@ -1,0 +1,94 @@
+# Changelog
+
+## 0.1.0 - Unreleased
+
+- Hardened CI script-content inspection for YAML `run:` block scalar variants such as `|+`, preserved literal `#` characters in unquoted policy scalars, and blocked broad destructive commands aimed at directories containing direct `.env.*` descendants.
+- Hardened package-manager script inspection so cwd/prefix options before or after the script name select the relevant `package.json` while arguments after `--` remain script arguments.
+- Fixed concurrent GuardMe warning updates so parallel blocked tool calls merge in-session warning fingerprints instead of overwriting each other.
+- Fixed YAML comment parsing so `#` inside quoted scalars and doubled single quotes remain part of the policy value.
+- Prepared GuardMe as `@senad-d/guardme` from the Pi extension template.
+- Added the approved project definition brief and three implementation specs.
+- Replaced template runtime examples with a minimal GuardMe registration entry point.
+- Added Pi-independent policy domain types for actions, decisions, diagnostics, matched rules, and user choices.
+- Added initial GuardMe policy schema validation, built-in default protections, and config path resolution helpers.
+- Added global/local policy merge semantics with source metadata, deduplication, and diagnostics for local allow rules that cannot override protections.
+- Added safe path normalization, project-boundary detection, symlink-aware canonicalization, and glob matching helpers.
+- Added a conservative shell command classifier for hard-denied cloud/disk operations, dangerous deletion patterns, credential reads, and common file actions.
+- Added the pure deny-first policy evaluation engine covering hard protections, deny/allow precedence, default project behavior, and dangerous command outcomes.
+- Added JSONL warning/decision state helpers with path resolution, append/read behavior, fingerprint detection, redaction, and malformed-line diagnostics.
+- Added session lifecycle loading for merged policy and warning state, GuardMe footer status, untrusted-project local policy skipping, and shutdown cleanup.
+- Added tool-call guard adapters for `bash`, `read`, `write`, `edit`, `grep`, `find`, and `ls` with clear block/coaching reasons.
+- Added first-dangerous-attempt coaching persistence so repeated fingerprints proceed to user-decision handling instead of repeated coaching.
+- Added GuardMe approval UI/fallback handling for repeated dangerous actions, including TUI custom framed rendering, select fallback, and non-UI fail-closed behavior.
+- Added YAML rule persistence for saved allow/deny decisions, including local/global writes, hard-deny allow rejection, and guard integration.
+- Added `/guardme` command handling for help, framed configuration/status panes, path display, diagnostics, and confirmed starter local-policy setup.
+- Added `docs/POLICY.md` and updated README/SECURITY wording for implemented policy behavior, precedence, approval choices, state files, and limitations.
+- Expanded unit and integration tests across config, state, path matching, command classification, policy evaluation, tool-call adapters, UI fallback, and non-UI fail-closed behavior.
+- Updated package metadata to describe implemented GuardMe enforcement without adding runtime dependencies.
+- Hardened shell classification so cloud CLI denials also catch command substitutions, process substitutions, and common command-executing wrappers.
+- Added case-insensitive credential-like path hard-denial before default project allow rules.
+- Made guarded tool path-resolution failures block safely with actionable errors.
+- Hardened recursive deletion and `.git` metadata detection, including split `rm` flags and `.git` root/trailing-slash paths.
+- Refused symlinked local/global policy write targets and wrote policy YAML atomically.
+- Refused project-local generated state writes through symlinked `.pi` paths and surfaced state write failures as GuardMe diagnostics.
+- Reloaded saved approval rules into the current session so persistent allow/deny choices take effect immediately.
+- Validated generated JSONL state enum fields before using records.
+- Added ANSI-aware truncation for GuardMe approval/setup TUI text.
+- Added `docs/VALIDATION.md` with validation commands and isolated/manual smoke scenarios.
+- Added package postinstall global policy creation with non-overwriting sensible defaults.
+- Added `/guardme conf` as the primary framed configuration TUI with Setup, Status, Policies, Rules, Diagnostics, confirmation, and success panes.
+- Updated `/guardme conf` to render as an in-session custom view instead of a floating overlay, with sidebar/content focus navigation via arrows, Tab/Enter, Esc, and q.
+- Hardened shell classification for cloud CLIs hidden behind command separators, shell grouping/control flow, `eval`/`exec`, `sudo`/`doas` options, and no-space input redirections.
+- Blocked credential reads through shell input redirection forms such as `cat<~/.ssh/id_rsa`.
+- Ignored rules from unsupported policy versions after reporting diagnostics.
+- Skipped project-local generated state for untrusted projects and recorded untrusted-project warnings in global state for the active cwd.
+- Improved `/guardme conf`/setup async error handling and removed unused internal UI/config code.
+- Kept `/guardme setup` as a compatibility alias for the setup flow.
+- Documented planned policy model, security scope, validation, and implementation handoff.
+- Hardened bash classification for credential-like operands used with common read, copy, archive, metadata-edit, redirection, glob-like `.env*`/`.SSH*`, and `dd if/of` forms.
+- Hardened cloud CLI detection for ANSI-C quoted command names.
+- Centralized secret redaction for approval prompts, warning state, diagnostics notifications, and policy fingerprints, including common secret-like CLI flags.
+- Hardened cloud CLI detection for `command -p`, `env -S`/`--split-string`, and combined shell `-c` option wrappers.
+- Prevented malformed path rule `actions` values from broadening allow rules to all actions.
+- Stripped terminal control sequences from approval prompts and `/guardme` notifications before rendering untrusted text.
+- Fixed `/guardme conf` search so Escape clears the search view before closing the panel.
+- Hardened bash classification for dynamic shell-expanded command names, line-continued cloud CLI command names, inline interpreter cloud CLI calls, and inline credential path literals.
+- Hardened command rule precedence so broad wildcard `allowCommands` cannot bypass guarded compound shell segments, outside-project path checks, or wrapped denied commands.
+- Evaluated deny and dangerous command rules against executable shell segments and common wrapper/subcommand forms such as `env -- sudo`, `command sudo`, and `xargs sudo`.
+- Fixed GuardMe YAML parsing so generated quoted patterns and reasons round-trip escaped quotes and backslashes correctly.
+- Blocked outside-project shell path access before command allow rules, including dangerous compound commands that append outside reads.
+- Rejected empty rule `actions` lists so they cannot accidentally broaden path rules to all actions.
+- Resolved guarded tool `~` paths with the active GuardMe session home override when one is configured.
+- Hardened deny/dangerous command glob matching so slash-containing command arguments and absolute executable paths remain governed by rules such as `sudo *` and `chmod 777 *`.
+- Added default `sudoedit *` denial to close a privilege-escalation gap in built-in and installer-created policies.
+- Rejected unsupported `actions` fields on command rules so they cannot be mistaken for scoped command permissions.
+- Hid direct status/setup/paths/diagnostics subcommands from user-facing command completions and help in favor of `/guardme` plus `/guardme help`.
+- Made `/guardme` open on an interactive General pane with project-persisted GuardMe active/off, Pi project-trust confirmation, and warning/diagnostic detail screens.
+- Added `.pi/agent/guardme-settings.json` runtime settings with symlink-safe writes, disabled-enforcement bypass, and off-state session status.
+- Trust-gated project-local runtime settings so untrusted projects cannot disable GuardMe before project trust is enabled.
+- Refused oversized runtime settings files and kept malformed or skipped settings fail-safe to active.
+- Blocked broad `grep`/`find` discovery over directories with direct protected descendants such as `.env*`, cloud credential folders, or token-like files, while keeping narrowed safe globs allowed.
+- Blocked broad destructive shell commands aimed at directories containing direct protected descendants such as `.git` or package lockfiles.
+- Expanded tests for command rule matching, default policy parity, command-rule validation, broad discovery protections, and protected descendant deletion.
+- Added command-default-deny handling so generic `bash` commands without matching allow/deny/dangerous/hard policy are blocked as policy-missing, warned once, and require user approval on repeat.
+- Added script-content extraction for shell scripts, Makefile recipes, `package.json` scripts, Dockerfile `RUN`, CI `run:` blocks, and shell heredocs, and blocked unsafe `write`/`edit` payloads before mutation.
+- Added local script execution inspection for direct and shell-wrapper forms before `bash` can run generated or project-local scripts.
+- Added warning reason codes and model-facing follow-up guidance for dangerous, policy-missing, script-content, and local-script inspection blocks.
+- Updated the approval prompt to use a single-pane in-session framed TUI style instead of a floating overlay, with wrapped approval text instead of truncation.
+- Refused persistent approval rules for commands containing secret-like values so saved YAML does not capture tokens or passwords.
+- Hardened the postinstall global policy creator to reject symlinked policy paths and write new policy files with owner-only permissions.
+- Made the postinstall global policy creator render from the built-in default policy source of truth.
+- Made custom setup path-rule action entry fail closed when no valid actions are provided instead of silently falling back to broader defaults.
+- Refused symlinked or oversized GuardMe policy/state reads before parsing and surfaced diagnostics instead of loading unsafe files.
+- Prevented saved approval rules from overwriting existing policy YAML that cannot be loaded safely.
+- Wrote GuardMe policy YAML with owner-only permissions and rejected secret-like command rules from direct policy writes.
+- Hardened cloud CLI detection for package runners (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`), `env -C`, and escaped or multiple `find -exec` forms.
+- Inspected package-manager scripts from `package.json` before execution for `npm`/`pnpm`/`yarn`/`bun` script aliases, including matching `pre*`/`post*` lifecycle scripts and path-policy checks before reading `package.json`.
+- Redacted and terminal-sanitized model-facing GuardMe follow-up guidance targets.
+- Ignored generated `tmp/` e2e artifacts to match validation documentation.
+- Added segment-aware `allowCommands` evaluation with optional trailing argument wildcards so safe families like `pwd *` and `ls *` can allow compounds such as `pwd && ls -lh` while unallowed, dangerous, protected, outside-project, wrapper, script-content, and local-script segments still block.
+- Expanded built-in and installer-created starter allowlists with constrained safe discovery/read command families (`pwd *`, `ls *`, `cat *`, `head *`, `tail *`, `wc *`, `grep *`, `find *`) after deny/path/script protections pass.
+- Added `npm run check*`, `npm run format*`, `node *`, and `git *` to the built-in default command allowlist.
+- Narrowed default `.env.*` path protection to destructive actions and stopped treating exact template paths such as `.env.example` as credential hard-denies, while still blocking `.env` and ambiguous `.env*` shell globs.
+- Hardened package-manager script inspection to honor cwd/prefix options before reading the relevant `package.json` and to block outside-project package script inspection without explicit path policy.
+- Hardened broad `grep`/`ggrep`/`find` discovery checks across compound shell commands and absolute executable paths, and extended destructive descendant scans to nested protected metadata.
