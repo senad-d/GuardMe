@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { EXTENSION_STATUS_KEY } from "../src/constants.ts";
 import { writeGuardMeRuntimeSettings } from "../src/config/runtime-settings.ts";
 import { registerGuard, evaluateGuardedToolCall, mapToolCallToPolicyRequest } from "../src/events/register-guard.ts";
 import { registerGuidance } from "../src/events/register-guidance.ts";
@@ -23,18 +24,19 @@ async function createGuardContext(options = {}) {
     await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
     await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), options.localPolicy, "utf8");
   }
+  const statuses = [];
   const ctx = {
     cwd,
     hasUI: false,
     mode: "print",
     isProjectTrusted: () => options.trusted ?? true,
     ui: {
-      setStatus: () => {},
+      setStatus: (key, text) => statuses.push([key, text]),
       notify: () => {},
     },
   };
   await startGuardMeSession(ctx, { homeDir: home });
-  return { root, home, cwd, ctx };
+  return { root, home, cwd, ctx, statuses };
 }
 
 test("read tool calls inside the project are allowed unless protected", async () => {
@@ -70,6 +72,16 @@ test("hard-denied protected paths are recorded in warning details", async () => 
     assert.equal(record.matchedRules?.[0]?.category, "denyPaths");
     assert.equal(record.matchedRules?.[0]?.pattern, "**/.env");
   }
+  stopGuardMeSession(ctx);
+});
+
+test("blocked tool calls refresh the footer warning status immediately", async () => {
+  const { ctx, statuses } = await createGuardContext();
+
+  const blocked = await evaluateGuardedToolCall({ toolName: "write", input: { path: ".env", content: "seki=test\n" } }, ctx);
+
+  assert.equal(blocked?.block, true);
+  assert.deepEqual(statuses.at(-1), [EXTENSION_STATUS_KEY, "🛡️ (1 warning)"]);
   stopGuardMeSession(ctx);
 });
 

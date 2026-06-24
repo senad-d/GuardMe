@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-import { GUARDED_TOOL_NAMES } from "../constants.ts";
+import { EXTENSION_STATUS_KEY, GUARDED_TOOL_NAMES } from "../constants.ts";
 import type { PathTarget, PolicyAction, PolicyDecision, PolicyDiagnostic, PolicyRequest, PolicyTarget, UserDecision } from "../policy/action.ts";
 import {
   classifyShellCommand,
@@ -27,7 +27,7 @@ import { loadGuardMeConfig } from "../config/load-config.ts";
 import { persistUserDecisionRule } from "../config/write-policy.ts";
 import { appendDecisionRecord, appendWarningRecord } from "../state/warnings.ts";
 import { isAllowDecision, requestApprovalDecision, type ApprovalUiContext } from "../ui/approval-modal.ts";
-import { getGuardMeSessionState, recordGuardMeGuidance, setGuardMeSessionState, type GuardMeSessionState } from "./session-store.ts";
+import { formatGuardMeStatus, getGuardMeSessionState, recordGuardMeGuidance, setGuardMeSessionState, type GuardMeSessionState } from "./session-store.ts";
 
 export interface GuardedToolCallEvent {
   readonly toolName: string;
@@ -38,7 +38,9 @@ export interface GuardedToolCallContext {
   readonly cwd: string;
   readonly hasUI: boolean;
   readonly mode?: string;
-  readonly ui?: unknown;
+  readonly ui?: {
+    readonly setStatus?: (key: string, text: string | undefined) => void;
+  };
 }
 
 export interface ToolCallBlockResult {
@@ -160,6 +162,9 @@ async function handlePolicyDecision(
   decision: PolicyDecision,
 ): Promise<ToolCallBlockResult | undefined> {
   await persistCoachingWarningIfNeeded(state, request, decision);
+  if (decision.outcome === "coach" || decision.outcome === "deny") {
+    refreshGuardMeStatus(ctx);
+  }
   if (decision.outcome === "needs-user-decision") {
     const approval = await requestApprovalDecision(toApprovalContext(ctx), request, decision);
     if (approval.kind === "blocked") {
@@ -173,6 +178,7 @@ async function handlePolicyDecision(
     }
     await reloadPolicyAfterPersistentDecision(state, persisted.persistedTo);
     await appendApprovalDecisionRecord(state, approval.decision, persisted.persistedTo, decision.fingerprint);
+    refreshGuardMeStatus(ctx);
     if (isAllowDecision(approval.decision)) {
       return undefined;
     }
@@ -893,6 +899,14 @@ function recordStateWriteFailure(
 function currentSessionStateFor(state: GuardMeSessionState): GuardMeSessionState | undefined {
   const currentState = getGuardMeSessionState();
   return currentState?.cwd === state.cwd ? currentState : undefined;
+}
+
+function refreshGuardMeStatus(ctx: GuardedToolCallContext): void {
+  const currentState = getGuardMeSessionState();
+  if (!currentState) {
+    return;
+  }
+  ctx.ui?.setStatus?.(EXTENSION_STATUS_KEY, formatGuardMeStatus(currentState));
 }
 
 function policyDecisionToToolBlock(request: PolicyRequest, decision: PolicyDecision): ToolCallBlockResult | undefined {
