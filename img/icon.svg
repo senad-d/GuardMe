@@ -1,0 +1,28 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="tronGlow">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="256" height="256" fill="#05070d"/>
+  <polygon points="128,40 220,200 36,200"
+    fill="none"
+    stroke="#00eaff"
+    stroke-width="3"
+    filter="url(#tronGlow)"/>
+  <polygon points="128,80 190,180 66,180"
+    fill="none"
+    stroke="#00eaff"
+    stroke-width="1.5"
+    filter="url(#tronGlow)"/>
+  <path d="M128 110 L150 120 L145 155 L128 170 L111 155 L106 120 Z"
+    fill="#00eaff"
+    fill-opacity="0.08"
+    stroke="#00f5ff"
+    stroke-width="2.5"
+    filter="url(#tronGlow)"/>
+</svg>

@@ -396,7 +396,7 @@ test("command allows do not approve outside-project shell path access", async ()
   assert.match(decision.reason, /Outside-project .* requires/);
 });
 
-test("wildcard command allows do not bypass guarded compound command segments", async () => {
+test("wildcard command allows still guard compound command segments", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-compound-allow-"));
   const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
   const dangerous = shellRequest(cwd, "npm test && rm -rf build");
@@ -431,8 +431,8 @@ test("wildcard command allows do not bypass guarded compound command segments", 
   assert.match(outsideReadDecision.reason, /Outside-project read requires/);
   assert.equal(dangerousWithOutsideReadDecision.outcome, "deny");
   assert.match(dangerousWithOutsideReadDecision.reason, /Outside-project .* requires/);
-  assert.equal(genericCompoundDecision.outcome, "coach");
-  assert.equal(genericCompoundDecision.reasonCode, "policy-missing-command");
+  assert.equal(genericCompoundDecision.outcome, "allow");
+  assert.deepEqual(genericCompoundDecision.matchedRules.map((rule) => rule.pattern), ["npm *", "echo *"]);
 });
 
 test("deny command rules match later shell command segments and wrappers", async () => {
@@ -474,9 +474,9 @@ test("deny command rules match later shell command segments and wrappers", async
     request: harmlessText.request,
     commandClassification: harmlessText.classified,
   });
-  assert.equal(harmlessDecision.outcome, "coach");
-  assert.equal(harmlessDecision.reasonCode, "policy-missing-command");
-  assert.match(harmlessDecision.reason, /No allowCommands rule/);
+  assert.equal(harmlessDecision.outcome, "allow");
+  assert.equal(harmlessDecision.matchedRules[0]?.category, "allowCommands");
+  assert.equal(harmlessDecision.matchedRules[0]?.pattern, "echo *");
 });
 
 test("generic shell commands default-deny as policy-missing and prompt on repeat", async () => {

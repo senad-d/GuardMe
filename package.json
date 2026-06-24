@@ -2,7 +2,7 @@
   "name": "@senad-d/guardme",
   "version": "0.1.0",
   "type": "module",
-  "description": "Pi extension that enforces IAM-like guardrails for LLM shell and filesystem tool access.",
+  "description": "Deny-first Pi guardrails that keep LLM shell and file access safe, transparent, and user-approved.",
   "license": "MIT",
   "author": "Senad Dizdarević <112484166+senad-d@users.noreply.github.com>",
   "repository": {
@@ -17,12 +17,18 @@
     "pi-package",
     "pi-extension",
     "pi-coding-agent",
-    "guardrails",
-    "security",
-    "policy",
+    "guardme",
+    "llm-security",
+    "ai-safety",
+    "agent-safety",
+    "tool-guardrails",
+    "deny-first",
+    "iam-like-policy",
     "access-control",
-    "filesystem",
-    "shell",
+    "policy-engine",
+    "approval-workflow",
+    "shell-security",
+    "filesystem-security",
     "typescript"
   ],
   "engines": {
@@ -56,7 +62,8 @@
   "pi": {
     "extensions": [
       "./src/extension.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/senad-d/GuardMe/main/img/demo.gif"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
