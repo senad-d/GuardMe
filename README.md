@@ -99,7 +99,7 @@ Source checkout:
 ```bash
 git clone https://github.com/senad-d/GuardMe.git guardme
 cd guardme
-GUARDME_SKIP_GLOBAL_POLICY_INSTALL=1 npm install
+npm install
 npm run validate
 pi --no-extensions -e .
 ```
@@ -110,7 +110,7 @@ Use the checkout globally while developing:
 pi install /absolute/path/to/guardme
 ```
 
-`npm install` runs GuardMe's postinstall script, which creates `~/.pi/agent/guardme.yaml` with starter defaults if it is missing. Use `GUARDME_SKIP_GLOBAL_POLICY_INSTALL=1 npm install` when you do not want that development side effect.
+GuardMe has no npm install-time setup step. Missing policy files are valid: the extension applies built-in defaults at runtime. To create an editable starter policy, run `/guardme` and choose a global or project policy from Setup.
 
 ---
 
@@ -259,7 +259,7 @@ Saved decisions append narrow YAML rules, reload policy for the current session,
 | Cloud CLI is blocked | This is a hard protection. Run cloud commands outside Pi or use a separate, intentionally isolated workflow. |
 | A broad command allow still blocks | GuardMe evaluates every executable segment and protected path first; allow `ls *` cannot approve `ls && rm -rf build` or `cat .env`. |
 | Saved rule is refused | GuardMe will not persist hard-denied actions or command rules containing secret-like values. Use allow once or add a sanitized rule manually. |
-| Local development created global policy | Use `GUARDME_SKIP_GLOBAL_POLICY_INSTALL=1 npm install` or edit/remove `~/.pi/agent/guardme.yaml` manually after review. |
+| Need a starter policy file | Run `/guardme`, open Setup, and create global or project defaults. Missing files are okay because built-in defaults still apply. |
 
 ---
 
@@ -301,7 +301,7 @@ Removing the package does not automatically delete policy or state files under `
 ## Development
 
 ```bash
-GUARDME_SKIP_GLOBAL_POLICY_INSTALL=1 npm ci
+npm ci
 npm run typecheck
 npm run test
 npm run check:pack

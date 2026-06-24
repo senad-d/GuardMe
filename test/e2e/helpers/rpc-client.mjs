@@ -65,7 +65,6 @@ export class RpcPiClient {
         PI_OFFLINE: "1",
         PI_SKIP_VERSION_CHECK: "1",
         PI_TELEMETRY: "0",
-        GUARDME_SKIP_GLOBAL_POLICY_INSTALL: "1",
         NO_COLOR: "1",
       },
       stdio: ["pipe", "pipe", "pipe"],

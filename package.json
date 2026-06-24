@@ -41,7 +41,6 @@
     "CHANGELOG.md",
     "docs/**/*.md",
     "src/**/*.ts",
-    "scripts/install-global-policy.mjs",
     "tsconfig.json"
   ],
   "scripts": {
@@ -55,7 +54,6 @@
     "test:e2e": "npm run test:e2e:rpc && npm run test:e2e:tui",
     "check": "node --check scripts/check-package-contents.mjs",
     "pack:dry-run": "npm pack --dry-run --json",
-    "postinstall": "node scripts/install-global-policy.mjs",
     "check:pack": "node scripts/check-package-contents.mjs",
     "validate": "npm run typecheck && npm run test && npm run check && npm run check:pack"
   },

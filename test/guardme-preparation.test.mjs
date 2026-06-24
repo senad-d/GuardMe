@@ -17,8 +17,10 @@ test("package declares GuardMe Pi extension metadata", async () => {
   );
   assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
   assert.equal(packageJson.dependencies, undefined);
-  assert.equal(packageJson.scripts?.postinstall, "node scripts/install-global-policy.mjs");
-  assert.ok(packageJson.files.includes("scripts/install-global-policy.mjs"));
+  assert.equal(packageJson.scripts?.preinstall, undefined);
+  assert.equal(packageJson.scripts?.install, undefined);
+  assert.equal(packageJson.scripts?.postinstall, undefined);
+  assert.equal(packageJson.files.includes("scripts/install-global-policy.mjs"), false);
   assert.ok(packageJson.keywords.includes("pi-package"));
   assert.ok(packageJson.keywords.includes("tool-guardrails"));
   assert.equal(packageJson._template, undefined);

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 - Unreleased
+
+- Removed the npm postinstall lifecycle hook and excluded the global-policy helper from the npm tarball so package installation works on Node 26, where Node refuses built-in TypeScript type stripping for `.ts` files under `node_modules`.
+- Documented that GuardMe does not need install-time policy creation: built-in defaults apply at runtime, and editable policy files can be created explicitly through `/guardme`.
+
 ## 0.1.0 - Unreleased
 
 - Hardened CI script-content inspection for YAML `run:` block scalar variants such as `|+`, preserved literal `#` characters in unquoted policy scalars, and blocked broad destructive commands aimed at directories containing direct `.env.*` descendants.

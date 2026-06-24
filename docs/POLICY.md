@@ -9,11 +9,11 @@ GuardMe enforces IAM-like, deny-first policy for Pi LLM tool calls routed throug
 | Global | `~/.pi/agent/guardme.yaml` | `~/.pi/agent/guardme-state.jsonl` | n/a |
 | Project local | `.pi/agent/guardme.yaml` | `.pi/agent/guardme-state.jsonl` | `.pi/agent/guardme-settings.json` |
 
-Global policy loads first. Project-local policy, runtime settings, and generated state are loaded only when the project is trusted. GuardMe runtime settings are project-local; missing settings mean GuardMe is active, and `{ "version": 1, "enabled": false }` means GuardMe is off for that project after trust. Invalid settings fail safe to active and report diagnostics. The package postinstall step creates `~/.pi/agent/guardme.yaml` with sensible defaults if it is missing; existing policy is never overwritten, symlinked policy paths are refused, and new policy files use owner-only permissions. Missing files are still accepted at runtime, and GuardMe falls back to built-in defaults. Policy, runtime settings, and state reads fail closed for symlinked GuardMe paths or oversized files. In untrusted projects, new warned-once state is recorded in the global state file for the active cwd rather than trusting project-local state, and saved project settings apply after project trust is enabled.
+Global policy loads first. Project-local policy, runtime settings, and generated state are loaded only when the project is trusted. GuardMe runtime settings are project-local; missing settings mean GuardMe is active, and `{ "version": 1, "enabled": false }` means GuardMe is off for that project after trust. Invalid settings fail safe to active and report diagnostics. Missing policy files are accepted at runtime, and GuardMe still applies built-in defaults. Use `/guardme` Setup to create or update `~/.pi/agent/guardme.yaml` or `.pi/agent/guardme.yaml`; policy writes are explicit user actions, refuse symlinked policy paths, and use owner-only permissions for new files. Policy, runtime settings, and state reads fail closed for symlinked GuardMe paths or oversized files. In untrusted projects, new warned-once state is recorded in the global state file for the active cwd rather than trusting project-local state, and saved project settings apply after project trust is enabled.
 
-## Installer defaults
+## Built-in defaults and starter policies
 
-The installer-created global policy includes non-empty sensible defaults for:
+The built-in defaults and policies created by Setup's sensible-defaults option include non-empty rules for:
 
 - `allowPaths`: read/list access for Pi skill directories (`**/.pi/skills`, `**/.pi/skills/**`, and legacy `**/.pi/skill`, `**/.pi/skill/**`) plus local Homebrew Pi package documentation under `/opt/homebrew/lib/node_modules/@earendil-works`, so `SKILL.md` files and Pi docs can be loaded from outside the current repository.
 - `zeroAccessPaths`: SSH, GPG, and password-manager local data.

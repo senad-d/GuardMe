@@ -12,7 +12,7 @@ import { createBuiltInDefaultPolicy } from "../src/config/schema.ts";
 const execFileAsync = promisify(execFile);
 const installScript = new URL("../scripts/install-global-policy.mjs", import.meta.url);
 
-test("postinstall creates global guardme.yaml with sensible defaults", async () => {
+test("global policy helper creates guardme.yaml with sensible defaults", async () => {
   const home = await mkdtemp(join(tmpdir(), "guardme-install-home-"));
 
   const { stdout } = await execFileAsync(process.execPath, [installScript.pathname], {
@@ -38,7 +38,7 @@ test("postinstall creates global guardme.yaml with sensible defaults", async () 
   assert.ok(loaded.config.noDeletePaths.length > 0);
 });
 
-test("postinstall does not overwrite existing global guardme.yaml", async () => {
+test("global policy helper does not overwrite existing guardme.yaml", async () => {
   const home = await mkdtemp(join(tmpdir(), "guardme-install-existing-"));
   const policyPath = join(home, ".pi", "agent", "guardme.yaml");
   await mkdir(join(home, ".pi", "agent"), { recursive: true });
@@ -53,7 +53,7 @@ test("postinstall does not overwrite existing global guardme.yaml", async () => 
   assert.equal(yaml, "version: 1\n# keep custom policy\n");
 });
 
-test("postinstall refuses symlinked global policy directories", async () => {
+test("global policy helper refuses symlinked policy directories", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-install-symlink-"));
   const home = join(root, "home");
   const outside = join(root, "outside");
@@ -77,7 +77,7 @@ test("postinstall refuses symlinked global policy directories", async () => {
   await assert.rejects(readFile(join(outside, "agent", "guardme.yaml"), "utf8"));
 });
 
-test("postinstall can be skipped by environment", async () => {
+test("global policy helper can be skipped by environment", async () => {
   const home = await mkdtemp(join(tmpdir(), "guardme-install-skip-"));
 
   await execFileAsync(process.execPath, [installScript.pathname], {

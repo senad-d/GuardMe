@@ -10,7 +10,7 @@ npm run format:check
 npm run validate
 ```
 
-Postinstall/global-policy smoke test:
+Global-policy helper smoke test:
 
 ```bash
 GUARDME_HOME_DIR="$(mktemp -d)" node scripts/install-global-policy.mjs

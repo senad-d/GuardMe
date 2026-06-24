@@ -66,7 +66,7 @@
 - Session state:
   - Warned-once fingerprints persisted in separate JSONL state.
 - Files written:
-  - Global policy YAML is created during package postinstall if missing and populated with sensible defaults.
+  - Global policy YAML is created only when the user saves a global rule or runs setup; missing global policy falls back to built-in defaults.
   - Project-local policy YAML is created when the user saves a rule or runs setup.
   - State JSONL when GuardMe records first warnings.
 - Cleanup behavior:
