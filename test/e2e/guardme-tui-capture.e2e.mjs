@@ -70,7 +70,7 @@ test("GuardMe TUI capture writes one sanitized panel artifact", { timeout: 60_00
   assert.match(artifact, /GENERAL - GuardMe Off/);
   assert.match(artifact, /GENERAL - Project Untrusted/);
   assert.match(artifact, /▶ Pi project trust\s+OFF/);
-  assert.match(artifact, /Row 2\/4 • Trust OFF • Enter: trust project • after reload\/restart: project policy\/settings\/state can load/);
+  assert.match(artifact, /Row 3\/5 • Trust OFF • Enter: trust project • after reload\/restart: project policy\/settings\/state can load/);
   assert.doesNotMatch(artifact, /## GENERAL - Project Untrusted[\s\S]*?│.*….*│[\s\S]*?## Search - Results/);
   assert.match(artifact, /Search - Results/);
   assert.match(artifact, /SEARCH TRUST/);

@@ -471,6 +471,54 @@ test("/guardme General toggle persists GuardMe off for the project", async () =>
   stopGuardMeSession(ctx);
 });
 
+test("/guardme General Insecure edits toggle persists write/edit bypass", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-command-insecure-edits-"));
+  const homeDir = join(root, "home");
+  const cwd = join(root, "project");
+  await mkdir(cwd, { recursive: true });
+  const settingsPath = resolveRuntimeSettingsPath(cwd).settingsPath;
+  let customCalls = 0;
+  let reopenedLines = [];
+  const { ctx, notifications } = commandContext(cwd, {
+    homeDir,
+    mode: "tui",
+    custom: async (factory) => {
+      customCalls += 1;
+      let result;
+      const component = factory(
+        { requestRender: () => {} },
+        { fg: (_color, text) => text, bold: (text) => text },
+        {},
+        (value) => {
+          result = value;
+        },
+      );
+
+      if (customCalls === 1) {
+        component.handleInput("\n");
+        component.handleInput("\u001B[B");
+        component.handleInput("\n");
+        component.handleInput("\n");
+        return result;
+      }
+
+      reopenedLines = component.render(120);
+      component.handleInput("q");
+      return result;
+    },
+  });
+  await startGuardMeSession(ctx, { homeDir });
+
+  await handleGuardMeCommand("", ctx);
+  const saved = JSON.parse(await readFile(settingsPath, "utf8"));
+
+  assert.equal(saved.enabled, true);
+  assert.equal(saved.insecureEdits, true);
+  assert.ok(reopenedLines.some((line) => line.includes("Insecure edits") && line.includes("ON")));
+  assert.match(notifications.at(-1)?.[0] ?? "", /Insecure edits are ON/);
+  stopGuardMeSession(ctx);
+});
+
 test("/guardme General toggle in an untrusted project explains settings apply after trust", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-command-toggle-untrusted-"));
   const homeDir = join(root, "home");
@@ -543,6 +591,7 @@ test("/guardme General project trust toggle writes Pi trust store", async () => 
 
       if (customCalls === 1) {
         component.handleInput("\n");
+        component.handleInput("\u001B[B");
         component.handleInput("\u001B[B");
         component.handleInput("\n");
         component.handleInput("\n");

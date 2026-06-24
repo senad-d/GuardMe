@@ -20,6 +20,7 @@ export interface GuardMeSessionState {
   readonly homeDir?: string;
   readonly projectTrusted: boolean;
   readonly enabled: boolean;
+  readonly insecureEdits: boolean;
   readonly loadedAt: string;
   readonly config: LoadedGuardMeConfig;
   readonly settings: LoadedGuardMeRuntimeSettings;
@@ -73,5 +74,6 @@ export function formatGuardMeStatus(state: GuardMeSessionState): string | undefi
   if (state.degraded) {
     return `🛡️ degraded (${diagnosticCount} diagnostic${diagnosticCount === 1 ? "" : "s"})`;
   }
-  return warningCount > 0 ? `🛡️ (${warningCount} warning${warningCount === 1 ? "" : "s"})` : "🛡️";
+  const prefix = state.insecureEdits ? "🛡️ insecure edits" : "🛡️";
+  return warningCount > 0 ? `${prefix} (${warningCount} warning${warningCount === 1 ? "" : "s"})` : prefix;
 }

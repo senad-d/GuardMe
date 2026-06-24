@@ -14,6 +14,7 @@ export type ConfigAction =
   | { readonly kind: "append-rules"; readonly scope: SetupScope }
   | { readonly kind: "write"; readonly setupConfig: SetupWizardConfig; readonly plan: SetupWritePlan }
   | { readonly kind: "set-guardme-enabled"; readonly enabled: boolean }
+  | { readonly kind: "set-insecure-edits"; readonly enabled: boolean }
   | { readonly kind: "set-project-trusted"; readonly trusted: boolean };
 
 export interface ConfigTuiContext {
@@ -50,6 +51,7 @@ export interface ConfigSnapshot {
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly guardMe: "active" | "off" | "inactive" | "degraded";
+  readonly insecureEdits: boolean;
   readonly policyRules: number;
   readonly warnedFingerprints: number;
   readonly warningRecords: readonly GuardMeStateRecord[];
@@ -97,19 +99,25 @@ interface GuardMeOffConfirmState {
   selectedIndex: number;
 }
 
+interface InsecureEditsConfirmState {
+  readonly kind: "insecure-edits";
+  selectedIndex: number;
+}
+
 interface ProjectTrustConfirmState {
   readonly kind: "project-trust";
   readonly trusted: boolean;
   selectedIndex: number;
 }
 
-type ConfirmState = PolicyWriteConfirmState | GuardMeOffConfirmState | ProjectTrustConfirmState;
+type ConfirmState = PolicyWriteConfirmState | GuardMeOffConfirmState | InsecureEditsConfirmState | ProjectTrustConfirmState;
 
 type ConfirmInputResult =
   | { readonly kind: "write" }
   | { readonly kind: "back" }
   | { readonly kind: "cancel" }
   | { readonly kind: "set-guardme-enabled"; readonly enabled: boolean }
+  | { readonly kind: "set-insecure-edits"; readonly enabled: boolean }
   | { readonly kind: "set-project-trusted"; readonly trusted: boolean };
 
 interface ConfigDetailState {
@@ -140,6 +148,7 @@ const DETAIL_FIELD_LABELS = ["Reason code", "Fingerprint", "Persisted", "Decisio
 const SETUP_PANE_INDEX = CONFIG_PANES.indexOf("Setup");
 const POLICY_WRITE_CONFIRM_CHOICES = ["Write policy", "Go back", "Cancel"] as const;
 const GUARDME_OFF_CONFIRM_CHOICES = ["Turn off GuardMe", "Go back"] as const;
+const INSECURE_EDITS_CONFIRM_CHOICES = ["Turn on insecure edits", "Go back"] as const;
 const PROJECT_TRUST_CONFIRM_CHOICES = ["Save trust decision", "Go back"] as const;
 const CONFIRM_HELP = "↑↓ choice  Enter select  Esc/q quit";
 
@@ -376,6 +385,23 @@ function createConfigComponent(
     rerender();
   };
 
+  const openInsecureEditsToggle = () => {
+    if (snapshot.guardMe === "inactive") {
+      state.footerOverride = "GuardMe session state is not initialized. Start a session before changing insecure edits.";
+      rerender();
+      return;
+    }
+    if (snapshot.insecureEdits) {
+      done({ kind: "set-insecure-edits", enabled: false });
+      return;
+    }
+    state.confirm = { kind: "insecure-edits", selectedIndex: 0 };
+    state.pane = "General";
+    state.sidebarIndex = 0;
+    state.focus = "main";
+    rerender();
+  };
+
   const openProjectTrustToggle = () => {
     state.confirm = { kind: "project-trust", trusted: !snapshot.projectTrusted, selectedIndex: 0 };
     state.pane = "General";
@@ -390,14 +416,17 @@ function createConfigComponent(
         openGuardMeToggle();
         return;
       case 1:
-        openProjectTrustToggle();
+        openInsecureEditsToggle();
         return;
       case 2:
+        openProjectTrustToggle();
+        return;
+      case 3:
         state.detail = { kind: "warnings", selectedIndex: 0 };
         state.footerOverride = undefined;
         rerender();
         return;
-      case 3:
+      case 4:
         state.detail = { kind: "diagnostics", selectedIndex: 0 };
         state.footerOverride = undefined;
         rerender();
@@ -471,6 +500,9 @@ function createConfigComponent(
               }
               return;
             case "set-guardme-enabled":
+              done(action);
+              return;
+            case "set-insecure-edits":
               done(action);
               return;
             case "set-project-trusted":
@@ -718,6 +750,27 @@ function createSuccessComponent(
     rerender();
   };
 
+  const openInsecureEditsToggle = () => {
+    if (!actionsEnabled) {
+      explainUnavailableAction("Insecure edits settings are available from /guardme");
+      return;
+    }
+    if (snapshot.guardMe === "inactive") {
+      state.footerOverride = "GuardMe session state is not initialized. Start a session before changing insecure edits.";
+      rerender();
+      return;
+    }
+    if (snapshot.insecureEdits) {
+      done({ kind: "set-insecure-edits", enabled: false });
+      return;
+    }
+    state.confirm = { kind: "insecure-edits", selectedIndex: 0 };
+    state.pane = "General";
+    state.sidebarIndex = 0;
+    state.focus = "main";
+    rerender();
+  };
+
   const openProjectTrustToggle = () => {
     if (!actionsEnabled) {
       explainUnavailableAction("Pi project trust changes are available from /guardme");
@@ -736,14 +789,17 @@ function createSuccessComponent(
         openGuardMeToggle();
         return;
       case 1:
-        openProjectTrustToggle();
+        openInsecureEditsToggle();
         return;
       case 2:
+        openProjectTrustToggle();
+        return;
+      case 3:
         state.detail = { kind: "warnings", selectedIndex: 0 };
         state.footerOverride = undefined;
         rerender();
         return;
-      case 3:
+      case 4:
         state.detail = { kind: "diagnostics", selectedIndex: 0 };
         state.footerOverride = undefined;
         rerender();
@@ -820,6 +876,9 @@ function createSuccessComponent(
               }
               return;
             case "set-guardme-enabled":
+              done(action);
+              return;
+            case "set-insecure-edits":
               done(action);
               return;
             case "set-project-trusted":
@@ -934,6 +993,10 @@ function handleConfirmInput(
       done({ kind: "set-guardme-enabled", enabled: false });
       return;
     }
+    if (confirm.kind === "insecure-edits" && choice === "Turn on insecure edits") {
+      done({ kind: "set-insecure-edits", enabled: true });
+      return;
+    }
     if (confirm.kind === "project-trust" && choice === "Save trust decision") {
       done({ kind: "set-project-trusted", trusted: confirm.trusted });
     }
@@ -946,6 +1009,8 @@ function confirmChoices(confirm: ConfirmState): readonly string[] {
       return POLICY_WRITE_CONFIRM_CHOICES;
     case "guardme-off":
       return GUARDME_OFF_CONFIRM_CHOICES;
+    case "insecure-edits":
+      return INSECURE_EDITS_CONFIRM_CHOICES;
     case "project-trust":
       return PROJECT_TRUST_CONFIRM_CHOICES;
   }
@@ -1120,6 +1185,14 @@ function generalSearchCandidates(snapshot: ConfigSnapshot): readonly SearchResul
     {
       pane: "General",
       selectionIndex: 1,
+      label: "Insecure edits",
+      value: snapshot.insecureEdits,
+      valueKind: "boolean",
+      description: "Bypass GuardMe for write/edit tool calls in this project",
+    },
+    {
+      pane: "General",
+      selectionIndex: 2,
       label: "Pi project trust",
       value: snapshot.projectTrusted,
       valueKind: "boolean",
@@ -1127,7 +1200,7 @@ function generalSearchCandidates(snapshot: ConfigSnapshot): readonly SearchResul
     },
     {
       pane: "General",
-      selectionIndex: 2,
+      selectionIndex: 3,
       label: "Warned fingerprints",
       value: snapshot.warnedFingerprints,
       valueKind: "number",
@@ -1135,7 +1208,7 @@ function generalSearchCandidates(snapshot: ConfigSnapshot): readonly SearchResul
     },
     {
       pane: "General",
-      selectionIndex: 3,
+      selectionIndex: 4,
       label: "Diagnostics",
       value: diagnosticsSummary(snapshot.diagnostics),
       valueKind: "text",
@@ -1150,7 +1223,7 @@ function setSelectedIndexForPane(state: ConfigComponentState, pane: ConfigPane, 
       state.setupIndex = clamp(selectedIndex, 0, SETUP_MODE_CHOICES.length - 1);
       return;
     case "General":
-      state.statusIndex = clamp(selectedIndex, 0, 3);
+      state.statusIndex = clamp(selectedIndex, 0, 4);
       return;
     case "Policies":
       state.policiesIndex = clamp(selectedIndex, 0, 3);
@@ -1273,6 +1346,18 @@ function confirmRows(confirm: ConfirmState): readonly FrameMainRow[] {
     ];
   }
 
+  if (confirm.kind === "insecure-edits") {
+    return [
+      { kind: "heading", label: "CONFIRM INSECURE EDITS", value: `${confirm.selectedIndex + 1}/${choices.length}` },
+      { kind: "text", text: "Write and edit tool calls will bypass GuardMe policy.", tone: "warning" },
+      { kind: "text", text: "Path protections and script-content scanning will not run.", tone: "warning" },
+      { kind: "text", text: "Bash execution, reads, grep, find, and ls stay guarded." },
+      { kind: "text", text: "This project-local setting is saved in .pi/agent/guardme-settings.json." },
+      { kind: "blank" },
+      ...choices.map<FrameMainRow>((choice, index) => ({ kind: "text", text: choice, selected: index === confirm.selectedIndex })),
+    ];
+  }
+
   return [
     { kind: "heading", label: "CONFIRM PI PROJECT TRUST", value: `${confirm.selectedIndex + 1}/${choices.length}` },
     { kind: "text", text: confirm.trusted ? "Trust this project for future Pi sessions?" : "Mark this project as not trusted for future Pi sessions?" },
@@ -1295,6 +1380,9 @@ function confirmContext(confirm: ConfirmState): string {
   }
   if (confirm.kind === "guardme-off") {
     return "writes .pi/agent/guardme-settings.json • GuardMe off is project-local";
+  }
+  if (confirm.kind === "insecure-edits") {
+    return "writes .pi/agent/guardme-settings.json • write/edit policy bypass is project-local";
   }
   return confirm.trusted
     ? "Pi project trust → ON • project policy/settings/state may load after reload"
@@ -1321,6 +1409,11 @@ function confirmStateFooter(confirm: ConfirmState): string {
     return confirm.selectedIndex === 0
       ? footerSegments("1/2", "Turn off GuardMe for this project")
       : footerSegments("2/2", "Return to General", "GuardMe remains active");
+  }
+  if (confirm.kind === "insecure-edits") {
+    return confirm.selectedIndex === 0
+      ? footerSegments("1/2", "Turn on write/edit bypass", "scripts can be written without content policy")
+      : footerSegments("2/2", "Return to General", "write/edit remain guarded");
   }
   return confirm.selectedIndex === 0
     ? footerSegments("1/2", confirm.trusted ? "Save trusted project decision" : "Save untrusted project decision", "restart or reload may be required")
@@ -1463,9 +1556,10 @@ function rowsForPane(snapshot: ConfigSnapshot, pane: ConfigPane, selectedIndex: 
       return [
         { kind: "heading", label: "GENERAL", value: "1/4" },
         { kind: "value", label: "GuardMe", value: snapshot.guardMe, valueKind: "status", selected: selectedIndex === 0 },
-        { kind: "value", label: "Pi project trust", value: snapshot.projectTrusted, valueKind: "boolean", selected: selectedIndex === 1 },
-        { kind: "value", label: "Warned fingerprints", value: snapshot.warnedFingerprints, selected: selectedIndex === 2 },
-        { kind: "value", label: "Diagnostics", value: diagnosticsSummary(snapshot.diagnostics), selected: selectedIndex === 3 },
+        { kind: "value", label: "Insecure edits", value: snapshot.insecureEdits, valueKind: "boolean", selected: selectedIndex === 1 },
+        { kind: "value", label: "Pi project trust", value: snapshot.projectTrusted, valueKind: "boolean", selected: selectedIndex === 2 },
+        { kind: "value", label: "Warned fingerprints", value: snapshot.warnedFingerprints, selected: selectedIndex === 3 },
+        { kind: "value", label: "Diagnostics", value: diagnosticsSummary(snapshot.diagnostics), selected: selectedIndex === 4 },
         { kind: "blank" },
         ...projectSummaryRows(snapshot, contentWidth),
       ];
@@ -1698,25 +1792,32 @@ function statusFooter(snapshot: ConfigSnapshot, selectedIndex: number): string {
   switch (selectedIndex) {
     case 0:
       return footerSegments(
-        "Row 1/4",
+        "Row 1/5",
         snapshot.guardMe === "off" ? "Enter to turn GuardMe active" : "Enter to turn GuardMe off with confirmation",
         `settings ${snapshot.settingsPath}`,
       );
     case 1:
       return footerSegments(
-        "Row 2/4",
+        "Row 2/5",
+        `Insecure edits ${snapshot.insecureEdits ? "ON" : "OFF"}`,
+        snapshot.insecureEdits ? "Enter: turn off write/edit bypass" : "Enter: turn on with confirmation",
+        "write/edit ignore GuardMe policy while ON",
+      );
+    case 2:
+      return footerSegments(
+        "Row 3/5",
         `Trust ${snapshot.projectTrusted ? "ON" : "OFF"}`,
         snapshot.projectTrusted ? "Enter: mark untrusted" : "Enter: trust project",
         snapshot.projectTrusted
           ? "after reload/restart: project policy/settings/state skipped"
           : "after reload/restart: project policy/settings/state can load",
       );
-    case 2:
-      return footerSegments("Row 3/4", `${snapshot.warnedFingerprints} warned fingerprint${snapshot.warnedFingerprints === 1 ? "" : "s"}`, "Enter details");
     case 3:
-      return footerSegments("Row 4/4", `diagnostics ${diagnosticsSummary(snapshot.diagnostics)}`, "Enter details");
+      return footerSegments("Row 4/5", `${snapshot.warnedFingerprints} warned fingerprint${snapshot.warnedFingerprints === 1 ? "" : "s"}`, "Enter details");
+    case 4:
+      return footerSegments("Row 5/5", `diagnostics ${diagnosticsSummary(snapshot.diagnostics)}`, "Enter details");
     default:
-      return footerSegments("Row 1/4", `GuardMe is ${snapshot.guardMe}`, `project ${snapshot.projectTrusted ? "trusted" : "not trusted"}`, `diagnostics ${diagnosticsSummary(snapshot.diagnostics)}`);
+      return footerSegments("Row 1/5", `GuardMe is ${snapshot.guardMe}`, `insecure edits ${snapshot.insecureEdits ? "ON" : "OFF"}`, `diagnostics ${diagnosticsSummary(snapshot.diagnostics)}`);
   }
 }
 
@@ -1790,7 +1891,7 @@ function moveSelection(state: ConfigComponentState, delta: number, snapshot: Con
       state.setupIndex = wrap(state.setupIndex + delta, 0, SETUP_MODE_CHOICES.length - 1);
       return;
     case "General":
-      state.statusIndex = wrap(state.statusIndex + delta, 0, 3);
+      state.statusIndex = wrap(state.statusIndex + delta, 0, 4);
       return;
     case "Policies":
       state.policiesIndex = wrap(state.policiesIndex + delta, 0, 3);

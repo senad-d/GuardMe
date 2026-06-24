@@ -76,7 +76,7 @@ export async function captureGuardMeTuiPanels(options = {}) {
     }
 
     addSection("GENERAL - GuardMe Off", renderConfigPane({ ...snapshot, guardMe: "off" }, "General", CAPTURE_WIDTH));
-    addSection("GENERAL - Project Untrusted", renderConfigPane({ ...snapshot, projectTrusted: false }, "General", CAPTURE_WIDTH, 1));
+    addSection("GENERAL - Project Untrusted", renderConfigPane({ ...snapshot, projectTrusted: false }, "General", CAPTURE_WIDTH, 2));
     addSection("Search - Results", await captureSearchScreen(snapshot, defaults));
     addSection("Warning Detail Screen", await captureWarningDetailScreen(diagnosticSnapshot, defaults));
     addSection("Diagnostic Detail Screen", await captureDiagnosticDetailScreen(diagnosticSnapshot, defaults));
@@ -379,6 +379,7 @@ async function captureWarningDetailScreen(snapshot, defaults) {
     component.handleInput(ENTER);
     component.handleInput(DOWN);
     component.handleInput(DOWN);
+    component.handleInput(DOWN);
     component.handleInput(ENTER);
     const rendered = component.render(CAPTURE_WIDTH);
     component.handleInput(ESC);
@@ -390,6 +391,7 @@ async function captureWarningDetailScreen(snapshot, defaults) {
 async function captureDiagnosticDetailScreen(snapshot, defaults) {
   return captureConfigScreen(snapshot, defaults, async (component) => {
     component.handleInput(ENTER);
+    component.handleInput(DOWN);
     component.handleInput(DOWN);
     component.handleInput(DOWN);
     component.handleInput(DOWN);
@@ -414,6 +416,7 @@ async function captureGuardMeOffConfirmation(snapshot, defaults) {
 async function captureProjectTrustConfirmation(snapshot, defaults) {
   return captureConfigScreen(snapshot, defaults, async (component) => {
     component.handleInput(ENTER);
+    component.handleInput(DOWN);
     component.handleInput(DOWN);
     component.handleInput(ENTER);
     const rendered = component.render(CAPTURE_WIDTH);
@@ -543,6 +546,7 @@ async function createSnapshot(fixture) {
     cwd: fixture.projectDir,
     projectTrusted: true,
     guardMe: diagnostics.some((diagnostic) => diagnostic.severity === "error") ? "degraded" : "active",
+    insecureEdits: false,
     policyRules: countPolicyRules(loadedConfig.config),
     warnedFingerprints: warnings.warnedFingerprints.size,
     warningRecords: warnings.records,

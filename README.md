@@ -71,7 +71,7 @@ pi
 /guardme
 ```
 
-Use the General pane to review status, project trust, warnings, diagnostics, and setup actions. GuardMe is active by default when no project-local runtime setting disables it.
+Use the General pane to review status, the Insecure edits escape hatch, project trust, warnings, diagnostics, and setup actions. GuardMe is active by default when no project-local runtime setting disables it.
 
 Try it in a Pi session:
 
@@ -147,7 +147,7 @@ See [`docs/POLICY.md`](docs/POLICY.md) for the full policy reference.
 | Global | `~/.pi/agent/guardme.yaml` | `~/.pi/agent/guardme-state.jsonl` | n/a |
 | Project local | `.pi/agent/guardme.yaml` | `.pi/agent/guardme-state.jsonl` | `.pi/agent/guardme-settings.json` |
 
-Global policy loads first. Project-local policy, runtime settings, and generated state load only after the project is trusted. Missing runtime settings mean GuardMe is active. Turning GuardMe off from `/guardme` writes project-local settings and bypasses GuardMe enforcement for that trusted project until you turn it active again.
+Global policy loads first. Project-local policy, runtime settings, and generated state load only after the project is trusted. Missing runtime settings mean GuardMe is active and Insecure edits is off. Turning GuardMe off from `/guardme` writes project-local settings and bypasses GuardMe enforcement for that trusted project until you turn it active again. Turning Insecure edits on writes the same project-local settings file and makes only `write`/`edit` bypass GuardMe policy, including script-content scanning, while `bash`, reads, and discovery tools stay guarded.
 
 YAML sections:
 
@@ -176,6 +176,7 @@ The usual setup path is to run:
 Use the in-session TUI to:
 
 - turn GuardMe `active` or `off` for the current project
+- turn **Insecure edits** on/off when you need `write`/`edit` to author scripts that contain otherwise blocked commands
 - review or enable Pi project trust
 - inspect warnings and diagnostics
 - create starter global or project policy files
@@ -213,7 +214,7 @@ readOnlyPaths:
     reason: "Documentation is read-only"
 ```
 
-Common built-in protections include cloud CLIs, privilege escalation, disk formatting/raw disk operations, `.git` deletion, credential-like files, `.env`, SSH keys, broad credential discovery, unsafe generated script content, and destructive commands aimed at protected descendants.
+Common built-in protections include cloud CLIs, privilege escalation, disk formatting/raw disk operations, `.git` deletion, credential-like files, `.env`, SSH keys, broad credential discovery, unsafe generated script content, and destructive commands aimed at protected descendants. **Insecure edits** deliberately disables GuardMe policy only for `write` and `edit`; use it only when you understand that file mutations will no longer be protected until you turn it off.
 
 ---
 

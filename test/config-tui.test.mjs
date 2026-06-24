@@ -9,6 +9,7 @@ function snapshotFixture(config = createBuiltInDefaultPolicy()) {
     cwd: "/repo",
     projectTrusted: true,
     guardMe: "active",
+    insecureEdits: false,
     policyRules: 46,
     warnedFingerprints: 0,
     warningRecords: [],
@@ -82,6 +83,17 @@ test("General pane shows the current project path without tail truncation", () =
   assert.ok(output.indexOf("Policy rules") > output.indexOf("Current project"));
   assert.doesNotMatch(output, /PROJECT/);
   assert.doesNotMatch(output, /…uments\/Code\/Moj_git\/guardme/);
+});
+
+test("General pane shows Insecure edits directly below GuardMe", () => {
+  const output = renderConfigPane(snapshotFixture(), "General", 120);
+  const guardMeIndex = output.split("\n").findIndex((line) => /[▶ ] GuardMe\s+active/.test(line));
+  const insecureIndex = output.split("\n").findIndex((line) => /[▶ ] Insecure edits\s+OFF/.test(line));
+  const trustIndex = output.split("\n").findIndex((line) => /[▶ ] Pi project trust/.test(line));
+
+  assert.ok(guardMeIndex >= 0);
+  assert.equal(insecureIndex, guardMeIndex + 1);
+  assert.equal(trustIndex, insecureIndex + 1);
 });
 
 test("config TUI routes setup default actions to the correct policy target", async () => {
@@ -695,6 +707,77 @@ test("config TUI GuardMe off toggles active without confirmation", async () => {
   assert.deepEqual(result, { kind: "set-guardme-enabled", enabled: true });
 });
 
+test("config TUI Insecure edits toggle requires confirmation before enabling", async () => {
+  const defaults = createBuiltInDefaultPolicy();
+  let confirmLines = [];
+  const result = await requestGuardMeConfigAction(
+    {
+      cwd: "/repo",
+      hasUI: true,
+      mode: "tui",
+      ui: {
+        custom: async (factory) => {
+          let selected;
+          const component = factory(
+            { requestRender: () => {} },
+            { fg: (_color, text) => text, bold: (text) => text },
+            {},
+            (value) => {
+              selected = value;
+            },
+          );
+          component.handleInput("\n");
+          component.handleInput("\u001B[B");
+          component.handleInput("\n");
+          confirmLines = component.render(120);
+          component.handleInput("\n");
+          return selected;
+        },
+      },
+    },
+    snapshotFixture(defaults),
+    defaults,
+    async () => ({ ok: false, reason: "createPlan should not run for insecure edits toggle" }),
+  );
+
+  assert.ok(confirmLines.some((line) => line.includes("CONFIRM INSECURE EDITS")));
+  assert.ok(confirmLines.some((line) => line.includes("Write and edit tool calls will bypass GuardMe policy.")));
+  assert.deepEqual(result, { kind: "set-insecure-edits", enabled: true });
+});
+
+test("config TUI Insecure edits on toggles off without confirmation", async () => {
+  const defaults = createBuiltInDefaultPolicy();
+  const result = await requestGuardMeConfigAction(
+    {
+      cwd: "/repo",
+      hasUI: true,
+      mode: "tui",
+      ui: {
+        custom: async (factory) => {
+          let selected;
+          const component = factory(
+            { requestRender: () => {} },
+            { fg: (_color, text) => text, bold: (text) => text },
+            {},
+            (value) => {
+              selected = value;
+            },
+          );
+          component.handleInput("\n");
+          component.handleInput("\u001B[B");
+          component.handleInput("\n");
+          return selected;
+        },
+      },
+    },
+    { ...snapshotFixture(defaults), insecureEdits: true },
+    defaults,
+    async () => ({ ok: false, reason: "createPlan should not run for insecure edits toggle" }),
+  );
+
+  assert.deepEqual(result, { kind: "set-insecure-edits", enabled: false });
+});
+
 test("config TUI Pi project trust toggle returns a guarded trust action", async () => {
   const defaults = createBuiltInDefaultPolicy();
   let confirmLines = [];
@@ -715,6 +798,7 @@ test("config TUI Pi project trust toggle returns a guarded trust action", async 
             },
           );
           component.handleInput("\n");
+          component.handleInput("\u001B[B");
           component.handleInput("\u001B[B");
           component.handleInput("\n");
           confirmLines = component.render(120);
@@ -796,6 +880,7 @@ test("config TUI opens warning and diagnostic detail screens and Esc returns to 
             },
           );
           component.handleInput("\n");
+          component.handleInput("\u001B[B");
           component.handleInput("\u001B[B");
           component.handleInput("\u001B[B");
           component.handleInput("\n");
@@ -880,6 +965,7 @@ test("config TUI wraps long warning detail fields without truncating text", asyn
             },
           );
           component.handleInput("\n");
+          component.handleInput("\u001B[B");
           component.handleInput("\u001B[B");
           component.handleInput("\u001B[B");
           component.handleInput("\n");
@@ -967,6 +1053,7 @@ test("config TUI keeps warning detail scroll anchored on blank separator rows", 
             },
           );
           component.handleInput("\n");
+          component.handleInput("\u001B[B");
           component.handleInput("\u001B[B");
           component.handleInput("\u001B[B");
           component.handleInput("\n");

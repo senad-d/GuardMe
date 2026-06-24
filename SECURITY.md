@@ -18,7 +18,7 @@ GuardMe guards LLM calls to these Pi built-in tools:
 - `find`
 - `ls`
 
-Initial scope does not guard user-entered `!` / `!!` shell escapes, commands run outside Pi, arbitrary child processes outside Pi's tool path, or broader network/git policy. GuardMe now evaluates `bash` commands by executable segment and fails closed for segments that lack explicit command policy, but a user-approved command still runs with the local user's normal permissions.
+Initial scope does not guard user-entered `!` / `!!` shell escapes, commands run outside Pi, arbitrary child processes outside Pi's tool path, or broader network/git policy. GuardMe now evaluates `bash` commands by executable segment and fails closed for segments that lack explicit command policy, but a user-approved command still runs with the local user's normal permissions. If the project-local **Insecure edits** setting is enabled, GuardMe intentionally does not guard `write` or `edit` tool calls; use that mode only as a temporary authoring escape hatch.
 
 ## Hard-deny behavior
 
@@ -43,7 +43,7 @@ Policy files:
 - global base: `~/.pi/agent/guardme.yaml`
 - project overlay: `.pi/agent/guardme.yaml`
 
-Generated `write`/`edit` payloads, local scripts, and package-manager scripts loaded from `package.json` may be inspected in memory before mutation or execution. GuardMe stores only redacted command labels, fingerprints, reason codes, reasons, and matched policy metadata; it must not store full generated file content, full policy files, or command output. Do not put secrets in policy rules.
+Generated `write`/`edit` payloads, local scripts, and package-manager scripts loaded from `package.json` may be inspected in memory before mutation or execution. When Insecure edits is on, `write` and `edit` bypass those mutation-time checks, but local scripts and package-manager scripts are still inspected before `bash` execution. GuardMe stores only redacted command labels, fingerprints, reason codes, reasons, and matched policy metadata; it must not store full generated file content, full policy files, or command output. Do not put secrets in policy rules.
 
 Generated state files:
 

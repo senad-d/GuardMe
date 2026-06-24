@@ -13,6 +13,7 @@ export interface GuardMeRuntimeSettingsPaths {
 export interface GuardMeRuntimeSettings {
   readonly version: typeof POLICY_VERSION;
   readonly enabled: boolean;
+  readonly insecureEdits: boolean;
 }
 
 export interface LoadedGuardMeRuntimeSettings {
@@ -29,10 +30,16 @@ export interface LoadGuardMeRuntimeSettingsOptions {
 
 export interface WriteGuardMeRuntimeSettingsOptions {
   readonly cwd: string;
-  readonly enabled: boolean;
+  readonly enabled?: boolean;
+  readonly insecureEdits?: boolean;
 }
 
 const MAX_SETTINGS_FILE_BYTES = 64 * 1024;
+const DEFAULT_RUNTIME_SETTINGS: GuardMeRuntimeSettings = {
+  version: POLICY_VERSION,
+  enabled: true,
+  insecureEdits: false,
+};
 
 export function resolveRuntimeSettingsPath(cwd: string): GuardMeRuntimeSettingsPaths {
   return {
@@ -159,8 +166,30 @@ export async function writeGuardMeRuntimeSettings(options: WriteGuardMeRuntimeSe
     throw new Error(`GuardMe settings writes do not follow symbolic links: ${unsafeAfter}`);
   }
 
-  const settings: GuardMeRuntimeSettings = { version: POLICY_VERSION, enabled: options.enabled };
+  const current = await readExistingRuntimeSettingsForWrite(targetPath);
+  const settings: GuardMeRuntimeSettings = {
+    version: POLICY_VERSION,
+    enabled: options.enabled ?? current.enabled,
+    insecureEdits: options.insecureEdits ?? current.insecureEdits,
+  };
   await writeTextAtomically(targetPath, `${JSON.stringify(settings, null, 2)}\n`);
+}
+
+async function readExistingRuntimeSettingsForWrite(path: string): Promise<GuardMeRuntimeSettings> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch {
+    return DEFAULT_RUNTIME_SETTINGS;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const validated = validateRuntimeSettings(parsed, path);
+    return validated.diagnostics.length === 0 ? validated.settings : DEFAULT_RUNTIME_SETTINGS;
+  } catch {
+    return DEFAULT_RUNTIME_SETTINGS;
+  }
 }
 
 function defaultLoadedSettings(
@@ -170,7 +199,7 @@ function defaultLoadedSettings(
 ): LoadedGuardMeRuntimeSettings {
   return {
     paths,
-    settings: { version: POLICY_VERSION, enabled: true },
+    settings: DEFAULT_RUNTIME_SETTINGS,
     found,
     diagnostics,
   };
@@ -191,27 +220,34 @@ function skippedLocalRuntimeSettings(paths: GuardMeRuntimeSettingsPaths): Loaded
 function validateRuntimeSettings(parsed: unknown, path: string): { readonly settings: GuardMeRuntimeSettings; readonly diagnostics: readonly PolicyDiagnostic[] } {
   if (!isRecord(parsed)) {
     return {
-      settings: { version: POLICY_VERSION, enabled: true },
+      settings: DEFAULT_RUNTIME_SETTINGS,
       diagnostics: [settingsDiagnostic("settings.invalidShape", "GuardMe runtime settings must be a JSON object.", path)],
     };
   }
 
   if (parsed.version !== POLICY_VERSION) {
     return {
-      settings: { version: POLICY_VERSION, enabled: true },
+      settings: DEFAULT_RUNTIME_SETTINGS,
       diagnostics: [settingsDiagnostic("settings.invalidVersion", `GuardMe runtime settings version must be ${POLICY_VERSION}.`, path)],
     };
   }
 
   if (typeof parsed.enabled !== "boolean") {
     return {
-      settings: { version: POLICY_VERSION, enabled: true },
+      settings: DEFAULT_RUNTIME_SETTINGS,
       diagnostics: [settingsDiagnostic("settings.invalidEnabled", "GuardMe runtime settings enabled must be a boolean.", path)],
     };
   }
 
+  if (parsed.insecureEdits !== undefined && typeof parsed.insecureEdits !== "boolean") {
+    return {
+      settings: DEFAULT_RUNTIME_SETTINGS,
+      diagnostics: [settingsDiagnostic("settings.invalidInsecureEdits", "GuardMe runtime settings insecureEdits must be a boolean.", path)],
+    };
+  }
+
   return {
-    settings: { version: POLICY_VERSION, enabled: parsed.enabled },
+    settings: { version: POLICY_VERSION, enabled: parsed.enabled, insecureEdits: parsed.insecureEdits ?? false },
     diagnostics: [],
   };
 }

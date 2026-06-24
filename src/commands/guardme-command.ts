@@ -243,6 +243,13 @@ async function runConfig(ctx: GuardMeCommandContext): Promise<void> {
       return;
     }
 
+    if (action.kind === "set-insecure-edits") {
+      if (await setInsecureEdits(ctx, action.enabled)) {
+        continue;
+      }
+      return;
+    }
+
     if (action.kind === "set-project-trusted") {
       if (await setProjectTrusted(ctx, action.trusted)) {
         continue;
@@ -512,6 +519,32 @@ async function setGuardMeEnabled(ctx: GuardMeCommandContext, enabled: boolean): 
   return true;
 }
 
+async function setInsecureEdits(ctx: GuardMeCommandContext, enabled: boolean): Promise<boolean> {
+  const projectTrusted = currentProjectTrusted(ctx) ?? ctx.isProjectTrusted?.() ?? true;
+  try {
+    await writeGuardMeRuntimeSettings({ cwd: ctx.cwd, insecureEdits: enabled });
+    await reloadSessionState(ctx);
+  } catch (error) {
+    notify(ctx, `GuardMe could not write .pi/agent/guardme-settings.json: ${formatCommandError(error)}`, "error");
+    return false;
+  }
+
+  const stateMessage = enabled
+    ? "Insecure edits are ON: write/edit tool calls bypass GuardMe policy in this project."
+    : "Insecure edits are OFF: write/edit tool calls are guarded again.";
+  if (!projectTrusted) {
+    notify(
+      ctx,
+      `${stateMessage} Project is not trusted, so this setting will apply after project trust is enabled.`,
+      "info",
+    );
+    return true;
+  }
+
+  notify(ctx, stateMessage, "info");
+  return true;
+}
+
 async function setProjectTrusted(ctx: GuardMeCommandContext, trusted: boolean): Promise<boolean> {
   try {
     const store = new ProjectTrustStore(join(resolve(ctx.homeDir ?? homedir()), ".pi", "agent"));
@@ -563,6 +596,7 @@ function createConfigSnapshot(ctx: Pick<GuardMeCommandContext, "cwd" | "homeDir"
     cwd: ctx.cwd,
     projectTrusted: trusted,
     guardMe: state ? (!state.enabled ? "off" : state.degraded ? "degraded" : "active") : "inactive",
+    insecureEdits: state?.insecureEdits ?? false,
     policyRules: countPolicyRules(config),
     warnedFingerprints: state?.warnings.warnedFingerprints.size ?? 0,
     warningRecords: state?.warnings.records ?? [],
@@ -587,6 +621,7 @@ function currentProjectTrusted(ctx: Pick<GuardMeCommandContext, "cwd" | "isProje
 function renderLegacyStatusSummary(snapshot: ConfigSnapshot): string {
   return [
     `GuardMe: ${snapshot.guardMe}`,
+    `Insecure edits: ${snapshot.insecureEdits ? "on" : "off"}`,
     `Project: ${snapshot.cwd}`,
     `Pi project trust: ${snapshot.projectTrusted ? "yes" : "no"}`,
     `Policy rules: ${snapshot.policyRules}`,

@@ -53,6 +53,7 @@ export async function startGuardMeSession(
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
     projectTrusted,
     enabled: settings.settings.enabled,
+    insecureEdits: settings.settings.insecureEdits,
     loadedAt: new Date().toISOString(),
     config,
     settings,

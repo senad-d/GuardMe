@@ -155,6 +155,35 @@ test("write and edit script content are inspected before mutation", async () => 
   stopGuardMeSession(ctx);
 });
 
+test("insecure edits bypass write and edit policy while bash execution remains guarded", async () => {
+  const { home, cwd, ctx } = await createGuardContext();
+  await writeFile(join(cwd, "safe.sh"), "#!/bin/sh\necho safe\n", "utf8");
+  await writeGuardMeRuntimeSettings({ cwd, insecureEdits: true });
+  await stopGuardMeSession(ctx);
+  await startGuardMeSession(ctx, { homeDir: home });
+
+  const scriptWrite = await evaluateGuardedToolCall({
+    toolName: "write",
+    input: { path: "audit.sh", content: "#!/bin/sh\naws sts get-caller-identity\ncat ~/.aws/credentials\n" },
+  }, ctx);
+  const envWrite = await evaluateGuardedToolCall({ toolName: "write", input: { path: ".env", content: "SECRET=redacted\n" } }, ctx);
+  const edit = await evaluateGuardedToolCall({
+    toolName: "edit",
+    input: { path: "safe.sh", edits: [{ oldText: "echo safe", newText: "az account show" }] },
+  }, ctx);
+
+  assert.equal(scriptWrite, undefined);
+  assert.equal(envWrite, undefined);
+  assert.equal(edit, undefined);
+
+  await writeFile(join(cwd, "audit.sh"), "#!/bin/sh\naws sts get-caller-identity\n", "utf8");
+  const execution = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "bash audit.sh" } }, ctx);
+
+  assert.equal(execution?.block, true);
+  assert.match(execution?.reason ?? "", /local script|Cloud CLI|aws/i);
+  stopGuardMeSession(ctx);
+});
+
 test("bash local script execution inspects script content before running", async () => {
   const { cwd, ctx } = await createGuardContext();
   await writeFile(join(cwd, "azure-cli-config-audit.sh"), "#!/bin/sh\naz account show\n", "utf8");

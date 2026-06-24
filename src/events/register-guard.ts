@@ -70,6 +70,10 @@ export async function evaluateGuardedToolCall(
     return undefined;
   }
 
+  if (state.insecureEdits && isEditMutationToolName(event.toolName)) {
+    return undefined;
+  }
+
   const mapped = await mapToolCallToPolicyRequest(event, ctx.cwd, state.homeDir);
   if ("error" in mapped) {
     return block(mapped.error);
@@ -949,6 +953,10 @@ function isPersistentUserDecision(decision: UserDecision): boolean {
 
 function isGuardedToolName(toolName: string): boolean {
   return (GUARDED_TOOL_NAMES as readonly string[]).includes(toolName);
+}
+
+function isEditMutationToolName(toolName: string): boolean {
+  return toolName === "write" || toolName === "edit";
 }
 
 function toolNameToAction(toolName: string): PolicyAction {
