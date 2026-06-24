@@ -11,13 +11,16 @@ async function readProjectFile(path) {
 test("package declares GuardMe Pi extension metadata", async () => {
   assert.equal(packageJson.name, "@senad-d/guardme");
   assert.equal(packageJson.pi?.extensions?.[0], "./src/extension.ts");
-  assert.equal(packageJson.description, "Pi extension that enforces IAM-like guardrails for LLM shell and filesystem tool access.");
+  assert.equal(
+    packageJson.description,
+    "Deny-first Pi guardrails that keep LLM shell and file access safe, transparent, and user-approved.",
+  );
   assert.equal(packageJson.peerDependencies?.["@earendil-works/pi-coding-agent"], "*");
   assert.equal(packageJson.dependencies, undefined);
   assert.equal(packageJson.scripts?.postinstall, "node scripts/install-global-policy.mjs");
   assert.ok(packageJson.files.includes("scripts/install-global-policy.mjs"));
   assert.ok(packageJson.keywords.includes("pi-package"));
-  assert.ok(packageJson.keywords.includes("guardrails"));
+  assert.ok(packageJson.keywords.includes("tool-guardrails"));
   assert.equal(packageJson._template, undefined);
   await access(new URL("../src/extension.ts", import.meta.url));
 });
