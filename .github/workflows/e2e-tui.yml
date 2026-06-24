@@ -39,7 +39,7 @@ jobs:
 
       - name: Upload TUI panel capture
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: guardme-tui-panels
           path: tmp/e2e/guardme-tui-panels.txt
