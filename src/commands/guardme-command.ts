@@ -530,8 +530,8 @@ async function setInsecureEdits(ctx: GuardMeCommandContext, enabled: boolean): P
   }
 
   const stateMessage = enabled
-    ? "Insecure edits are ON: write/edit tool calls bypass GuardMe policy in this project."
-    : "Insecure edits are OFF: write/edit tool calls are guarded again.";
+    ? "Insecure edits are ON: write/edit content scanning is skipped, but path protections still apply."
+    : "Insecure edits are OFF: write/edit content scanning is guarded again.";
   if (!projectTrusted) {
     notify(
       ctx,

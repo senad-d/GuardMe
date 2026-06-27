@@ -1188,7 +1188,7 @@ function generalSearchCandidates(snapshot: ConfigSnapshot): readonly SearchResul
       label: "Insecure edits",
       value: snapshot.insecureEdits,
       valueKind: "boolean",
-      description: "Bypass GuardMe for write/edit tool calls in this project",
+      description: "Skip write/edit content scanning while preserving path protections",
     },
     {
       pane: "General",
@@ -1349,8 +1349,8 @@ function confirmRows(confirm: ConfirmState): readonly FrameMainRow[] {
   if (confirm.kind === "insecure-edits") {
     return [
       { kind: "heading", label: "CONFIRM INSECURE EDITS", value: `${confirm.selectedIndex + 1}/${choices.length}` },
-      { kind: "text", text: "Write and edit tool calls will bypass GuardMe policy.", tone: "warning" },
-      { kind: "text", text: "Path protections and script-content scanning will not run.", tone: "warning" },
+      { kind: "text", text: "Write and edit content scanning will be skipped.", tone: "warning" },
+      { kind: "text", text: "Path protections, deny rules, and credential paths still apply.", tone: "warning" },
       { kind: "text", text: "Bash execution, reads, grep, find, and ls stay guarded." },
       { kind: "text", text: "This project-local setting is saved in .pi/agent/guardme-settings.json." },
       { kind: "blank" },
@@ -1382,7 +1382,7 @@ function confirmContext(confirm: ConfirmState): string {
     return "writes .pi/agent/guardme-settings.json • GuardMe off is project-local";
   }
   if (confirm.kind === "insecure-edits") {
-    return "writes .pi/agent/guardme-settings.json • write/edit policy bypass is project-local";
+    return "writes .pi/agent/guardme-settings.json • content-scan bypass is project-local";
   }
   return confirm.trusted
     ? "Pi project trust → ON • project policy/settings/state may load after reload"
@@ -1412,8 +1412,8 @@ function confirmStateFooter(confirm: ConfirmState): string {
   }
   if (confirm.kind === "insecure-edits") {
     return confirm.selectedIndex === 0
-      ? footerSegments("1/2", "Turn on write/edit bypass", "scripts can be written without content policy")
-      : footerSegments("2/2", "Return to General", "write/edit remain guarded");
+      ? footerSegments("1/2", "Turn on content-scan bypass", "path protections still apply")
+      : footerSegments("2/2", "Return to General", "content scanning remains guarded");
   }
   return confirm.selectedIndex === 0
     ? footerSegments("1/2", confirm.trusted ? "Save trusted project decision" : "Save untrusted project decision", "restart or reload may be required")
@@ -1800,8 +1800,8 @@ function statusFooter(snapshot: ConfigSnapshot, selectedIndex: number): string {
       return footerSegments(
         "Row 2/5",
         `Insecure edits ${snapshot.insecureEdits ? "ON" : "OFF"}`,
-        snapshot.insecureEdits ? "Enter: turn off write/edit bypass" : "Enter: turn on with confirmation",
-        "write/edit ignore GuardMe policy while ON",
+        snapshot.insecureEdits ? "Enter: turn off content-scan bypass" : "Enter: turn on with confirmation",
+        "path protections still apply while ON",
       );
     case 2:
       return footerSegments(

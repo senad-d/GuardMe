@@ -70,10 +70,6 @@ export async function evaluateGuardedToolCall(
     return undefined;
   }
 
-  if (state.insecureEdits && isEditMutationToolName(event.toolName)) {
-    return undefined;
-  }
-
   const mapped = await mapToolCallToPolicyRequest(event, ctx.cwd, state.homeDir);
   if ("error" in mapped) {
     return block(mapped.error);
@@ -98,7 +94,7 @@ export async function evaluateGuardedToolCall(
     return directBlock;
   }
 
-  if (event.toolName === "write" || event.toolName === "edit") {
+  if (isEditMutationToolName(event.toolName) && !state.insecureEdits) {
     return inspectWriteEditContentBeforeMutation(state, ctx, event, mapped.request);
   }
 

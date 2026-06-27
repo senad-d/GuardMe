@@ -155,8 +155,12 @@ test("write and edit script content are inspected before mutation", async () => 
   stopGuardMeSession(ctx);
 });
 
-test("insecure edits bypass write and edit policy while bash execution remains guarded", async () => {
-  const { home, cwd, ctx } = await createGuardContext();
+test("insecure edits skips content scanning but preserves path protections and bash execution", async () => {
+  const { home, cwd, ctx } = await createGuardContext({
+    localPolicy: 'version: 1\nzeroAccessPaths:\n  - pattern: "vault/**"\nreadOnlyPaths:\n  - pattern: "docs/**"\nprotectedCredentialPaths:\n  - pattern: "private/**"\n',
+  });
+  await mkdir(join(cwd, "docs"), { recursive: true });
+  await writeFile(join(cwd, "docs", "guide.md"), "guide\n", "utf8");
   await writeFile(join(cwd, "safe.sh"), "#!/bin/sh\necho safe\n", "utf8");
   await writeGuardMeRuntimeSettings({ cwd, insecureEdits: true });
   await stopGuardMeSession(ctx);
@@ -166,15 +170,47 @@ test("insecure edits bypass write and edit policy while bash execution remains g
     toolName: "write",
     input: { path: "audit.sh", content: "#!/bin/sh\naws sts get-caller-identity\ncat ~/.aws/credentials\n" },
   }, ctx);
-  const envWrite = await evaluateGuardedToolCall({ toolName: "write", input: { path: ".env", content: "SECRET=redacted\n" } }, ctx);
-  const edit = await evaluateGuardedToolCall({
+  const scriptEdit = await evaluateGuardedToolCall({
     toolName: "edit",
     input: { path: "safe.sh", edits: [{ oldText: "echo safe", newText: "az account show" }] },
   }, ctx);
+  const envWrite = await evaluateGuardedToolCall({ toolName: "write", input: { path: ".env", content: "SECRET=redacted\n" } }, ctx);
+  await writeFile(join(cwd, ".env"), "SECRET=redacted\n", "utf8");
+  const envEdit = await evaluateGuardedToolCall({
+    toolName: "edit",
+    input: { path: ".env", edits: [{ oldText: "SECRET=redacted", newText: "SECRET=changed" }] },
+  }, ctx);
+  const credentialWrite = await evaluateGuardedToolCall({
+    toolName: "write",
+    input: { path: "Secret.TXT", content: "redacted\n" },
+  }, ctx);
+  const readOnlyWrite = await evaluateGuardedToolCall({
+    toolName: "write",
+    input: { path: "docs/guide.md", content: "updated\n" },
+  }, ctx);
+  const zeroAccessWrite = await evaluateGuardedToolCall({
+    toolName: "write",
+    input: { path: "vault/key.txt", content: "redacted\n" },
+  }, ctx);
+  const protectedCredentialWrite = await evaluateGuardedToolCall({
+    toolName: "write",
+    input: { path: "private/data.txt", content: "redacted\n" },
+  }, ctx);
 
   assert.equal(scriptWrite, undefined);
-  assert.equal(envWrite, undefined);
-  assert.equal(edit, undefined);
+  assert.equal(scriptEdit, undefined);
+  assert.equal(envWrite?.block, true);
+  assert.match(envWrite?.reason ?? "", /denyPaths|Environment files/i);
+  assert.equal(envEdit?.block, true);
+  assert.match(envEdit?.reason ?? "", /denyPaths|Environment files/i);
+  assert.equal(credentialWrite?.block, true);
+  assert.match(credentialWrite?.reason ?? "", /Credential-like|Credential/i);
+  assert.equal(readOnlyWrite?.block, true);
+  assert.match(readOnlyWrite?.reason ?? "", /read-only|readOnlyPaths/i);
+  assert.equal(zeroAccessWrite?.block, true);
+  assert.match(zeroAccessWrite?.reason ?? "", /zeroAccessPaths/i);
+  assert.equal(protectedCredentialWrite?.block, true);
+  assert.match(protectedCredentialWrite?.reason ?? "", /Credential-like|protectedCredentialPaths/i);
 
   await writeFile(join(cwd, "audit.sh"), "#!/bin/sh\naws sts get-caller-identity\n", "utf8");
   const execution = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "bash audit.sh" } }, ctx);

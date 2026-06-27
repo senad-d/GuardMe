@@ -471,7 +471,7 @@ test("/guardme General toggle persists GuardMe off for the project", async () =>
   stopGuardMeSession(ctx);
 });
 
-test("/guardme General Insecure edits toggle persists write/edit bypass", async () => {
+test("/guardme General Insecure edits toggle persists content-scan bypass", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-command-insecure-edits-"));
   const homeDir = join(root, "home");
   const cwd = join(root, "project");
@@ -515,7 +515,7 @@ test("/guardme General Insecure edits toggle persists write/edit bypass", async 
   assert.equal(saved.enabled, true);
   assert.equal(saved.insecureEdits, true);
   assert.ok(reopenedLines.some((line) => line.includes("Insecure edits") && line.includes("ON")));
-  assert.match(notifications.at(-1)?.[0] ?? "", /Insecure edits are ON/);
+  assert.match(notifications.at(-1)?.[0] ?? "", /content scanning is skipped/);
   stopGuardMeSession(ctx);
 });
 

@@ -147,7 +147,7 @@ See [`docs/POLICY.md`](docs/POLICY.md) for the full policy reference.
 | Global | `~/.pi/agent/guardme.yaml` | `~/.pi/agent/guardme-state.jsonl` | n/a |
 | Project local | `.pi/agent/guardme.yaml` | `.pi/agent/guardme-state.jsonl` | `.pi/agent/guardme-settings.json` |
 
-Global policy loads first. Project-local policy, runtime settings, and generated state load only after the project is trusted. Missing runtime settings mean GuardMe is active and Insecure edits is off. Turning GuardMe off from `/guardme` writes project-local settings and bypasses GuardMe enforcement for that trusted project until you turn it active again. Turning Insecure edits on writes the same project-local settings file and makes only `write`/`edit` bypass GuardMe policy, including script-content scanning, while `bash`, reads, and discovery tools stay guarded.
+Global policy loads first. Project-local policy, runtime settings, and generated state load only after the project is trusted. Missing runtime settings mean GuardMe is active and Insecure edits is off. Turning GuardMe off from `/guardme` writes project-local settings and bypasses GuardMe enforcement for that trusted project until you turn it active again. Turning Insecure edits on writes the same project-local settings file and makes only `write`/`edit` skip proposed content/script scanning; path protections and deny rules still apply, and `bash`, reads, and discovery tools stay guarded.
 
 YAML sections:
 
@@ -214,7 +214,7 @@ readOnlyPaths:
     reason: "Documentation is read-only"
 ```
 
-Common built-in protections include cloud CLIs, privilege escalation, disk formatting/raw disk operations, `.git` deletion, credential-like files, `.env`, SSH keys, broad credential discovery, unsafe generated script content, and destructive commands aimed at protected descendants. **Insecure edits** deliberately disables GuardMe policy only for `write` and `edit`; use it only when you understand that file mutations will no longer be protected until you turn it off.
+Common built-in protections include cloud CLIs, privilege escalation, disk formatting/raw disk operations, `.git` deletion, credential-like files, `.env`, SSH keys, broad credential discovery, unsafe generated script content, and destructive commands aimed at protected descendants. **Insecure edits** deliberately skips proposed content/script scanning only for `write` and `edit`; use it temporarily and remember that protected paths such as `.env` remain blocked.
 
 ---
 

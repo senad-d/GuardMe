@@ -741,7 +741,8 @@ test("config TUI Insecure edits toggle requires confirmation before enabling", a
   );
 
   assert.ok(confirmLines.some((line) => line.includes("CONFIRM INSECURE EDITS")));
-  assert.ok(confirmLines.some((line) => line.includes("Write and edit tool calls will bypass GuardMe policy.")));
+  assert.ok(confirmLines.some((line) => line.includes("Write and edit content scanning will be skipped.")));
+  assert.ok(confirmLines.some((line) => line.includes("Path protections, deny rules, and credential paths still apply.")));
   assert.deepEqual(result, { kind: "set-insecure-edits", enabled: true });
 });
 

@@ -44,7 +44,7 @@ Manual/interactive smoke scenarios for TUI sessions:
 6. First `rm -rf build`-style dangerous attempt blocks with coaching and records JSONL warning state.
 7. Repeated dangerous attempt opens approval UI in TUI/RPC-capable modes and fails closed without UI.
 8. `/guardme` opens on General; toggling GuardMe off requires confirmation, writes `.pi/agent/guardme-settings.json`, and allows a normally blocked guarded action until toggled active again in a trusted project.
-9. `/guardme` General shows Insecure edits directly below GuardMe; enabling it requires confirmation, writes `.pi/agent/guardme-settings.json`, allows `write`/`edit` to author scripts with otherwise blocked commands, and still blocks `bash ./script.sh` when the script content fails policy.
+9. `/guardme` General shows Insecure edits directly below GuardMe; enabling it requires confirmation, writes `.pi/agent/guardme-settings.json`, allows `write`/`edit` to author scripts with otherwise blocked commands on otherwise allowed paths, preserves path protections such as `.env`, and still blocks `bash ./script.sh` when the script content fails policy.
 10. In an untrusted project, `/guardme` can save the active/off and Insecure edits settings but explains that project-local settings apply only after project trust is enabled.
 11. `/guardme` can update the Pi project trust row through Pi's saved trust store, with the expected reload/restart note.
 12. `/guardme` opens human-readable warning/decision and diagnostic detail screens, and `Esc` returns to General.
