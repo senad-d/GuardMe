@@ -81,7 +81,7 @@ async function requestSelectApproval(
     `GuardMe approval required: ${request.toolName}:${request.action} (${decision.risk})`,
     labels,
   );
-  const selectedIndex = labels.findIndex((label) => label === selected);
+  const selectedIndex = selected === undefined ? -1 : labels.indexOf(selected);
   return selectedIndex >= 0 ? APPROVAL_CHOICES[selectedIndex]?.decision : undefined;
 }
 
@@ -169,7 +169,8 @@ function buildApprovalLines(
   const summary = renderPolicySummary(request, decision);
   const counter = `${selectedIndex + 1}/${APPROVAL_CHOICES.length}`;
   const selectedChoice = APPROVAL_CHOICES[selectedIndex];
-  const context = `Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", `${request.toolName}:${request.action}`)} • Project: ${summaryValue(summary, "Project", request.cwd)}`;
+  const actionFallback = `${request.toolName}:${request.action}`;
+  const context = `Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", actionFallback)} • Project: ${summaryValue(summary, "Project", request.cwd)}`;
   const footer = footerSegments(
     counter,
     selectedChoice?.description,
@@ -191,9 +192,11 @@ function buildApprovalLines(
     rows.push(...labeledRows(index === 0 ? "Rule" : `Rule ${index + 1}`, rule, innerWidth));
   }
 
-  rows.push({ text: "" });
-  rows.push({ text: "DECISION", tone: "accent" });
-  rows.push(...APPROVAL_CHOICES.flatMap((choice, index) => choiceRows(choice, index === selectedIndex, innerWidth)));
+  rows.push(
+    { text: "" },
+    { text: "DECISION", tone: "accent" },
+    ...APPROVAL_CHOICES.flatMap((choice, index) => choiceRows(choice, index === selectedIndex, innerWidth)),
+  );
 
   return renderApprovalFrame(
     {
@@ -292,9 +295,19 @@ function wrapFramedParagraph(text: string, width: number, theme: ApprovalTheme, 
 }
 
 function renderApprovalRow(row: ApprovalDisplayRow, width: number, theme: ApprovalTheme): string {
-  const role = row.selected ? "accent" : row.tone && row.tone !== "normal" ? row.tone : "normal";
+  const role = roleForApprovalRow(row);
   const text = row.selected ? maybeBold(theme, row.text) : row.text;
   return framedLine(text, width, theme, role);
+}
+
+function roleForApprovalRow(row: ApprovalDisplayRow): string {
+  if (row.selected) {
+    return "accent";
+  }
+  if (row.tone && row.tone !== "normal") {
+    return row.tone;
+  }
+  return "normal";
 }
 
 function framedLine(text: string, width: number, theme: ApprovalTheme, role: string = "normal"): string {

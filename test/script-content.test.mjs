@@ -39,6 +39,16 @@ test("script content extraction covers package json Dockerfile Makefile and CI r
   assert.deepEqual(workflowWithChomping.commands.map((command) => command.command), ["echo release", "gcloud projects list"]);
 });
 
+test("script content extraction keeps scanning CI commands after block scalars", () => {
+  const workflow = extractScriptCommandsFromContent({
+    path: ".github/workflows/ci.yml",
+    content: "jobs:\n  test:\n    steps:\n      - run: |\n          echo block\n      - run: npm test\n",
+  });
+
+  assert.deepEqual(workflow.commands.map((command) => command.command), ["echo block", "npm test"]);
+  assert.deepEqual(workflow.commands.map((command) => command.lineStart), [5, 6]);
+});
+
 test("redacted command previews remove terminal control sequences", () => {
   const escape = String.fromCharCode(0x1b);
   const csi = String.fromCharCode(0x9b);

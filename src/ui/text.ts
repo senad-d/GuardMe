@@ -120,27 +120,40 @@ function readAnsiEscape(value: string, startIndex: number): { readonly sequence:
 
   const introducer = value[startIndex + 1];
   if (introducer === "[") {
-    for (let index = startIndex + 2; index < value.length; index += 1) {
-      const code = value.charCodeAt(index);
-      if (code >= 0x40 && code <= 0x7e) {
-        return { sequence: value.slice(startIndex, index + 1), endIndex: index + 1 };
-      }
-    }
+    return readControlSequenceEscape(value, startIndex);
   }
-
   if (introducer === "]") {
-    for (let index = startIndex + 2; index < value.length; index += 1) {
-      if (value[index] === "\u0007") {
-        return { sequence: value.slice(startIndex, index + 1), endIndex: index + 1 };
-      }
-      if (value[index] === ESCAPE && value[index + 1] === "\\") {
-        return { sequence: value.slice(startIndex, index + 2), endIndex: index + 2 };
-      }
+    return readOperatingSystemCommandEscape(value, startIndex);
+  }
+  return introducer ? { sequence: value.slice(startIndex, startIndex + 2), endIndex: startIndex + 2 } : undefined;
+}
+
+function readControlSequenceEscape(value: string, startIndex: number): { readonly sequence: string; readonly endIndex: number } | undefined {
+  for (let index = startIndex + 2; index < value.length; index += 1) {
+    const code = value.codePointAt(index);
+    if (code !== undefined && code >= 0x40 && code <= 0x7e) {
+      return { sequence: value.slice(startIndex, index + 1), endIndex: index + 1 };
     }
   }
+  return undefined;
+}
 
-  if (introducer) {
-    return { sequence: value.slice(startIndex, startIndex + 2), endIndex: startIndex + 2 };
+function readOperatingSystemCommandEscape(value: string, startIndex: number): { readonly sequence: string; readonly endIndex: number } | undefined {
+  for (let index = startIndex + 2; index < value.length; index += 1) {
+    const terminator = oscTerminatorEndIndex(value, index);
+    if (terminator !== undefined) {
+      return { sequence: value.slice(startIndex, terminator), endIndex: terminator };
+    }
+  }
+  return undefined;
+}
+
+function oscTerminatorEndIndex(value: string, index: number): number | undefined {
+  if (value[index] === "\u0007") {
+    return index + 1;
+  }
+  if (value[index] === ESCAPE && value[index + 1] === "\\") {
+    return index + 2;
   }
   return undefined;
 }

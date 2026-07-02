@@ -244,59 +244,91 @@ async function existingSymlinkInPath(path: string): Promise<string | undefined> 
 }
 
 export async function readStateFile(path: string, scope: GuardMeStateScope): Promise<ReadStateFileResult> {
+  const fileText = await readSafeStateFileText(path, scope);
+  if (!fileText.ok) {
+    return fileText.result;
+  }
+  return parseStateFileText(path, scope, fileText.text);
+}
+
+type StateFileTextReadResult =
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly result: ReadStateFileResult };
+
+async function readSafeStateFileText(path: string, scope: GuardMeStateScope): Promise<StateFileTextReadResult> {
+  const inspection = await inspectStateFileForRead(path, scope);
+  if (!inspection.ok) {
+    return inspection;
+  }
+  try {
+    return { ok: true, text: await readFile(path, "utf8") };
+  } catch (error) {
+    return { ok: false, result: stateFileReadError(path, scope, "state.readFailed", `Unable to read GuardMe state file: ${formatStateReadError(error)}`) };
+  }
+}
+
+async function inspectStateFileForRead(path: string, scope: GuardMeStateScope): Promise<StateFileTextReadResult> {
   try {
     const symlinkPath = await existingSymlinkInPath(path);
     if (symlinkPath) {
-      return stateFileReadError(path, scope, "state.symlinkRejected", "Refusing to read GuardMe state through a symbolic link.", symlinkPath);
+      return { ok: false, result: stateFileReadError(path, scope, "state.symlinkRejected", "Refusing to read GuardMe state through a symbolic link.", symlinkPath) };
     }
-
     const fileStats = await lstat(path);
     if (!fileStats.isFile()) {
-      return stateFileReadError(path, scope, "state.notFile", "GuardMe state path is not a regular file.");
+      return { ok: false, result: stateFileReadError(path, scope, "state.notFile", "GuardMe state path is not a regular file.") };
     }
     if (fileStats.size > MAX_STATE_FILE_BYTES) {
-      return stateFileReadError(path, scope, "state.fileTooLarge", `GuardMe state file is too large to read safely (${fileStats.size} bytes).`);
+      return { ok: false, result: stateFileReadError(path, scope, "state.fileTooLarge", `GuardMe state file is too large to read safely (${fileStats.size} bytes).`) };
     }
+    return { ok: true, text: "" };
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
-      return { path, scope, records: [], diagnostics: [] };
+      return { ok: false, result: { path, scope, records: [], diagnostics: [] } };
     }
-    return stateFileReadError(path, scope, "state.inspectFailed", `Unable to inspect GuardMe state file: ${formatStateReadError(error)}`);
+    return { ok: false, result: stateFileReadError(path, scope, "state.inspectFailed", `Unable to inspect GuardMe state file: ${formatStateReadError(error)}`) };
   }
+}
 
-  let text: string;
-  try {
-    text = await readFile(path, "utf8");
-  } catch (error) {
-    return stateFileReadError(path, scope, "state.readFailed", `Unable to read GuardMe state file: ${formatStateReadError(error)}`);
-  }
-
+function parseStateFileText(path: string, scope: GuardMeStateScope, text: string): ReadStateFileResult {
   const records: GuardMeStateRecord[] = [];
   const diagnostics: PolicyDiagnostic[] = [];
   for (const [index, line] of text.split(/\r?\n/).entries()) {
-    const lineNumber = index + 1;
-    if (line.trim() === "") {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      const record = validateStateRecord(parsed, scope, path, lineNumber, diagnostics);
-      if (record) {
-        records.push(record);
-      }
-    } catch (error) {
-      diagnostics.push({
-        severity: "warning",
-        code: "state.malformedJsonl",
-        message: `Ignoring malformed GuardMe state JSONL line ${lineNumber}: ${error instanceof Error ? error.message : String(error)}`,
-        source: { kind: scopeToSourceKind(scope), path },
-        path,
-        ruleIndex: lineNumber,
-      });
-    }
+    parseStateFileLine(line, index + 1, scope, path, records, diagnostics);
   }
-
   return { path, scope, records, diagnostics };
+}
+
+function parseStateFileLine(
+  line: string,
+  lineNumber: number,
+  scope: GuardMeStateScope,
+  path: string,
+  records: GuardMeStateRecord[],
+  diagnostics: PolicyDiagnostic[],
+): void {
+  if (line.trim() === "") {
+    return;
+  }
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    const record = validateStateRecord(parsed, scope, path, lineNumber, diagnostics);
+    if (record) {
+      records.push(record);
+    }
+  } catch (error) {
+    diagnostics.push(malformedStateLineDiagnostic(error, scope, path, lineNumber));
+  }
+}
+
+function malformedStateLineDiagnostic(error: unknown, scope: GuardMeStateScope, path: string, lineNumber: number): PolicyDiagnostic {
+  return {
+    severity: "warning",
+    code: "state.malformedJsonl",
+    message: `Ignoring malformed GuardMe state JSONL line ${lineNumber}: ${error instanceof Error ? error.message : String(error)}`,
+    source: { kind: scopeToSourceKind(scope), path },
+    path,
+    ruleIndex: lineNumber,
+  };
 }
 
 export async function loadWarningState(options: LoadWarningStateOptions): Promise<LoadedWarningState> {
@@ -381,52 +413,80 @@ function validateStateRecord(
     return undefined;
   }
 
-  if (parsed.type === "warning" && isString(parsed.fingerprint) && isString(parsed.cwd) && isString(parsed.toolName)) {
-    const action = optionalPolicyAction(parsed.action, "shell");
-    const risk = optionalRiskLevel(parsed.risk, "dangerous");
-    if (!action || !risk) {
-      diagnostics.push(stateDiagnostic("state.invalidRecord", "Ignoring GuardMe warning record with invalid action or risk.", scope, path, lineNumber));
-      return undefined;
-    }
-    return {
-      type: "warning",
-      version: numberOrDefault(parsed.version, POLICY_VERSION),
-      timestamp: stringOrDefault(parsed.timestamp, new Date(0).toISOString()),
-      fingerprint: parsed.fingerprint,
-      scope: parsed.scope === "global" ? "global" : "project",
-      cwd: parsed.cwd,
-      toolName: parsed.toolName,
-      action,
-      risk,
-      target: isString(parsed.target) ? redactSensitiveText(parsed.target) : "<unknown>",
-      count: numberOrDefault(parsed.count, 1),
-      ...(isString(parsed.reason) ? { reason: redactSensitiveText(parsed.reason) } : {}),
-      ...(Array.isArray(parsed.matchedRules) ? { matchedRules: parsed.matchedRules.map(parseMatchedRule).filter((rule): rule is MatchedRule => Boolean(rule)) } : {}),
-      ...(isString(parsed.reasonCode) ? { reasonCode: parsed.reasonCode } : {}),
-    };
+  if (isWarningStateRecordCandidate(parsed)) {
+    return validateWarningStateRecord(parsed, scope, path, lineNumber, diagnostics);
   }
-
-  if (parsed.type === "decision" && isString(parsed.fingerprint) && isString(parsed.cwd) && isString(parsed.decision)) {
-    const persistedTo = optionalPersistedDecisionTarget(parsed.persistedTo, "none");
-    if (!isUserDecision(parsed.decision) || !persistedTo) {
-      diagnostics.push(stateDiagnostic("state.invalidRecord", "Ignoring GuardMe decision record with invalid decision fields.", scope, path, lineNumber));
-      return undefined;
-    }
-    return {
-      type: "decision",
-      version: numberOrDefault(parsed.version, POLICY_VERSION),
-      timestamp: stringOrDefault(parsed.timestamp, new Date(0).toISOString()),
-      fingerprint: parsed.fingerprint,
-      scope: parsed.scope === "global" ? "global" : "project",
-      cwd: parsed.cwd,
-      decision: parsed.decision,
-      persistedTo,
-      ...(isString(parsed.reason) ? { reason: redactSensitiveText(parsed.reason) } : {}),
-    };
+  if (isDecisionStateRecordCandidate(parsed)) {
+    return validateDecisionStateRecord(parsed, scope, path, lineNumber, diagnostics);
   }
 
   diagnostics.push(stateDiagnostic("state.invalidRecord", "Ignoring GuardMe state record with missing or invalid fields.", scope, path, lineNumber));
   return undefined;
+}
+
+function isWarningStateRecordCandidate(parsed: Record<string, unknown>): boolean {
+  return parsed.type === "warning" && isString(parsed.fingerprint) && isString(parsed.cwd) && isString(parsed.toolName);
+}
+
+function isDecisionStateRecordCandidate(parsed: Record<string, unknown>): boolean {
+  return parsed.type === "decision" && isString(parsed.fingerprint) && isString(parsed.cwd) && isString(parsed.decision);
+}
+
+function validateWarningStateRecord(
+  parsed: Record<string, unknown>,
+  scope: GuardMeStateScope,
+  path: string,
+  lineNumber: number,
+  diagnostics: PolicyDiagnostic[],
+): WarningStateRecord | undefined {
+  const action = optionalPolicyAction(parsed.action, "shell");
+  const risk = optionalRiskLevel(parsed.risk, "dangerous");
+  if (!action || !risk) {
+    diagnostics.push(stateDiagnostic("state.invalidRecord", "Ignoring GuardMe warning record with invalid action or risk.", scope, path, lineNumber));
+    return undefined;
+  }
+  return {
+    type: "warning",
+    version: numberOrDefault(parsed.version, POLICY_VERSION),
+    timestamp: stringOrDefault(parsed.timestamp, new Date(0).toISOString()),
+    fingerprint: parsed.fingerprint as string,
+    scope: parsed.scope === "global" ? "global" : "project",
+    cwd: parsed.cwd as string,
+    toolName: parsed.toolName as string,
+    action,
+    risk,
+    target: isString(parsed.target) ? redactSensitiveText(parsed.target) : "<unknown>",
+    count: numberOrDefault(parsed.count, 1),
+    ...(isString(parsed.reason) ? { reason: redactSensitiveText(parsed.reason) } : {}),
+    ...(Array.isArray(parsed.matchedRules) ? { matchedRules: parsed.matchedRules.map(parseMatchedRule).filter((rule): rule is MatchedRule => Boolean(rule)) } : {}),
+    ...(isString(parsed.reasonCode) ? { reasonCode: parsed.reasonCode } : {}),
+  };
+}
+
+function validateDecisionStateRecord(
+  parsed: Record<string, unknown>,
+  scope: GuardMeStateScope,
+  path: string,
+  lineNumber: number,
+  diagnostics: PolicyDiagnostic[],
+): UserDecisionStateRecord | undefined {
+  const decision = isString(parsed.decision) && isUserDecision(parsed.decision) ? parsed.decision : undefined;
+  const persistedTo = optionalPersistedDecisionTarget(parsed.persistedTo, "none");
+  if (!decision || !persistedTo) {
+    diagnostics.push(stateDiagnostic("state.invalidRecord", "Ignoring GuardMe decision record with invalid decision fields.", scope, path, lineNumber));
+    return undefined;
+  }
+  return {
+    type: "decision",
+    version: numberOrDefault(parsed.version, POLICY_VERSION),
+    timestamp: stringOrDefault(parsed.timestamp, new Date(0).toISOString()),
+    fingerprint: parsed.fingerprint as string,
+    scope: parsed.scope === "global" ? "global" : "project",
+    cwd: parsed.cwd as string,
+    decision,
+    persistedTo,
+    ...(isString(parsed.reason) ? { reason: redactSensitiveText(parsed.reason) } : {}),
+  };
 }
 
 function parseMatchedRule(value: unknown): MatchedRule | undefined {

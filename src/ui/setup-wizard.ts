@@ -39,8 +39,10 @@ interface SetupModeChoice {
   readonly description: string;
 }
 
+type RuleSectionSelection = PolicyConfigSection | "save";
+
 interface RuleSectionChoice {
-  readonly section: PolicyConfigSection | "save";
+  readonly section: RuleSectionSelection;
   readonly label: string;
   readonly value: string;
   readonly description: string;
@@ -164,31 +166,51 @@ export async function collectCustomPolicy(
   scope: SetupScope = "local",
   initialConfig?: GuardMePolicyConfig,
 ): Promise<GuardMePolicyConfig | undefined> {
-  const hasTuiCustom = ctx.mode === "tui" && typeof ctx.ui.custom === "function";
-  if ((!ctx.ui.input && !hasTuiCustom) || (!ctx.ui.confirm && !hasTuiCustom) || (!ctx.ui.select && !hasTuiCustom)) {
+  if (!hasCustomPolicyInputs(ctx)) {
     return undefined;
   }
 
-  let config: GuardMePolicyConfig;
+  const config = await initialCustomPolicyConfig(ctx, sensibleDefaults, scope, initialConfig);
+  return config ? collectCustomPolicyRules(ctx, scope, config) : undefined;
+}
+
+function hasCustomPolicyInputs(ctx: SetupWizardContext): boolean {
+  const hasTuiCustom = ctx.mode === "tui" && typeof ctx.ui.custom === "function";
+  return Boolean(hasTuiCustom || (ctx.ui.input && ctx.ui.confirm && ctx.ui.select));
+}
+
+async function initialCustomPolicyConfig(
+  ctx: SetupWizardContext,
+  sensibleDefaults: GuardMePolicyConfig,
+  scope: SetupScope,
+  initialConfig?: GuardMePolicyConfig,
+): Promise<GuardMePolicyConfig> {
   if (initialConfig) {
-    config = clonePolicyConfig(initialConfig);
-  } else {
-    const defaultRuleCount = countRules(sensibleDefaults);
-    const startFromDefaults = await requestSetupBoolean(ctx, {
-      title: "Start from sensible defaults?",
-      message: "Choose starting rules before adding custom entries.",
-      heading: "CUSTOM POLICY START",
-      context: `${setupScopeContext(scope)} • choose defaults or blank`,
-      yesLabel: "Yes, keep defaults",
-      yesValue: `${defaultRuleCount} rules`,
-      yesDescription: "Keep GuardMe's recommended protections, then add custom rules.",
-      noLabel: "No, start blank",
-      noValue: "0 rules",
-      noDescription: "Write only the custom rules you add in this setup flow.",
-    });
-    config = startFromDefaults ? clonePolicyConfig(sensibleDefaults) : createEmptyPolicyConfig();
+    return clonePolicyConfig(initialConfig);
   }
 
+  const defaultRuleCount = countRules(sensibleDefaults);
+  const startFromDefaults = await requestSetupBoolean(ctx, {
+    title: "Start from sensible defaults?",
+    message: "Choose starting rules before adding custom entries.",
+    heading: "CUSTOM POLICY START",
+    context: `${setupScopeContext(scope)} • choose defaults or blank`,
+    yesLabel: "Yes, keep defaults",
+    yesValue: `${defaultRuleCount} rules`,
+    yesDescription: "Keep GuardMe's recommended protections, then add custom rules.",
+    noLabel: "No, start blank",
+    noValue: "0 rules",
+    noDescription: "Write only the custom rules you add in this setup flow.",
+  });
+  return startFromDefaults ? clonePolicyConfig(sensibleDefaults) : createEmptyPolicyConfig();
+}
+
+async function collectCustomPolicyRules(
+  ctx: SetupWizardContext,
+  scope: SetupScope,
+  initialConfig: GuardMePolicyConfig,
+): Promise<GuardMePolicyConfig | undefined> {
+  let config = initialConfig;
   while (true) {
     const section = await chooseRuleSection(ctx, scope);
     if (!section) {
@@ -203,22 +225,25 @@ export async function collectCustomPolicy(
       config = appendSetupRule(config, section, rule);
     }
 
-    const addAnother = await requestSetupBoolean(ctx, {
-      title: "Add another GuardMe rule?",
-      message: "Continue adding custom rules or move on to write confirmation.",
-      heading: "CUSTOM RULES",
-      context: `${setupScopeContext(scope)} • add rules or confirm`,
-      yesLabel: "Yes, add another rule",
-      yesValue: "continue",
-      yesDescription: "Choose another rule section before saving.",
-      noLabel: "No, save policy",
-      noValue: "confirm",
-      noDescription: "Continue to the policy write confirmation.",
-    });
-    if (!addAnother) {
+    if (!(await shouldAddAnotherRule(ctx, scope))) {
       return config;
     }
   }
+}
+
+async function shouldAddAnotherRule(ctx: SetupWizardContext, scope: SetupScope): Promise<boolean> {
+  return requestSetupBoolean(ctx, {
+    title: "Add another GuardMe rule?",
+    message: "Continue adding custom rules or move on to write confirmation.",
+    heading: "CUSTOM RULES",
+    context: `${setupScopeContext(scope)} • add rules or confirm`,
+    yesLabel: "Yes, add another rule",
+    yesValue: "continue",
+    yesDescription: "Choose another rule section before saving.",
+    noLabel: "No, save policy",
+    noValue: "confirm",
+    noDescription: "Continue to the policy write confirmation.",
+  });
 }
 
 export async function collectCustomRuleAdditions(
@@ -431,25 +456,25 @@ function setupModeFooter(selectedIndex: number): string {
   return footerSegments(`${index + 1}/${SETUP_MODE_CHOICES.length}`, choice?.description ?? "Choose a GuardMe setup action.");
 }
 
-async function chooseRuleSection(ctx: SetupWizardContext, scope: SetupScope): Promise<PolicyConfigSection | "save" | undefined> {
+async function chooseRuleSection(ctx: SetupWizardContext, scope: SetupScope): Promise<RuleSectionSelection | undefined> {
   const choices = ruleSectionChoices();
   if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
-    return ctx.ui.custom<PolicyConfigSection | "save" | undefined>(
-      (tui: { requestRender?: () => void }, theme: SetupTheme, _keybindings: unknown, done: (value: PolicyConfigSection | "save" | undefined) => void) =>
+    return ctx.ui.custom<RuleSectionSelection | undefined>(
+      (tui: { requestRender?: () => void }, theme: SetupTheme, _keybindings: unknown, done: (value: RuleSectionSelection | undefined) => void) =>
         createRuleSectionComponent(tui, theme, done, choices, scope),
     );
   }
 
   const labels = choices.map((choice) => `${choice.label} — ${choice.description}`);
   const selected = await ctx.ui.select?.("Choose rule section", labels);
-  const index = labels.findIndex((label) => label === selected);
+  const index = selected === undefined ? -1 : labels.indexOf(selected);
   return index >= 0 ? choices[index]?.section : undefined;
 }
 
 function createRuleSectionComponent(
   tui: { requestRender?: () => void },
   theme: SetupTheme,
-  done: (value: PolicyConfigSection | "save" | undefined) => void,
+  done: (value: RuleSectionSelection | undefined) => void,
   choices: readonly RuleSectionChoice[],
   scope: SetupScope,
 ): { render: (width: number) => string[]; invalidate: () => void; handleInput: (data: string) => void } {
@@ -557,10 +582,28 @@ function ruleSectionChoices(): readonly RuleSectionChoice[] {
   const sections = [...PATH_RULE_SECTIONS, ...COMMAND_RULE_SECTIONS, "save"] as const;
   return sections.map((section) => ({
     section,
-    label: section === "save" ? "Save policy" : section,
-    value: section === "save" ? "done" : isPathSection(section) ? "path" : "command",
-    description: section === "save" ? "Finish custom policy and continue to confirmation." : sectionDescription(section),
+    label: ruleSectionLabel(section),
+    value: ruleSectionValue(section),
+    description: ruleSectionDescription(section),
   }));
+}
+
+function ruleSectionLabel(section: RuleSectionSelection): string {
+  return section === "save" ? "Save policy" : section;
+}
+
+function ruleSectionValue(section: RuleSectionSelection): string {
+  if (section === "save") {
+    return "done";
+  }
+  return isPathSection(section) ? "path" : "command";
+}
+
+function ruleSectionDescription(section: RuleSectionSelection): string {
+  if (section === "save") {
+    return "Finish custom policy and continue to confirmation.";
+  }
+  return sectionDescription(section);
 }
 
 async function promptForRule(

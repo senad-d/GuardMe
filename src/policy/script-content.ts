@@ -324,44 +324,50 @@ function extractShellScriptCommands(
   return commands;
 }
 
-function findShellHeredocRanges(lines: readonly string[]): readonly {
+interface ShellHeredocRange {
   readonly marker: string;
   readonly start: number;
   readonly bodyStart: number;
   readonly end: number;
   readonly body: readonly string[];
-}[] {
-  const ranges = [] as {
-    readonly marker: string;
-    readonly start: number;
-    readonly bodyStart: number;
-    readonly end: number;
-    readonly body: readonly string[];
-  }[];
+}
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const match = /(?:^|\s)(?:bash|sh|zsh)\b[^\n]*<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/u.exec(line);
-    if (!match?.[1]) {
+function findShellHeredocRanges(lines: readonly string[]): readonly ShellHeredocRange[] {
+  const ranges: ShellHeredocRange[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const range = parseShellHeredocRange(lines, index);
+    if (!range) {
+      index += 1;
       continue;
     }
-    const marker = match[1];
-    const body: string[] = [];
-    let end = index;
-    for (let bodyIndex = index + 1; bodyIndex < lines.length; bodyIndex += 1) {
-      const bodyLine = lines[bodyIndex] ?? "";
-      if (bodyLine.trim() === marker) {
-        end = bodyIndex;
-        break;
-      }
-      body.push(bodyLine);
-      end = bodyIndex;
-    }
-    ranges.push({ marker, start: index + 1, bodyStart: index + 1, end: end + 1, body });
-    index = end;
+    ranges.push(range);
+    index = range.end;
   }
 
   return ranges;
+}
+
+function parseShellHeredocRange(lines: readonly string[], index: number): ShellHeredocRange | undefined {
+  const line = lines[index] ?? "";
+  const match = /(?:^|\s)(?:bash|sh|zsh)\b[^\n]*<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/u.exec(line);
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const marker = match[1];
+  const body: string[] = [];
+  let bodyIndex = index + 1;
+  while (bodyIndex < lines.length) {
+    const bodyLine = lines[bodyIndex] ?? "";
+    if (bodyLine.trim() === marker) {
+      return { marker, start: index + 1, bodyStart: index + 1, end: bodyIndex + 1, body };
+    }
+    body.push(bodyLine);
+    bodyIndex += 1;
+  }
+  return { marker, start: index + 1, bodyStart: index + 1, end: bodyIndex, body };
 }
 
 function commandRecord(
@@ -506,7 +512,7 @@ function findLineNumber(content: string, needle: string): number {
 }
 
 function countLeadingSpaces(line: string): number {
-  return line.match(/^ */u)?.[0].length ?? 0;
+  return /^ */u.exec(line)?.[0].length ?? 0;
 }
 
 function isYamlBlockScalarHeader(value: string): boolean {

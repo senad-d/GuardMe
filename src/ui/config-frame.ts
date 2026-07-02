@@ -55,6 +55,18 @@ export interface GuardMeFrameOptions {
   readonly theme?: ConfigFrameTheme;
 }
 
+interface RenderSettingRowOptions {
+  readonly label: string;
+  readonly value?: string | number | boolean;
+  readonly width: number;
+  readonly selected: boolean;
+  readonly focused: boolean;
+  readonly theme?: ConfigFrameTheme;
+  readonly valueKind?: FrameValueKind;
+  readonly tone?: "dim" | "normal" | "warning";
+  readonly preserveIndent?: boolean;
+}
+
 const TINY_WIDTH = 24;
 const WIDE_WIDTH = 72;
 const MAX_VISIBLE_SETTING_ROWS = 10;
@@ -82,9 +94,19 @@ export function renderMainRow(row: FrameMainRow, width: number, focused = true, 
     case "heading":
       return renderSectionHeader(row.label, row.value, width, focused, theme);
     case "text":
-      return renderSettingRow(row.text, row.value, width, Boolean(row.selected), focused, theme, "text", row.tone, Boolean(row.preserveIndent));
+      return renderSettingRow({
+        label: row.text,
+        value: row.value,
+        width,
+        selected: Boolean(row.selected),
+        focused,
+        theme,
+        valueKind: "text",
+        tone: row.tone,
+        preserveIndent: Boolean(row.preserveIndent),
+      });
     case "value":
-      return renderSettingRow(row.label, row.value, width, Boolean(row.selected), focused, theme, row.valueKind);
+      return renderSettingRow({ label: row.label, value: row.value, width, selected: Boolean(row.selected), focused, theme, valueKind: row.valueKind });
   }
 }
 
@@ -117,22 +139,20 @@ function renderWideFrame(options: GuardMeFrameOptions, width: number): string[] 
   const categoryRows = options.sidebar.map((item) => renderCategoryRow(item, leftWidth, focus === "sidebar", options.theme));
   const mainRows = visibleMainRows(options.rows).map((row) => renderMainRow(row, rightWidth, focus === "main", options.theme));
   const bodyHeight = Math.max(options.minContentRows ?? MIN_BODY_ROWS, MIN_BODY_ROWS, categoryRows.length, mainRows.length);
+  const bodyLines = Array.from({ length: bodyHeight }, (_value, index) =>
+    splitLine(categoryRows[index] ?? "", mainRows[index] ?? "", leftWidth, rightWidth, options.theme),
+  );
 
-  const lines = [
+  return [
     buildTopBorder(width, options.title, options.activePane, options.theme),
     framedLine(options.context, width - 2, options.theme),
     framedLine(options.keys || DEFAULT_WIDE_HELP, width - 2, options.theme, "dim"),
     buildSplitBorder("top", leftWidth, rightWidth, options.theme),
-  ];
-
-  for (let index = 0; index < bodyHeight; index += 1) {
-    lines.push(splitLine(categoryRows[index] ?? "", mainRows[index] ?? "", leftWidth, rightWidth, options.theme));
-  }
-
-  lines.push(buildSplitBorder("bottom", leftWidth, rightWidth, options.theme));
-  lines.push(framedLine(options.footer, width - 2, options.theme, "dim"));
-  lines.push(style(options.theme, "accent", `╰${"─".repeat(width - 2)}╯`));
-  return lines.map((line) => truncate(line, width));
+    ...bodyLines,
+    buildSplitBorder("bottom", leftWidth, rightWidth, options.theme),
+    framedLine(options.footer, width - 2, options.theme, "dim"),
+    style(options.theme, "accent", `╰${"─".repeat(width - 2)}╯`),
+  ].map((line) => truncate(line, width));
 }
 
 function renderNarrowFrame(options: GuardMeFrameOptions, width: number): string[] {
@@ -143,27 +163,29 @@ function renderNarrowFrame(options: GuardMeFrameOptions, width: number): string[
     ? options.sidebar.map((item) => renderCategoryRow(item, innerWidth, true, options.theme))
     : visibleMainRows(options.rows).map((row) => renderMainRow(row, innerWidth, focus === "main", options.theme));
   const bodyHeight = Math.max(options.minContentRows ?? MIN_BODY_ROWS, MIN_BODY_ROWS, bodyRows.length);
-  const help = options.keys && options.keys !== DEFAULT_WIDE_HELP
-    ? options.keys
-    : categoryView
-      ? "↑↓ category  Enter open  / search  Esc/q quit"
-      : "↑↓ move  Enter select  / search  Esc/q quit";
+  const bodyLines = Array.from({ length: bodyHeight }, (_value, index) => framedLine(bodyRows[index] ?? "", innerWidth, options.theme, undefined, false));
+  const help = narrowHelpText(options.keys, categoryView);
 
-  const lines = [
+  return [
     buildTopBorder(width, options.title, options.activePane, options.theme),
     framedLine(options.context, innerWidth, options.theme),
     framedLine(help, innerWidth, options.theme, "dim"),
     buildFullBorder(width, options.theme),
-  ];
+    ...bodyLines,
+    buildFullBorder(width, options.theme),
+    framedLine(options.footer, innerWidth, options.theme, "dim"),
+    style(options.theme, "accent", `╰${"─".repeat(innerWidth)}╯`),
+  ].map((line) => truncate(line, width));
+}
 
-  for (let index = 0; index < bodyHeight; index += 1) {
-    lines.push(framedLine(bodyRows[index] ?? "", innerWidth, options.theme, undefined, false));
+function narrowHelpText(keys: string, categoryView: boolean): string {
+  if (keys && keys !== DEFAULT_WIDE_HELP) {
+    return keys;
   }
-
-  lines.push(buildFullBorder(width, options.theme));
-  lines.push(framedLine(options.footer, innerWidth, options.theme, "dim"));
-  lines.push(style(options.theme, "accent", `╰${"─".repeat(innerWidth)}╯`));
-  return lines.map((line) => truncate(line, width));
+  if (categoryView) {
+    return "↑↓ category  Enter open  / search  Esc/q quit";
+  }
+  return "↑↓ move  Enter select  / search  Esc/q quit";
 }
 
 function renderTinyFrame(options: GuardMeFrameOptions, width: number): string[] {
@@ -217,10 +239,18 @@ function renderCategoryRow(item: FrameSidebarItem, width: number, focused: boole
   const labelWidth = Math.max(0, width - visibleWidth(prefix));
   const rawLabel = truncate(sanitizeTerminalText(item.label), labelWidth);
   const styledPrefix = showMarker ? style(theme, "accent", prefix) : prefix;
-  const styledLabel = selected
-    ? style(theme, focused ? "accent" : "muted", focused ? maybeBold(theme, rawLabel) : rawLabel)
-    : style(theme, "dim", rawLabel);
+  const styledLabel = styleCategoryLabel(rawLabel, selected, focused, theme);
   return fitCell(`${styledPrefix}${styledLabel}`, width);
+}
+
+function styleCategoryLabel(label: string, selected: boolean, focused: boolean, theme: ConfigFrameTheme = {}): string {
+  if (!selected) {
+    return style(theme, "dim", label);
+  }
+  if (focused) {
+    return style(theme, "accent", maybeBold(theme, label));
+  }
+  return style(theme, "muted", label);
 }
 
 function renderSectionHeader(
@@ -252,17 +282,19 @@ function valueColumnWidth(width: number, kind: FrameValueKind): number {
   return Math.max(0, Math.min(maxWidth, Math.floor(width * ratio)));
 }
 
-function renderSettingRow(
-  label: string,
-  value: string | number | boolean | undefined,
-  width: number,
-  selected: boolean,
-  focused: boolean,
-  theme: ConfigFrameTheme = {},
-  valueKind?: FrameValueKind,
-  tone: "dim" | "normal" | "warning" = "normal",
-  preserveIndent = false,
-): string {
+function renderSettingRow(options: RenderSettingRowOptions): string {
+  const {
+    label,
+    value,
+    width,
+    selected,
+    focused,
+    theme = {},
+    valueKind,
+    tone = "normal",
+    preserveIndent = false,
+  } = options;
+
   if (width <= 0) {
     return "";
   }
@@ -458,8 +490,8 @@ function maybeBold(theme: ConfigFrameTheme, text: string): string {
   return theme.bold ? theme.bold(text) : text;
 }
 
-function style(theme: ConfigFrameTheme = {}, role: string, text: string): string {
-  return theme.fg ? theme.fg(role, text) : text;
+function style(theme: ConfigFrameTheme | undefined, role: string, text: string): string {
+  return theme?.fg ? theme.fg(role, text) : text;
 }
 
 export function footerSegments(...segments: readonly (string | undefined | false)[]): string {

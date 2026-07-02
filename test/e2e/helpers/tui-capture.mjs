@@ -137,7 +137,7 @@ async function captureSetupModeScreen() {
         );
         component.handleInput(DOWN);
         rendered = component.render(CAPTURE_WIDTH);
-        component.handleInput(ESC);
+        component.handleInput(ENTER);
         return selected;
       },
     },
@@ -231,14 +231,18 @@ async function capturePolicyWriteSuccess(snapshot, plan) {
       mode: "tui",
       ui: {
         custom: async (factory) => {
+          let selected;
           const component = factory(
             { requestRender: () => {} },
             PLAIN_THEME,
             {},
-            () => {},
+            (value) => {
+              selected = value;
+            },
           );
           rendered = component.render(CAPTURE_WIDTH);
           component.handleInput("q");
+          return selected;
         },
       },
     },

@@ -139,6 +139,55 @@ interface SearchResult {
   readonly description?: string;
 }
 
+interface RenderPaneScreenOptions {
+  readonly snapshot: ConfigSnapshot;
+  readonly pane: ConfigPane;
+  readonly selectedIndex: number;
+  readonly width: number;
+  readonly footerOverride?: string;
+  readonly busy?: boolean;
+  readonly focus?: FocusBox;
+  readonly theme?: ConfigTheme;
+  readonly contextOverride?: string;
+  readonly footerOverrideMode?: "prefix" | "replace";
+  readonly keysOverride?: string;
+}
+
+interface RenderStateScreenOptions {
+  readonly snapshot: ConfigSnapshot;
+  readonly state: ConfigComponentState;
+  readonly width: number;
+  readonly theme?: ConfigTheme;
+  readonly paneOptions?: Omit<Partial<RenderPaneScreenOptions>, "snapshot" | "pane" | "selectedIndex" | "width" | "theme">;
+}
+
+interface GeneralRowHandlers {
+  readonly openGuardMeToggle: () => void;
+  readonly openInsecureEditsToggle: () => void;
+  readonly openProjectTrustToggle: () => void;
+  readonly openDetail: (kind: ConfigDetailState["kind"]) => void;
+  readonly markReadOnly: () => void;
+}
+
+interface ConfigPanelInputOptions {
+  readonly data: string;
+  readonly state: ConfigComponentState;
+  readonly snapshot: ConfigSnapshot;
+  readonly rerender: () => void;
+  readonly done: (value: ConfigAction) => void;
+  readonly activateGeneralRow: () => void;
+  readonly openSetupActionForMode: (mode: SetupMode) => void;
+  readonly clearFooterOnNavigation?: boolean;
+  readonly handleRefresh?: () => void;
+}
+
+type ToggleConfirmAction = Extract<
+  ConfirmInputResult,
+  | { readonly kind: "set-guardme-enabled" }
+  | { readonly kind: "set-insecure-edits" }
+  | { readonly kind: "set-project-trusted" }
+>;
+
 type ConfigTheme = ConfigFrameTheme;
 
 const CONFIG_PANES: readonly ConfigPane[] = ["General", "Policies", "Rules", "Setup"];
@@ -210,7 +259,7 @@ export async function showPolicyWriteSuccess(
 }
 
 export function renderConfigPane(snapshot: ConfigSnapshot, pane: ConfigPane, width = 100, selectedIndex?: number): string {
-  return renderPaneScreen(snapshot, pane, selectedIndex ?? selectedIndexForPane(pane, undefined), width).join("\n");
+  return renderPaneScreen({ snapshot, pane, selectedIndex: selectedIndex ?? selectedIndexForPane(pane, undefined), width }).join("\n");
 }
 
 export function renderGuardMeHelp(width = 100): string {
@@ -270,6 +319,46 @@ export function createRuleGroups(config: GuardMePolicyConfig, localPolicyRules =
       description: "Rules loaded from the project-local GuardMe policy file; this source count is not an extra category.",
     },
   ];
+}
+
+function renderStateScreen(options: RenderStateScreenOptions): string[] {
+  const { snapshot, state, width, theme, paneOptions = {} } = options;
+  if (state.confirm) {
+    return renderConfirmScreen(state.confirm, width, state.footerOverride, theme);
+  }
+  if (state.detail) {
+    return renderDetailScreen(snapshot, state.detail, width, state.footerOverride, theme);
+  }
+  if (state.searchActive) {
+    return renderSearchScreen(snapshot, state, width, state.footerOverride, theme);
+  }
+  return renderPaneScreen({
+    snapshot,
+    pane: state.pane,
+    selectedIndex: selectedIndexForPane(state.pane, state),
+    width,
+    footerOverride: state.footerOverride,
+    busy: state.busy,
+    focus: state.focus,
+    theme,
+    ...paneOptions,
+  });
+}
+
+function successPaneOptions(
+  state: ConfigComponentState,
+  snapshot: ConfigSnapshot,
+  plan: SetupWritePlan,
+  actionsEnabled: boolean,
+): RenderStateScreenOptions["paneOptions"] {
+  if (state.pane !== "General") {
+    return { footerOverrideMode: "prefix", keysOverride: successKeysForState(state, actionsEnabled) };
+  }
+  return {
+    contextOverride: policyWriteSuccessContext(snapshot, plan, actionsEnabled),
+    footerOverrideMode: "replace",
+    keysOverride: successKeysForState(state, actionsEnabled),
+  };
 }
 
 function renderSimpleFrame(title: string, body: readonly string[], footer: string, requestedWidth: number): string[] {
@@ -410,32 +499,20 @@ function createConfigComponent(
     rerender();
   };
 
-  const activateGeneralRow = () => {
-    switch (state.statusIndex) {
-      case 0:
-        openGuardMeToggle();
-        return;
-      case 1:
-        openInsecureEditsToggle();
-        return;
-      case 2:
-        openProjectTrustToggle();
-        return;
-      case 3:
-        state.detail = { kind: "warnings", selectedIndex: 0 };
-        state.footerOverride = undefined;
-        rerender();
-        return;
-      case 4:
-        state.detail = { kind: "diagnostics", selectedIndex: 0 };
-        state.footerOverride = undefined;
-        rerender();
-        return;
-      default:
-        state.footerOverride = "This General row is read-only.";
-        rerender();
-    }
-  };
+  const activateGeneralRow = () => activateGeneralRowSelection(state, {
+    openGuardMeToggle,
+    openInsecureEditsToggle,
+    openProjectTrustToggle,
+    openDetail: (kind) => {
+      state.detail = { kind, selectedIndex: 0 };
+      state.footerOverride = undefined;
+      rerender();
+    },
+    markReadOnly: () => {
+      state.footerOverride = "This General row is read-only.";
+      rerender();
+    },
+  });
 
   return {
     render(width: number): string[] {
@@ -444,142 +521,25 @@ function createConfigComponent(
         return cachedLines;
       }
       cachedKey = key;
-      cachedLines = state.confirm
-        ? renderConfirmScreen(state.confirm, width, state.footerOverride, theme)
-        : state.detail
-          ? renderDetailScreen(snapshot, state.detail, width, state.footerOverride, theme)
-          : state.searchActive
-            ? renderSearchScreen(snapshot, state, width, state.footerOverride, theme)
-            : renderPaneScreen(snapshot, state.pane, selectedIndexForPane(state.pane, state), width, state.footerOverride, state.busy, state.focus, theme);
+      cachedLines = renderStateScreen({ snapshot, state, width, theme });
       return cachedLines;
     },
     invalidate,
     handleInput(data: string): void {
-      if (state.searchActive) {
-        handleSearchInput(data, state, snapshot, rerender);
-        return;
-      }
-      if (state.detail) {
-        if (isEscape(data) || isQuit(data)) {
-          state.detail = undefined;
-          state.pane = "General";
-          state.sidebarIndex = 0;
-          state.focus = "main";
-          state.footerOverride = undefined;
+      handleConfigPanelInput({
+        data,
+        state,
+        snapshot,
+        rerender,
+        done,
+        activateGeneralRow,
+        openSetupActionForMode: openConfirmForMode,
+        clearFooterOnNavigation: true,
+        handleRefresh: () => {
+          state.footerOverride = "Refresh requested. Reopen /guardme to reload policy files from disk.";
           rerender();
-          return;
-        }
-        if (isUp(data) || isDown(data)) {
-          state.detail.selectedIndex = moveDetailSelection(snapshot, state.detail, isDown(data) ? 1 : -1);
-          state.footerOverride = undefined;
-          rerender();
-        }
-        return;
-      }
-      if (state.busy) {
-        return;
-      }
-      if (state.confirm) {
-        const confirm = state.confirm;
-        handleConfirmInput(data, confirm, () => {
-          state.confirm = undefined;
-          if (confirm.kind === "policy-write") {
-            state.pane = "Setup";
-            state.sidebarIndex = SETUP_PANE_INDEX;
-          } else {
-            state.pane = "General";
-            state.sidebarIndex = 0;
-          }
-          state.focus = "main";
-          rerender();
-        }, (action) => {
-          switch (action.kind) {
-            case "write":
-              if (confirm.kind === "policy-write") {
-                done({ kind: "write", setupConfig: confirm.setupConfig, plan: confirm.plan });
-              }
-              return;
-            case "set-guardme-enabled":
-              done(action);
-              return;
-            case "set-insecure-edits":
-              done(action);
-              return;
-            case "set-project-trusted":
-              done(action);
-              return;
-            case "back":
-              state.confirm = undefined;
-              if (confirm.kind === "policy-write") {
-                state.pane = "Setup";
-                state.sidebarIndex = SETUP_PANE_INDEX;
-              } else {
-                state.pane = "General";
-                state.sidebarIndex = 0;
-              }
-              state.focus = "main";
-              rerender();
-              return;
-            case "cancel":
-            default:
-              done({ kind: "closed" });
-          }
-        }, rerender);
-        return;
-      }
-      if (isQuit(data) || isEscape(data)) {
-        done({ kind: "closed" });
-        return;
-      }
-      if (data === "/") {
-        state.searchActive = true;
-        state.searchQuery = "";
-        state.searchIndex = 0;
-        state.focus = "main";
-        state.footerOverride = undefined;
-        rerender();
-        return;
-      }
-      if (isTab(data)) {
-        state.focus = paneIsReadOnly(state.pane) ? "sidebar" : state.focus === "sidebar" ? "main" : "sidebar";
-        state.footerOverride = undefined;
-        rerender();
-        return;
-      }
-      const navigationFocus = paneIsReadOnly(state.pane) ? "sidebar" : state.focus;
-      if (navigationFocus === "sidebar") {
-        if (isUp(data) || isDown(data)) {
-          moveSidebarSelection(state, isDown(data) ? 1 : -1);
-          state.footerOverride = undefined;
-          rerender();
-          return;
-        }
-        if (isEnter(data) && !paneIsReadOnly(state.pane)) {
-          state.focus = "main";
-          state.footerOverride = undefined;
-          rerender();
-          return;
-        }
-        return;
-      }
-      if (isUp(data) || isDown(data)) {
-        moveSelection(state, isDown(data) ? 1 : -1, snapshot);
-        state.footerOverride = undefined;
-        rerender();
-        return;
-      }
-      if (isEnter(data) && state.pane === "Setup") {
-        openConfirmForMode(setupModeAt(state.setupIndex));
-        return;
-      }
-      if (isEnter(data) && state.pane === "General") {
-        activateGeneralRow();
-        return;
-      }
-      if (data === "r" || data === "R") {
-        state.footerOverride = "Refresh requested. Reopen /guardme to reload policy files from disk.";
-        rerender();
-      }
+        },
+      });
     },
   };
 }
@@ -661,18 +621,6 @@ function createSuccessComponent(
   const rerender = () => {
     invalidate();
     tui.requestRender?.();
-  };
-  const returnFromConfirm = (confirm: ConfirmState) => {
-    state.confirm = undefined;
-    if (confirm.kind === "policy-write") {
-      state.pane = "Setup";
-      state.sidebarIndex = SETUP_PANE_INDEX;
-    } else {
-      state.pane = "General";
-      state.sidebarIndex = 0;
-    }
-    state.focus = "main";
-    rerender();
   };
   const explainUnavailableAction = (message: string) => {
     state.footerOverride = `${message}. Press Esc/q to close this setup summary.`;
@@ -783,32 +731,20 @@ function createSuccessComponent(
     rerender();
   };
 
-  const activateGeneralRow = () => {
-    switch (state.statusIndex) {
-      case 0:
-        openGuardMeToggle();
-        return;
-      case 1:
-        openInsecureEditsToggle();
-        return;
-      case 2:
-        openProjectTrustToggle();
-        return;
-      case 3:
-        state.detail = { kind: "warnings", selectedIndex: 0 };
-        state.footerOverride = undefined;
-        rerender();
-        return;
-      case 4:
-        state.detail = { kind: "diagnostics", selectedIndex: 0 };
-        state.footerOverride = undefined;
-        rerender();
-        return;
-      default:
-        state.footerOverride = "This General row is read-only.";
-        rerender();
-    }
-  };
+  const activateGeneralRow = () => activateGeneralRowSelection(state, {
+    openGuardMeToggle,
+    openInsecureEditsToggle,
+    openProjectTrustToggle,
+    openDetail: (kind) => {
+      state.detail = { kind, selectedIndex: 0 };
+      state.footerOverride = undefined;
+      rerender();
+    },
+    markReadOnly: () => {
+      state.footerOverride = "This General row is read-only.";
+      rerender();
+    },
+  });
 
   return {
     render(width: number): string[] {
@@ -817,129 +753,228 @@ function createSuccessComponent(
         return cachedLines;
       }
       cachedKey = key;
-      const successContext = state.pane === "General" ? policyWriteSuccessContext(snapshot, plan, actionsEnabled) : undefined;
-      const successFooterMode = state.pane === "General" ? "replace" : "prefix";
-      cachedLines = state.confirm
-        ? renderConfirmScreen(state.confirm, width, state.footerOverride, theme)
-        : state.detail
-          ? renderDetailScreen(snapshot, state.detail, width, state.footerOverride, theme)
-          : state.searchActive
-            ? renderSearchScreen(snapshot, state, width, state.footerOverride, theme)
-            : renderPaneScreen(
-                snapshot,
-                state.pane,
-                selectedIndexForPane(state.pane, state),
-                width,
-                state.footerOverride,
-                state.busy,
-                state.focus,
-                theme,
-                successContext,
-                successFooterMode,
-                successKeysForState(state, actionsEnabled),
-              );
+      cachedLines = renderStateScreen({
+        snapshot,
+        state,
+        width,
+        theme,
+        paneOptions: successPaneOptions(state, snapshot, plan, actionsEnabled),
+      });
       return cachedLines;
     },
     invalidate,
     handleInput(data: string): void {
-      if (state.searchActive) {
-        handleSearchInput(data, state, snapshot, rerender);
-        return;
-      }
-      if (state.detail) {
-        if (isEscape(data) || isQuit(data)) {
-          state.detail = undefined;
-          state.pane = "General";
-          state.sidebarIndex = 0;
-          state.focus = "main";
-          state.footerOverride = undefined;
-          rerender();
-          return;
-        }
-        if (isUp(data) || isDown(data)) {
-          state.detail.selectedIndex = moveDetailSelection(snapshot, state.detail, isDown(data) ? 1 : -1);
-          state.footerOverride = undefined;
-          rerender();
-        }
-        return;
-      }
-      if (state.busy) {
-        return;
-      }
-      if (state.confirm) {
-        const confirm = state.confirm;
-        handleConfirmInput(data, confirm, () => returnFromConfirm(confirm), (action) => {
-          switch (action.kind) {
-            case "write":
-              if (confirm.kind === "policy-write") {
-                done({ kind: "write", setupConfig: confirm.setupConfig, plan: confirm.plan });
-              }
-              return;
-            case "set-guardme-enabled":
-              done(action);
-              return;
-            case "set-insecure-edits":
-              done(action);
-              return;
-            case "set-project-trusted":
-              done(action);
-              return;
-            case "back":
-              returnFromConfirm(confirm);
-              return;
-            case "cancel":
-            default:
-              done({ kind: "closed" });
-          }
-        }, rerender);
-        return;
-      }
-      if (isQuit(data) || isEscape(data)) {
-        done({ kind: "closed" });
-        return;
-      }
-      if (data === "/") {
-        state.searchActive = true;
-        state.searchQuery = "";
-        state.searchIndex = 0;
-        state.focus = "main";
-        rerender();
-        return;
-      }
-      if (isTab(data)) {
-        state.focus = paneIsReadOnly(state.pane) ? "sidebar" : state.focus === "sidebar" ? "main" : "sidebar";
-        rerender();
-        return;
-      }
-
-      const navigationFocus = paneIsReadOnly(state.pane) ? "sidebar" : state.focus;
-      if (navigationFocus === "sidebar") {
-        if (isUp(data) || isDown(data)) {
-          moveSidebarSelection(state, isDown(data) ? 1 : -1);
-          rerender();
-          return;
-        }
-        if (isEnter(data) && !paneIsReadOnly(state.pane)) {
-          state.focus = "main";
-          rerender();
-        }
-        return;
-      }
-
-      if (isUp(data) || isDown(data)) {
-        moveSelection(state, isDown(data) ? 1 : -1, snapshot);
-        rerender();
-        return;
-      }
-      if (isEnter(data) && state.pane === "Setup") {
-        openSetupActionForMode(setupModeAt(state.setupIndex));
-        return;
-      }
-      if (isEnter(data) && state.pane === "General") {
-        activateGeneralRow();
-      }
+      handleConfigPanelInput({
+        data,
+        state,
+        snapshot,
+        rerender,
+        done,
+        activateGeneralRow,
+        openSetupActionForMode,
+      });
     },
   };
+}
+
+function handleConfigPanelInput(options: ConfigPanelInputOptions): void {
+  if (handleSearchStateInput(options) || handleDetailStateInput(options)) {
+    return;
+  }
+  if (options.state.busy) {
+    return;
+  }
+  if (handleConfirmStateInput(options) || handlePanelCommandInput(options)) {
+    return;
+  }
+  handlePaneNavigationInput(options);
+}
+
+function handleSearchStateInput(options: ConfigPanelInputOptions): boolean {
+  if (!options.state.searchActive) {
+    return false;
+  }
+  handleSearchInput(options.data, options.state, options.snapshot, options.rerender);
+  return true;
+}
+
+function handleDetailStateInput(options: ConfigPanelInputOptions): boolean {
+  const detail = options.state.detail;
+  if (!detail) {
+    return false;
+  }
+  if (isEscape(options.data) || isQuit(options.data)) {
+    closeDetailScreen(options.state, options.rerender);
+    return true;
+  }
+  if (isUp(options.data) || isDown(options.data)) {
+    detail.selectedIndex = moveDetailSelection(options.snapshot, detail, isDown(options.data) ? 1 : -1);
+    clearFooterAfterNavigation(options);
+    return true;
+  }
+  return true;
+}
+
+function closeDetailScreen(state: ConfigComponentState, rerender: () => void): void {
+  state.detail = undefined;
+  state.pane = "General";
+  state.sidebarIndex = 0;
+  state.focus = "main";
+  state.footerOverride = undefined;
+  rerender();
+}
+
+function handleConfirmStateInput(options: ConfigPanelInputOptions): boolean {
+  const confirm = options.state.confirm;
+  if (!confirm) {
+    return false;
+  }
+  handleConfirmInput(
+    options.data,
+    confirm,
+    () => returnFromConfirm(options.state, confirm, options.rerender),
+    (action) => finishConfirmAction(confirm, action, options.done, options.state, options.rerender),
+    options.rerender,
+  );
+  return true;
+}
+
+function handlePanelCommandInput(options: ConfigPanelInputOptions): boolean {
+  if (isQuit(options.data) || isEscape(options.data)) {
+    options.done({ kind: "closed" });
+    return true;
+  }
+  if (options.data === "/") {
+    startSearch(options);
+    return true;
+  }
+  if (isTab(options.data)) {
+    options.state.focus = toggledFocusForPane(options.state.pane, options.state.focus);
+    clearFooterAfterNavigation(options);
+    return true;
+  }
+  if ((options.data === "r" || options.data === "R") && options.handleRefresh) {
+    options.handleRefresh();
+    return true;
+  }
+  return false;
+}
+
+function startSearch(options: ConfigPanelInputOptions): void {
+  options.state.searchActive = true;
+  options.state.searchQuery = "";
+  options.state.searchIndex = 0;
+  options.state.focus = "main";
+  if (options.clearFooterOnNavigation) {
+    options.state.footerOverride = undefined;
+  }
+  options.rerender();
+}
+
+function handlePaneNavigationInput(options: ConfigPanelInputOptions): void {
+  const navigationFocus = paneIsReadOnly(options.state.pane) ? "sidebar" : options.state.focus;
+  if (navigationFocus === "sidebar") {
+    handleSidebarNavigation(options);
+    return;
+  }
+  handleMainNavigation(options);
+}
+
+function handleSidebarNavigation(options: ConfigPanelInputOptions): void {
+  if (isUp(options.data) || isDown(options.data)) {
+    moveSidebarSelection(options.state, isDown(options.data) ? 1 : -1);
+    clearFooterAfterNavigation(options);
+    return;
+  }
+  if (isEnter(options.data) && !paneIsReadOnly(options.state.pane)) {
+    options.state.focus = "main";
+    clearFooterAfterNavigation(options);
+  }
+}
+
+function handleMainNavigation(options: ConfigPanelInputOptions): void {
+  if (isUp(options.data) || isDown(options.data)) {
+    moveSelection(options.state, isDown(options.data) ? 1 : -1, options.snapshot);
+    clearFooterAfterNavigation(options);
+    return;
+  }
+  if (isEnter(options.data) && options.state.pane === "Setup") {
+    options.openSetupActionForMode(setupModeAt(options.state.setupIndex));
+    return;
+  }
+  if (isEnter(options.data) && options.state.pane === "General") {
+    options.activateGeneralRow();
+  }
+}
+
+function clearFooterAfterNavigation(options: ConfigPanelInputOptions): void {
+  if (options.clearFooterOnNavigation) {
+    options.state.footerOverride = undefined;
+  }
+  options.rerender();
+}
+
+function activateGeneralRowSelection(state: ConfigComponentState, handlers: GeneralRowHandlers): void {
+  switch (state.statusIndex) {
+    case 0:
+      handlers.openGuardMeToggle();
+      return;
+    case 1:
+      handlers.openInsecureEditsToggle();
+      return;
+    case 2:
+      handlers.openProjectTrustToggle();
+      return;
+    case 3:
+      handlers.openDetail("warnings");
+      return;
+    case 4:
+      handlers.openDetail("diagnostics");
+      return;
+    default:
+      handlers.markReadOnly();
+  }
+}
+
+function returnFromConfirm(state: ConfigComponentState, confirm: ConfirmState, rerender: () => void): void {
+  state.confirm = undefined;
+  if (confirm.kind === "policy-write") {
+    state.pane = "Setup";
+    state.sidebarIndex = SETUP_PANE_INDEX;
+  } else {
+    state.pane = "General";
+    state.sidebarIndex = 0;
+  }
+  state.focus = "main";
+  rerender();
+}
+
+function finishConfirmAction(
+  confirm: ConfirmState,
+  action: ConfirmInputResult,
+  done: (value: ConfigAction) => void,
+  state: ConfigComponentState,
+  rerender: () => void,
+): void {
+  if (action.kind === "write") {
+    if (confirm.kind === "policy-write") {
+      done({ kind: "write", setupConfig: confirm.setupConfig, plan: confirm.plan });
+    }
+    return;
+  }
+  if (isToggleConfirmAction(action)) {
+    done(action);
+    return;
+  }
+  if (action.kind === "back") {
+    returnFromConfirm(state, confirm, rerender);
+    return;
+  }
+  done({ kind: "closed" });
+}
+
+function isToggleConfirmAction(action: ConfirmInputResult): action is ToggleConfirmAction {
+  return action.kind === "set-guardme-enabled" || action.kind === "set-insecure-edits" || action.kind === "set-project-trusted";
 }
 
 function successKeysForState(state: ConfigComponentState, actionsEnabled = false): string | undefined {
@@ -971,35 +1006,40 @@ function handleConfirmInput(
     return;
   }
   if (isUp(data) || isDown(data)) {
-    confirm.selectedIndex = wrap(confirm.selectedIndex + (isDown(data) ? 1 : -1), 0, confirmChoices(confirm).length - 1);
+    moveConfirmSelection(confirm, isDown(data) ? 1 : -1);
     rerender();
     return;
   }
   if (isEnter(data)) {
-    const choice = confirmChoices(confirm)[confirm.selectedIndex];
-    if (!choice || choice === "Go back") {
-      done({ kind: "back" });
-      return;
-    }
-    if (confirm.kind === "policy-write" && choice === "Write policy") {
-      done({ kind: "write" });
-      return;
-    }
-    if (choice === "Cancel") {
-      done({ kind: "cancel" });
-      return;
-    }
-    if (confirm.kind === "guardme-off" && choice === "Turn off GuardMe") {
-      done({ kind: "set-guardme-enabled", enabled: false });
-      return;
-    }
-    if (confirm.kind === "insecure-edits" && choice === "Turn on insecure edits") {
-      done({ kind: "set-insecure-edits", enabled: true });
-      return;
-    }
-    if (confirm.kind === "project-trust" && choice === "Save trust decision") {
-      done({ kind: "set-project-trusted", trusted: confirm.trusted });
-    }
+    done(confirmActionForSelection(confirm));
+  }
+}
+
+function moveConfirmSelection(confirm: ConfirmState, delta: number): void {
+  confirm.selectedIndex = wrap(confirm.selectedIndex + delta, 0, confirmChoices(confirm).length - 1);
+}
+
+function confirmActionForSelection(confirm: ConfirmState): ConfirmInputResult {
+  const choice = confirmChoices(confirm)[confirm.selectedIndex];
+  if (choice === undefined || choice === "Go back") {
+    return { kind: "back" };
+  }
+  if (choice === "Cancel") {
+    return { kind: "cancel" };
+  }
+  return primaryConfirmAction(confirm);
+}
+
+function primaryConfirmAction(confirm: ConfirmState): ConfirmInputResult {
+  switch (confirm.kind) {
+    case "policy-write":
+      return { kind: "write" };
+    case "guardme-off":
+      return { kind: "set-guardme-enabled", enabled: false };
+    case "insecure-edits":
+      return { kind: "set-insecure-edits", enabled: true };
+    case "project-trust":
+      return { kind: "set-project-trusted", trusted: confirm.trusted };
   }
 }
 
@@ -1152,24 +1192,25 @@ function searchCandidatesForPane(snapshot: ConfigSnapshot, pane: ConfigPane): re
     if (row.kind === "blank" || row.kind === "heading") {
       return [];
     }
-    const result: SearchResult = row.kind === "text"
-      ? {
-          pane,
-          selectionIndex: selectionIndex++,
-          label: row.text,
-          ...(row.value !== undefined ? { value: row.value, valueKind: "text" } : {}),
-          description: row.description,
-        }
-      : {
-          pane,
-          selectionIndex: selectionIndex++,
-          label: row.label,
-          value: row.value,
-          valueKind: row.valueKind,
-          description: row.description,
-        };
+    const result = searchResultForRow(pane, row, selectionIndex);
+    selectionIndex += 1;
     return [result];
   });
+}
+
+function searchResultForRow(pane: ConfigPane, row: Exclude<FrameMainRow, { readonly kind: "blank" } | { readonly kind: "heading" }>, selectionIndex: number): SearchResult {
+  if (row.kind === "text") {
+    const result: SearchResult = { pane, selectionIndex, label: row.text, description: row.description };
+    return row.value === undefined ? result : { ...result, value: row.value, valueKind: "text" };
+  }
+  return {
+    pane,
+    selectionIndex,
+    label: row.label,
+    value: row.value,
+    valueKind: row.valueKind,
+    description: row.description,
+  };
 }
 
 function generalSearchCandidates(snapshot: ConfigSnapshot): readonly SearchResult[] {
@@ -1234,19 +1275,20 @@ function setSelectedIndexForPane(state: ConfigComponentState, pane: ConfigPane, 
   }
 }
 
-function renderPaneScreen(
-  snapshot: ConfigSnapshot,
-  pane: ConfigPane,
-  selectedIndex: number,
-  width: number,
-  footerOverride?: string,
-  busy = false,
-  focus: FocusBox = "main",
-  theme?: ConfigTheme,
-  contextOverride?: string,
-  footerOverrideMode: "prefix" | "replace" = "prefix",
-  keysOverride?: string,
-): string[] {
+function renderPaneScreen(options: RenderPaneScreenOptions): string[] {
+  const {
+    snapshot,
+    pane,
+    selectedIndex,
+    width,
+    footerOverride,
+    busy = false,
+    focus = "main",
+    theme,
+    contextOverride,
+    footerOverrideMode = "prefix",
+    keysOverride,
+  } = options;
   const effectiveFocus: FocusBox = paneIsReadOnly(pane) ? "sidebar" : focus;
   const rows = rowsForPane(snapshot, pane, selectedIndex, mainContentWidthForFrame(width));
   const baseFooter = footerForPane(snapshot, pane, selectedIndex, busy, effectiveFocus);
@@ -1258,17 +1300,23 @@ function renderPaneScreen(
       keys: keysOverride ?? keysForPane(pane, effectiveFocus),
       sidebar: sidebarForPane(pane),
       rows,
-      footer: footerOverride
-        ? footerOverrideMode === "replace"
-          ? footerOverride
-          : footerSegments(footerOverride, baseFooter)
-        : baseFooter,
+      footer: paneFooter(footerOverride, baseFooter, footerOverrideMode),
       minContentRows: CONFIG_FRAME_BODY_ROWS,
       focus: effectiveFocus,
       theme,
     },
     width,
   );
+}
+
+function paneFooter(override: string | undefined, baseFooter: string, mode: "prefix" | "replace"): string {
+  if (!override) {
+    return baseFooter;
+  }
+  if (mode === "replace") {
+    return override;
+  }
+  return footerSegments(override, baseFooter);
 }
 
 function renderDetailScreen(
@@ -1406,18 +1454,24 @@ function confirmStateFooter(confirm: ConfirmState): string {
     return confirmFooter(confirm.plan, confirm.selectedIndex);
   }
   if (confirm.kind === "guardme-off") {
-    return confirm.selectedIndex === 0
-      ? footerSegments("1/2", "Turn off GuardMe for this project")
-      : footerSegments("2/2", "Return to General", "GuardMe remains active");
+    return twoChoiceFooter(confirm.selectedIndex, ["1/2", "Turn off GuardMe for this project"], ["2/2", "Return to General", "GuardMe remains active"]);
   }
   if (confirm.kind === "insecure-edits") {
-    return confirm.selectedIndex === 0
-      ? footerSegments("1/2", "Turn on content-scan bypass", "path protections still apply")
-      : footerSegments("2/2", "Return to General", "content scanning remains guarded");
+    return twoChoiceFooter(confirm.selectedIndex, ["1/2", "Turn on content-scan bypass", "path protections still apply"], ["2/2", "Return to General", "content scanning remains guarded"]);
   }
-  return confirm.selectedIndex === 0
-    ? footerSegments("1/2", confirm.trusted ? "Save trusted project decision" : "Save untrusted project decision", "restart or reload may be required")
-    : footerSegments("2/2", "Return to General", "Pi trust is unchanged");
+  return projectTrustConfirmFooter(confirm);
+}
+
+function twoChoiceFooter(selectedIndex: number, primary: readonly string[], secondary: readonly string[]): string {
+  return selectedIndex === 0 ? footerSegments(...primary) : footerSegments(...secondary);
+}
+
+function projectTrustConfirmFooter(confirm: ProjectTrustConfirmState): string {
+  if (confirm.selectedIndex !== 0) {
+    return footerSegments("2/2", "Return to General", "Pi trust is unchanged");
+  }
+  const action = confirm.trusted ? "Save trusted project decision" : "Save untrusted project decision";
+  return footerSegments("1/2", action, "restart or reload may be required");
 }
 
 function mainContentWidthForFrame(width: number): number {
@@ -1717,7 +1771,13 @@ function detailLines(snapshot: ConfigSnapshot, kind: ConfigDetailState["kind"]):
 }
 
 function detailLineTone(line: string): "dim" | "normal" | "warning" {
-  return /^(ERROR|WARNING)\b/u.test(line) ? "warning" : line.startsWith("  ") ? "dim" : "normal";
+  if (/^(ERROR|WARNING)\b/u.test(line)) {
+    return "warning";
+  }
+  if (line.startsWith("  ")) {
+    return "dim";
+  }
+  return "normal";
 }
 
 function detailFooter(snapshot: ConfigSnapshot, detail: ConfigDetailState): string {
@@ -1791,34 +1851,47 @@ function setupFooter(selectedIndex: number): string {
 function statusFooter(snapshot: ConfigSnapshot, selectedIndex: number): string {
   switch (selectedIndex) {
     case 0:
-      return footerSegments(
-        "Row 1/5",
-        snapshot.guardMe === "off" ? "Enter to turn GuardMe active" : "Enter to turn GuardMe off with confirmation",
-        `settings ${snapshot.settingsPath}`,
-      );
+      return guardMeStatusFooter(snapshot);
     case 1:
-      return footerSegments(
-        "Row 2/5",
-        `Insecure edits ${snapshot.insecureEdits ? "ON" : "OFF"}`,
-        snapshot.insecureEdits ? "Enter: turn off content-scan bypass" : "Enter: turn on with confirmation",
-        "path protections still apply while ON",
-      );
+      return insecureEditsStatusFooter(snapshot);
     case 2:
-      return footerSegments(
-        "Row 3/5",
-        `Trust ${snapshot.projectTrusted ? "ON" : "OFF"}`,
-        snapshot.projectTrusted ? "Enter: mark untrusted" : "Enter: trust project",
-        snapshot.projectTrusted
-          ? "after reload/restart: project policy/settings/state skipped"
-          : "after reload/restart: project policy/settings/state can load",
-      );
+      return projectTrustStatusFooter(snapshot);
     case 3:
-      return footerSegments("Row 4/5", `${snapshot.warnedFingerprints} warned fingerprint${snapshot.warnedFingerprints === 1 ? "" : "s"}`, "Enter details");
+      return footerSegments("Row 4/5", warnedFingerprintSummary(snapshot.warnedFingerprints), "Enter details");
     case 4:
       return footerSegments("Row 5/5", `diagnostics ${diagnosticsSummary(snapshot.diagnostics)}`, "Enter details");
     default:
-      return footerSegments("Row 1/5", `GuardMe is ${snapshot.guardMe}`, `insecure edits ${snapshot.insecureEdits ? "ON" : "OFF"}`, `diagnostics ${diagnosticsSummary(snapshot.diagnostics)}`);
+      return defaultStatusFooter(snapshot);
   }
+}
+
+function guardMeStatusFooter(snapshot: ConfigSnapshot): string {
+  const action = snapshot.guardMe === "off" ? "Enter to turn GuardMe active" : "Enter to turn GuardMe off with confirmation";
+  return footerSegments("Row 1/5", action, `settings ${snapshot.settingsPath}`);
+}
+
+function insecureEditsStatusFooter(snapshot: ConfigSnapshot): string {
+  const state = snapshot.insecureEdits ? "ON" : "OFF";
+  const action = snapshot.insecureEdits ? "Enter: turn off content-scan bypass" : "Enter: turn on with confirmation";
+  return footerSegments("Row 2/5", `Insecure edits ${state}`, action, "path protections still apply while ON");
+}
+
+function projectTrustStatusFooter(snapshot: ConfigSnapshot): string {
+  const state = snapshot.projectTrusted ? "ON" : "OFF";
+  const action = snapshot.projectTrusted ? "Enter: mark untrusted" : "Enter: trust project";
+  const reloadMessage = snapshot.projectTrusted
+    ? "after reload/restart: project policy/settings/state skipped"
+    : "after reload/restart: project policy/settings/state can load";
+  return footerSegments("Row 3/5", `Trust ${state}`, action, reloadMessage);
+}
+
+function warnedFingerprintSummary(count: number): string {
+  return `${count} warned ${pluralize("fingerprint", count)}`;
+}
+
+function defaultStatusFooter(snapshot: ConfigSnapshot): string {
+  const insecureEditsState = snapshot.insecureEdits ? "ON" : "OFF";
+  return footerSegments("Row 1/5", `GuardMe is ${snapshot.guardMe}`, `insecure edits ${insecureEditsState}`, `diagnostics ${diagnosticsSummary(snapshot.diagnostics)}`);
 }
 
 function policiesFooter(_selectedIndex: number): string {
@@ -1833,18 +1906,7 @@ function rulesFooter(snapshot: ConfigSnapshot, _selectedIndex: number): string {
 function confirmFooter(plan: SetupWritePlan, selectedIndex: number): string {
   switch (selectedIndex) {
     case 0:
-      return footerSegments(
-        "1/3",
-        plan.policyKind === "append" ? `Append to ${setupScopeLabel(plan.scope)}` : `Write ${setupScopeLabel(plan.scope)}`,
-        `from ${setupPolicyKindLabel(plan.policyKind)}`,
-        plan.policyKind === "append"
-          ? plan.existing
-            ? "updates the existing policy file"
-            : "creates a new policy file"
-          : plan.existing
-            ? "overwrites the existing policy file"
-            : "creates a new policy file",
-      );
+      return footerSegments("1/3", policyWritePrimaryAction(plan), `from ${setupPolicyKindLabel(plan.policyKind)}`, policyWriteFileEffect(plan));
     case 1:
       return footerSegments("2/3", "Return to setup options", "no files will be written");
     case 2:
@@ -1853,12 +1915,30 @@ function confirmFooter(plan: SetupWritePlan, selectedIndex: number): string {
   }
 }
 
+function policyWritePrimaryAction(plan: SetupWritePlan): string {
+  return plan.policyKind === "append" ? `Append to ${setupScopeLabel(plan.scope)}` : `Write ${setupScopeLabel(plan.scope)}`;
+}
+
+function policyWriteFileEffect(plan: SetupWritePlan): string {
+  if (plan.policyKind === "append") {
+    return plan.existing ? "updates the existing policy file" : "creates a new policy file";
+  }
+  return plan.existing ? "overwrites the existing policy file" : "creates a new policy file";
+}
+
 function sidebarForPane(activePane: ConfigPane): readonly FrameSidebarItem[] {
   return CONFIG_PANES.map((pane) => ({ label: pane, active: pane === activePane }));
 }
 
 function paneIsReadOnly(pane: ConfigPane): boolean {
   return pane !== "Setup" && pane !== "General";
+}
+
+function toggledFocusForPane(pane: ConfigPane, focus: FocusBox): FocusBox {
+  if (paneIsReadOnly(pane)) {
+    return "sidebar";
+  }
+  return focus === "sidebar" ? "main" : "sidebar";
 }
 
 function moveSidebarSelection(state: ConfigComponentState, delta: number): void {
@@ -1912,11 +1992,12 @@ function diagnosticsSummary(diagnostics: readonly PolicyDiagnostic[]): string {
   }
   const errors = diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
   const warnings = diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
-  const parts = [
-    errors > 0 ? `${errors} error${errors === 1 ? "" : "s"}` : undefined,
-    warnings > 0 ? `${warnings} warning${warnings === 1 ? "" : "s"}` : undefined,
-  ].filter(Boolean);
-  return parts.length > 0 ? parts.join(", ") : `${diagnostics.length} diagnostic${diagnostics.length === 1 ? "" : "s"}`;
+  const parts = [diagnosticSeveritySummary("error", errors), diagnosticSeveritySummary("warning", warnings)].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(", ") : `${diagnostics.length} ${pluralize("diagnostic", diagnostics.length)}`;
+}
+
+function diagnosticSeveritySummary(label: "error" | "warning", count: number): string | undefined {
+  return count > 0 ? `${count} ${pluralize(label, count)}` : undefined;
 }
 
 function clamp(value: number, min: number, max: number): number {

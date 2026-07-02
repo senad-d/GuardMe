@@ -174,7 +174,7 @@ Use this matrix to understand where each task applies, why it matters, and the t
 - Command classifier tests cover the same deny/allow/dangerous/ambiguous cases before and after refactor.
 - Sonar no longer reports any `src/policy/commands.ts` issue IDs listed in Appendix A.
 
-- [ ] Task 5: Refactor core config, evaluation, state, and command modules
+- [x] Task 5: Refactor core config, evaluation, state, and command modules
 
 **Where to fix**
 
@@ -202,7 +202,7 @@ Use this matrix to understand where each task applies, why it matters, and the t
 - Existing tests for config, runtime settings, policy evaluation, script content, command output, lifecycle, and warning state pass.
 - New regression tests cover any extracted helper with non-trivial branching.
 
-- [ ] Task 6: Refactor UI/TUI modules and e2e UI helpers
+- [x] Task 6: Refactor UI/TUI modules and e2e UI helpers
 
 **Where to fix**
 
@@ -347,23 +347,24 @@ IMPORTANT: Execute every step in order, top to bottom. Mark each task complete o
 - Covers primary IDs in `src/policy/commands.ts`: `AZ8dpv6kIBtyveMqfJyQ`, `AZ8dpv6kIBtyveMqfJyR`, `AZ8dpv6kIBtyveMqfJyS`, `AZ8dpv6kIBtyveMqfJyT`, `AZ8dpv6kIBtyveMqfJyU`, `AZ8dpv6kIBtyveMqfJyV`, `AZ8dpv6kIBtyveMqfJyW`, `AZ8dpv6kIBtyveMqfJyX`, `AZ8dpv6kIBtyveMqfJyY`, `AZ8dpv6kIBtyveMqfJyZ`, `AZ8dpv6kIBtyveMqfJya`, `AZ8dpv6kIBtyveMqfJyb`, `AZ8dpv6kIBtyveMqfJyc`, `AZ8dpv6kIBtyveMqfJyd`, `AZ8dpv6kIBtyveMqfJye`, `AZ8dpv6kIBtyveMqfJyf`, `AZ8dpv6kIBtyveMqfJyg`, `AZ8dpv6kIBtyveMqfJyh`, `AZ8dpv6kIBtyveMqfJyi`, `AZ8dpv6kIBtyveMqfJyj`, `AZ8dpv6kIBtyveMqfJyk`, `AZ8dpv6kIBtyveMqfJyl`, `AZ8dpv6kIBtyveMqfJym`, `AZ8dpv6kIBtyveMqfJyn`, `AZ8dpv6kIBtyveMqfJyo`, `AZ8dpv6kIBtyveMqfJyp`, `AZ8dpv6kIBtyveMqfJyq`, `AZ8dpv6kIBtyveMqfJyr`, `AZ8dpv6kIBtyveMqfJys`, `AZ8dpv6kIBtyveMqfJyt`, `AZ8dpv6kIBtyveMqfJyu`, `AZ8dpv6kIBtyveMqfJyv`.
 - Local validation: `npm run typecheck`, `npm run test`, `npm run test:e2e:rpc`, `npm run test:e2e:tui`, and `npm run validate` pass. Sonar re-poll remains part of Task 10 after analysis reruns.
 
-- [ ] Task 5: Refactor core config, evaluation, state, and command modules
+- [x] Task 5: Refactor core config, evaluation, state, and command modules
 
-- [ ] Reduce cognitive complexity in `src/commands/guardme-command.ts`, `src/config/merge-policy.ts`, `src/config/runtime-settings.ts`, `src/config/schema.ts`, `src/config/write-policy.ts`, `src/events/register-guard.ts`, `src/policy/evaluate.ts`, `src/policy/script-content.ts`, and `src/state/warnings.ts`.
-- [ ] Extract named helper functions for repeated validation, formatting, branching, and option-building logic.
-- [ ] Replace nested ternaries in command/config/session modules with explicit `if`/`else` or small pure helper functions.
-- [ ] Replace duplicate function implementations in `src/config/merge-policy.ts` with a shared helper or intentional, differentiated behavior.
-- [ ] Update the existing unit tests for config merge/write, schema, runtime settings, policy evaluation, script content, command UI, and warning state.
+- [x] Reduce cognitive complexity in `src/commands/guardme-command.ts`, `src/config/merge-policy.ts`, `src/config/runtime-settings.ts`, `src/config/schema.ts`, `src/config/write-policy.ts`, `src/events/register-guard.ts`, `src/policy/evaluate.ts`, `src/policy/script-content.ts`, and `src/state/warnings.ts`.
+- [x] Extract named helper functions for repeated validation, formatting, branching, and option-building logic.
+- [x] Replace nested ternaries in command/config/session modules with explicit `if`/`else` or small pure helper functions.
+- [x] Replace duplicate function implementations in `src/config/merge-policy.ts` with a shared helper or intentional, differentiated behavior.
+- [x] Update the existing unit tests for config merge/write, schema, runtime settings, policy evaluation, script content, command UI, and warning state.
 - Covers IDs listed for `src/commands/guardme-command.ts`, `src/config/*`, `src/events/*`, `src/events/session-store.ts`, `src/policy/evaluate.ts`, `src/policy/script-content.ts`, and `src/state/warnings.ts` in Appendix A.
 
-- [ ] Task 6: Refactor UI/TUI modules
+- [x] Task 6: Refactor UI/TUI modules
 
-- [ ] Reduce cognitive complexity in `src/ui/config-tui.ts`, `src/ui/setup-wizard.ts`, and `src/ui/text.ts` by extracting pure render-state builders and keyboard/action handlers.
-- [ ] Replace `renderPaneScreen` and `renderSettingRow` long parameter lists with typed props objects.
-- [ ] Replace nested ternaries, duplicate switch/case blocks, repeated `push()` sequences, negated conditions, and nested template literals with clearer named constructs.
-- [ ] Refactor constant-return functions in `test/e2e/helpers/tui-capture.mjs` so their return values represent meaningful state, or inline/remove them if they are unnecessary.
-- [ ] Preserve rendered output through snapshot-like assertions or focused existing tests in `test/config-tui.test.mjs`, `test/config-frame.test.mjs`, `test/setup-wizard.test.mjs`, `test/approval-ui.test.mjs`, and `test/ui-text.test.mjs`.
+- [x] Reduce cognitive complexity in `src/ui/config-tui.ts`, `src/ui/setup-wizard.ts`, and `src/ui/text.ts` by extracting pure render-state builders and keyboard/action handlers.
+- [x] Replace `renderPaneScreen` and `renderSettingRow` long parameter lists with typed props objects.
+- [x] Replace nested ternaries, duplicate switch/case blocks, repeated `push()` sequences, negated conditions, and nested template literals with clearer named constructs.
+- [x] Refactor constant-return functions in `test/e2e/helpers/tui-capture.mjs` so their return values represent meaningful state, or inline/remove them if they are unnecessary.
+- [x] Preserve rendered output through snapshot-like assertions or focused existing tests in `test/config-tui.test.mjs`, `test/config-frame.test.mjs`, `test/setup-wizard.test.mjs`, `test/approval-ui.test.mjs`, and `test/ui-text.test.mjs`.
 - Covers IDs listed for `src/ui/approval-modal.ts`, `src/ui/config-frame.ts`, `src/ui/config-tui.ts`, `src/ui/detail-formatters.ts`, `src/ui/setup-wizard.ts`, and `src/ui/text.ts` in Appendix A.
+- Local validation: `npm run typecheck`, focused UI tests, `npm run test`, `npm run test:e2e:tui`, `npm run test:e2e`, `npm run validate`, and `git diff --check` pass. Sonar re-poll remains part of Task 10 after analysis reruns.
 
 - [ ] Task 7: Fix regex performance and maintainability issues
 
