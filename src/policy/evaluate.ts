@@ -814,7 +814,7 @@ function envCredentialPattern(candidate: string, basename: string): string | und
 }
 
 function basenameCredentialPattern(basename: string): string | undefined {
-  return CREDENTIAL_BASENAME_PREFIXES.find((prefix) => basename.startsWith(prefix)) ? basename : undefined;
+  return CREDENTIAL_BASENAME_PREFIXES.some((prefix) => basename.startsWith(prefix)) ? basename : undefined;
 }
 
 function segmentCredentialPattern(candidate: string): string | undefined {

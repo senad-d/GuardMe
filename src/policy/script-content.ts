@@ -50,6 +50,12 @@ const DEFAULT_MAX_SCRIPT_BYTES = 256 * 1024;
 const ANSI_ESCAPE = String.fromCodePoint(0x1b);
 const ANSI_CSI = String.fromCodePoint(0x9b);
 const SHELL_EXTENSIONS = new Set([".sh", ".bash", ".zsh", ".command", ".ksh"]);
+
+interface AnsiStripStep {
+  readonly index: number;
+  readonly nextIndex: number;
+  readonly text: string;
+}
 const CI_EXTENSIONS = new Set([".yml", ".yaml"]);
 const SHELL_CONTROL_ONLY = new Set([
   "do",
@@ -185,21 +191,23 @@ export function redactedCommandPreview(command: string, maxLength = 160): string
 
 function stripAnsiControlSequences(value: string): string {
   let output = "";
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (character !== ANSI_ESCAPE && character !== ANSI_CSI) {
-      output += character;
-      continue;
-    }
-
-    const endIndex = ansiControlSequenceEndIndex(value, index + 1);
-    if (endIndex === undefined) {
-      output += character;
-      continue;
-    }
-    index = endIndex;
+  for (let step = ansiStripStep(value, 0); step.index < value.length; step = ansiStripStep(value, step.nextIndex)) {
+    output += step.text;
   }
   return output;
+}
+
+function ansiStripStep(value: string, index: number): AnsiStripStep {
+  const character = value[index] ?? "";
+  if (character !== ANSI_ESCAPE && character !== ANSI_CSI) {
+    return { index, nextIndex: index + 1, text: character };
+  }
+
+  const endIndex = ansiControlSequenceEndIndex(value, index + 1);
+  if (endIndex === undefined) {
+    return { index, nextIndex: index + 1, text: character };
+  }
+  return { index, nextIndex: endIndex + 1, text: "" };
 }
 
 function ansiControlSequenceEndIndex(value: string, startIndex: number): number | undefined {
@@ -699,7 +707,7 @@ function isYamlBlockScalarHeader(value: string): boolean {
   if (header === "|" || header === ">") {
     return true;
   }
-  if (header[0] !== "|" && header[0] !== ">") {
+  if (!header.startsWith("|") && !header.startsWith(">")) {
     return false;
   }
   return isYamlBlockScalarModifier(header.slice(1));
@@ -717,10 +725,13 @@ function isYamlBlockScalarModifier(value: string): boolean {
   if (value === "" || value === "+" || value === "-") {
     return true;
   }
-  const sign = value[0] === "+" || value[0] === "-" ? value[0] : undefined;
+  const sign = value.startsWith("+") || value.startsWith("-") ? value[0] : undefined;
   const lastCharacter = value.at(-1);
   const hasTrailingSign = lastCharacter === "+" || lastCharacter === "-";
-  const digits = sign ? value.slice(1) : value.slice(0, hasTrailingSign ? -1 : undefined);
+  let digits = value.slice(0, hasTrailingSign ? -1 : undefined);
+  if (sign) {
+    digits = value.slice(1);
+  }
   const trailingSign = sign ? "" : value.slice(digits.length);
   return (trailingSign === "" || trailingSign === "+" || trailingSign === "-") && (digits === "" || allAsciiDigits(digits));
 }

@@ -57,6 +57,7 @@ const GUARDME_SUBCOMMANDS: readonly GuardMeAutocompleteItem[] = [
 type GuardMeNotificationType = "info" | "warning" | "error";
 type SetupPolicyMode = Extract<SetupMode, "global-custom" | "local-custom">;
 type PolicyWriteAction = "create" | "overwrite" | "update";
+type ConfigActionFlowResult = ConfigAction | "continue" | undefined;
 
 interface SetupPolicyFlowResult {
   readonly written: boolean;
@@ -79,6 +80,8 @@ export interface GuardMeCommandContext {
     readonly setStatus?: (key: string, text: string | undefined) => void;
   };
 }
+
+type GuardMeStatusContext = Pick<GuardMeCommandContext, "cwd" | "homeDir" | "isProjectTrusted">;
 
 /** Register the /guardme command. */
 export function registerGuardMeCommand(pi: ExtensionAPI): void {
@@ -128,12 +131,12 @@ export async function handleGuardMeCommand(args: string, ctx: GuardMeCommandCont
   }
 }
 
-export function renderStatus(ctx: Pick<GuardMeCommandContext, "cwd" | "homeDir" | "isProjectTrusted">): string {
+export function renderStatus(ctx: GuardMeStatusContext): string {
   const snapshot = createConfigSnapshot(ctx);
   return `${renderConfigPane(snapshot, "General")}\n\n${renderLegacyStatusSummary(snapshot)}`;
 }
 
-export function renderDiagnostics(ctx: Pick<GuardMeCommandContext, "cwd" | "homeDir" | "isProjectTrusted">): string {
+export function renderDiagnostics(ctx: GuardMeStatusContext): string {
   return formatDiagnostics(createConfigSnapshot(ctx).diagnostics).join("\n");
 }
 
@@ -141,7 +144,7 @@ export function renderHelp(): string {
   return `${renderGuardMeHelp()}\n\nGuardMe usage:\n- /guardme\n- /guardme help`;
 }
 
-export function renderPaths(ctx: Pick<GuardMeCommandContext, "cwd" | "homeDir" | "isProjectTrusted">): string {
+export function renderPaths(ctx: GuardMeStatusContext): string {
   const snapshot = createConfigSnapshot(ctx);
   return `${renderConfigPane(snapshot, "Policies")}\n\n${renderLegacyPathsSummary(snapshot)}`;
 }
@@ -235,7 +238,7 @@ function successOptionsForConfig(ctx: GuardMeCommandContext, sensibleDefaults: G
   };
 }
 
-function nextActionAfterSetupFlow(result: SetupPolicyFlowResult): ConfigAction | "continue" | undefined {
+function nextActionAfterSetupFlow(result: SetupPolicyFlowResult): ConfigActionFlowResult {
   if (result.back) {
     return "continue";
   }
@@ -253,7 +256,7 @@ async function handleConfigAction(
   action: ConfigAction,
   sensibleDefaults: GuardMePolicyConfig,
   successOptions: PolicyWriteSuccessOptions,
-): Promise<ConfigAction | "continue" | undefined> {
+): Promise<ConfigActionFlowResult> {
   if (action.kind === "closed") {
     return undefined;
   }
@@ -279,7 +282,7 @@ async function handleConfigPolicyWriteAction(
   ctx: GuardMeCommandContext,
   action: Extract<ConfigAction, { readonly kind: "write" }>,
   successOptions: PolicyWriteSuccessOptions,
-): Promise<ConfigAction | "continue" | undefined> {
+): Promise<ConfigActionFlowResult> {
   const written = await writeConfirmedSetupPolicy(ctx, action.setupConfig, action.plan);
   if (!written) {
     return undefined;
@@ -589,6 +592,10 @@ async function reloadSessionState(ctx: GuardMeCommandContext, projectTrustedOver
   if (!ctx.ui.setStatus) {
     return;
   }
+  const sessionOptions = projectTrustedOverride === undefined
+    ? { homeDir: ctx.homeDir }
+    : { homeDir: ctx.homeDir, projectTrusted: projectTrustedOverride };
+
   await startGuardMeSession(
     {
       cwd: ctx.cwd,
@@ -599,7 +606,7 @@ async function reloadSessionState(ctx: GuardMeCommandContext, projectTrustedOver
         notify: ctx.ui.notify,
       },
     },
-    { homeDir: ctx.homeDir, ...(projectTrustedOverride !== undefined ? { projectTrusted: projectTrustedOverride } : {}) },
+    sessionOptions,
   );
 }
 
@@ -616,7 +623,7 @@ function snapshotGuardMeStatus(state: NonNullable<ReturnType<typeof getGuardMeSe
   return "active";
 }
 
-function createConfigSnapshot(ctx: Pick<GuardMeCommandContext, "cwd" | "homeDir" | "isProjectTrusted">): ConfigSnapshot {
+function createConfigSnapshot(ctx: GuardMeStatusContext): ConfigSnapshot {
   const currentState = getGuardMeSessionState();
   const state = currentState && resolve(currentState.cwd) === resolve(ctx.cwd) ? currentState : undefined;
   const trusted = state?.projectTrusted ?? ctx.isProjectTrusted?.() ?? false;

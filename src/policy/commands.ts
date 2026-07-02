@@ -2058,7 +2058,15 @@ function niceCommandText(args: readonly string[]): string | undefined {
 }
 
 function isNegativeIntegerOption(arg: string): boolean {
-  return arg.length > 1 && arg.startsWith("-") && [...arg.slice(1)].every(isAsciiDigit);
+  if (arg.length <= 1 || !arg.startsWith("-")) {
+    return false;
+  }
+  for (let index = 1; index < arg.length; index += 1) {
+    if (!isAsciiDigit(arg[index] ?? "")) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function timeoutCommandText(args: readonly string[]): string | undefined {

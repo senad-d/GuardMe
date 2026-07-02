@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, readFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
-import { argv, env as processEnv, execPath, stdin as input, stdout as output } from "node:process";
+import { argv, env as processEnv, execPath, platform, stdin as input, stdout as output } from "node:process";
 import { delimiter, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +16,11 @@ const gitBranchPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 export const SAFE_CHILD_PATH = [dirname(execPath), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].join(delimiter);
 
+const GIT_EXECUTABLE_CANDIDATES = ["/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git", "/bin/git"];
+const NPM_EXECUTABLE_CANDIDATES = [resolve(dirname(execPath), npmExecutableName()), "/opt/homebrew/bin/npm", "/usr/local/bin/npm", "/usr/bin/npm"];
+let cachedGitExecutable;
+let cachedNpmExecutable;
+
 const pkg = validatePackageMetadata(rawPackageJson);
 
 export function createChildEnv(sourceEnv = processEnv) {
@@ -25,9 +30,40 @@ export function createChildEnv(sourceEnv = processEnv) {
   };
 }
 
+function npmExecutableName() {
+  return platform === "win32" ? "npm.cmd" : "npm";
+}
+
+function gitExecutablePath() {
+  cachedGitExecutable ??= fixedExecutablePath("git", GIT_EXECUTABLE_CANDIDATES);
+  return cachedGitExecutable;
+}
+
+function npmExecutablePath() {
+  cachedNpmExecutable ??= fixedExecutablePath("npm", NPM_EXECUTABLE_CANDIDATES);
+  return cachedNpmExecutable;
+}
+
+function fixedExecutablePath(commandName, candidates) {
+  const executable = candidates.find(isExecutablePath);
+  if (!executable) {
+    throw new Error(`Unable to find ${commandName} executable in fixed system locations.`);
+  }
+  return executable;
+}
+
+function isExecutablePath(candidate) {
+  try {
+    accessSync(candidate, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function validateVersionInput(version) {
   if (typeof version !== "string") {
-    throw new Error("Version must be a string.");
+    throw new TypeError("Version must be a string.");
   }
   const trimmed = version.trim();
   if (trimmed !== version || !semverPattern.test(trimmed)) {
@@ -38,12 +74,12 @@ export function validateVersionInput(version) {
 
 export function validatePackageName(name) {
   if (typeof name !== "string") {
-    throw new Error("package.json name must be a string.");
+    throw new TypeError("package.json name must be a string.");
   }
   if (name.length === 0 || name.length > 214) {
     throw new Error("package.json name must be between 1 and 214 characters.");
   }
-  if (name !== name.trim() || /[\s\u0000-\u001f\u007f]/u.test(name)) {
+  if (name !== name.trim() || /[\s\u0000-\u0008\u000E-\u001F\u007F]/u.test(name)) {
     throw new Error("package.json name must not contain whitespace or control characters.");
   }
   if (name !== name.toLowerCase()) {
@@ -76,7 +112,7 @@ export function packageVersionSpecifier(packageName, version) {
 
 export function validateGitBranchName(branch) {
   if (typeof branch !== "string") {
-    throw new Error("Git branch name must be a string.");
+    throw new TypeError("Git branch name must be a string.");
   }
   if (branch.length === 0 || branch !== branch.trim() || !gitBranchPattern.test(branch)) {
     throw new Error(`Unsafe git branch name: ${branch}`);
@@ -97,7 +133,7 @@ function scopedPackageSegments(name) {
 
 function captureGit(args, options = {}) {
   assertSafeCommandArgs(args);
-  return execFileSync("git", args, {
+  return execFileSync(gitExecutablePath(), args, {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -108,7 +144,7 @@ function captureGit(args, options = {}) {
 
 function spawnGit(args, options = {}) {
   assertSafeCommandArgs(args);
-  return spawnSync("git", args, {
+  return spawnSync(gitExecutablePath(), args, {
     cwd: root,
     ...options,
     env: createChildEnv(options.env ?? processEnv),
@@ -117,7 +153,7 @@ function spawnGit(args, options = {}) {
 
 function spawnNpm(args, options = {}) {
   assertSafeCommandArgs(args);
-  return spawnSync("npm", args, {
+  return spawnSync(npmExecutablePath(), args, {
     cwd: root,
     ...options,
     env: createChildEnv(options.env ?? processEnv),
@@ -143,7 +179,7 @@ function run(commandName, args, spawnCommand) {
 
 function assertSafeCommandArgs(args) {
   if (!Array.isArray(args)) {
-    throw new Error("Command arguments must be an array.");
+    throw new TypeError("Command arguments must be an array.");
   }
   for (const arg of args) {
     if (typeof arg !== "string" || arg.includes("\0")) {

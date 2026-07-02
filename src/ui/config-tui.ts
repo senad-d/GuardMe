@@ -2,7 +2,7 @@ import type { GuardMePolicyConfig } from "../config/schema.ts";
 import type { PolicyDiagnostic } from "../policy/action.ts";
 import type { GuardMeStateRecord } from "../state/warnings.ts";
 import { SETUP_MODE_CHOICES, type SetupMode, type SetupScope, type SetupWizardConfig, setupConfigForMode, setupModeRows, setupScopeLabel } from "./setup-wizard.ts";
-import { fitCell, footerSegments, type ConfigFrameTheme, type FrameMainRow, type FrameSidebarItem, renderGuardMeFrame } from "./config-frame.ts";
+import { fitCell, footerSegments, type ConfigFrameTheme, type FrameMainRow, type FrameSidebarItem, type FrameValue, renderGuardMeFrame } from "./config-frame.ts";
 import { formatDiagnostics, formatWarningDecisionRecords } from "./detail-formatters.ts";
 import { visibleWidth } from "./text.ts";
 
@@ -134,7 +134,7 @@ interface SearchResult {
   readonly pane: ConfigPane;
   readonly selectionIndex: number;
   readonly label: string;
-  readonly value?: string | number | boolean;
+  readonly value?: FrameValue;
   readonly valueKind?: "auto" | "boolean" | "empty" | "number" | "path" | "slider" | "status" | "text";
   readonly description?: string;
 }
@@ -168,6 +168,8 @@ interface GeneralRowHandlers {
   readonly openDetail: (kind: ConfigDetailState["kind"]) => void;
   readonly markReadOnly: () => void;
 }
+
+type GeneralToggleHandlers = Pick<GeneralRowHandlers, "openGuardMeToggle" | "openInsecureEditsToggle" | "openProjectTrustToggle">;
 
 interface ConfigPanelInputOptions {
   readonly data: string;
@@ -499,19 +501,10 @@ function createConfigComponent(
     rerender();
   };
 
-  const activateGeneralRow = () => activateGeneralRowSelection(state, {
+  const activateGeneralRow = createGeneralRowActivator(state, rerender, {
     openGuardMeToggle,
     openInsecureEditsToggle,
     openProjectTrustToggle,
-    openDetail: (kind) => {
-      state.detail = { kind, selectedIndex: 0 };
-      state.footerOverride = undefined;
-      rerender();
-    },
-    markReadOnly: () => {
-      state.footerOverride = "This General row is read-only.";
-      rerender();
-    },
   });
 
   return {
@@ -731,19 +724,10 @@ function createSuccessComponent(
     rerender();
   };
 
-  const activateGeneralRow = () => activateGeneralRowSelection(state, {
+  const activateGeneralRow = createGeneralRowActivator(state, rerender, {
     openGuardMeToggle,
     openInsecureEditsToggle,
     openProjectTrustToggle,
-    openDetail: (kind) => {
-      state.detail = { kind, selectedIndex: 0 };
-      state.footerOverride = undefined;
-      rerender();
-    },
-    markReadOnly: () => {
-      state.footerOverride = "This General row is read-only.";
-      rerender();
-    },
   });
 
   return {
@@ -912,6 +896,25 @@ function clearFooterAfterNavigation(options: ConfigPanelInputOptions): void {
     options.state.footerOverride = undefined;
   }
   options.rerender();
+}
+
+function createGeneralRowActivator(state: ConfigComponentState, rerender: () => void, handlers: GeneralToggleHandlers): () => void {
+  return () => activateGeneralRowSelection(state, {
+    ...handlers,
+    openDetail: (kind) => openGeneralDetail(state, rerender, kind),
+    markReadOnly: () => markGeneralRowReadOnly(state, rerender),
+  });
+}
+
+function openGeneralDetail(state: ConfigComponentState, rerender: () => void, kind: ConfigDetailState["kind"]): void {
+  state.detail = { kind, selectedIndex: 0 };
+  state.footerOverride = undefined;
+  rerender();
+}
+
+function markGeneralRowReadOnly(state: ConfigComponentState, rerender: () => void): void {
+  state.footerOverride = "This General row is read-only.";
+  rerender();
 }
 
 function activateGeneralRowSelection(state: ConfigComponentState, handlers: GeneralRowHandlers): void {

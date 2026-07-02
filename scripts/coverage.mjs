@@ -57,7 +57,9 @@ function runNodeTestsWithCoverage() {
   });
 }
 
-runCoverage().catch((error) => {
+try {
+  await runCoverage();
+} catch (error) {
   console.error(`Coverage run failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
-});
+}

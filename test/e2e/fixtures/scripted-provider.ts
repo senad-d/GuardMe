@@ -109,7 +109,8 @@ function outsideFixturePath(directoryName: "outside-read" | "outside-write" | "o
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", String.raw`'\''`)}'`;
+  const escapedValue = value.replaceAll("'", "'\\''");
+  return `'${escapedValue}'`;
 }
 
 function toolCallForScenario(scenario: string): ScriptedToolCall | undefined {

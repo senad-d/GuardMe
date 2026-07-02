@@ -171,16 +171,13 @@ async function captureCustomDefaultsConfirm(defaults) {
             component.handleInput(DOWN);
             component.handleInput(DOWN);
             component.handleInput(ENTER);
-            return selected;
-          }
-
-          if (customCalls === 2) {
+          } else if (customCalls === 2) {
             rendered = component.render(CAPTURE_WIDTH);
             component.handleInput(ENTER);
-            return selected;
+          } else {
+            component.handleInput("q");
           }
 
-          component.handleInput("q");
           return selected;
         },
         confirm: async () => true,
@@ -277,11 +274,11 @@ async function captureCustomRuleSection(defaults) {
             component.handleInput(DOWN);
             component.handleInput(DOWN);
             component.handleInput(ENTER);
-            return selected;
+          } else {
+            rendered = component.render(CAPTURE_WIDTH);
+            component.handleInput("q");
           }
 
-          rendered = component.render(CAPTURE_WIDTH);
-          component.handleInput("q");
           return selected;
         },
         confirm: async () => false,

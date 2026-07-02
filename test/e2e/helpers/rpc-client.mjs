@@ -266,58 +266,91 @@ export class RpcPiClient {
       return;
     }
     this.stdoutLines.push(line);
-    let message;
+    const message = this.parseStdoutMessage(line);
+    if (!message) {
+      return;
+    }
+    if (this.resolveResponseMessage(message)) {
+      return;
+    }
+    if (this.dispatchUiRequestMessage(message)) {
+      return;
+    }
+    this.recordEventMessage(message);
+  }
+
+  parseStdoutMessage(line) {
     try {
-      message = JSON.parse(line);
+      return JSON.parse(line);
     } catch (error) {
       const parseError = new Error(`Invalid RPC JSON line: ${line}\n${error instanceof Error ? error.message : String(error)}`);
-      for (const pending of this.pending.values()) {
-        pending.reject(parseError);
+      this.rejectPendingRequests(parseError);
+      return undefined;
+    }
+  }
+
+  rejectPendingRequests(error) {
+    for (const pending of this.pending.values()) {
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+
+  resolveResponseMessage(message) {
+    if (message.type !== "response") {
+      return false;
+    }
+    this.responses.push(message);
+    const pending = this.pending.get(message.id);
+    if (pending) {
+      this.pending.delete(message.id);
+      pending.resolve(message);
+    }
+    return true;
+  }
+
+  dispatchUiRequestMessage(message) {
+    if (message.type !== "extension_ui_request") {
+      return false;
+    }
+    this.uiRequests.push(message);
+    void this.handleUiRequest(message).catch((error) => {
+      this.stderr += `\n[guardme-e2e ui handler error] ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`;
+      if (isDialogMethod(message.method)) {
+        this.respondToExtensionUi(message.id, { cancelled: true });
       }
-      this.pending.clear();
-      return;
-    }
+    });
+    return true;
+  }
 
-    if (message.type === "response") {
-      this.responses.push(message);
-      const pending = this.pending.get(message.id);
-      if (pending) {
-        this.pending.delete(message.id);
-        pending.resolve(message);
-      }
-      return;
-    }
-
-    if (message.type === "extension_ui_request") {
-      this.uiRequests.push(message);
-      void this.handleUiRequest(message).catch((error) => {
-        this.stderr += `\n[guardme-e2e ui handler error] ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`;
-        if (isDialogMethod(message.method)) {
-          this.respondToExtensionUi(message.id, { cancelled: true });
-        }
-      });
-      return;
-    }
-
+  recordEventMessage(message) {
     const index = this.events.length;
     this.events.push(message);
     if (message.type === "extension_error") {
       const error = new Error(`Extension error from ${message.extensionPath ?? "unknown"}: ${message.error ?? "unknown"}`);
-      for (const waiter of this.eventWaiters.splice(0)) {
-        waiter.reject(error);
-      }
-      for (const pending of this.pending.values()) {
-        pending.reject(error);
-      }
-      this.pending.clear();
+      this.rejectEventWaiters(error);
+      this.rejectPendingRequests(error);
       return;
     }
+    this.resolveMatchingEventWaiters(message, index);
+  }
 
-    for (const waiter of [...this.eventWaiters]) {
-      if (waiter.predicate(message, index)) {
-        this.eventWaiters.splice(this.eventWaiters.indexOf(waiter), 1);
+  rejectEventWaiters(error) {
+    for (const waiter of this.eventWaiters.splice(0)) {
+      waiter.reject(error);
+    }
+  }
+
+  resolveMatchingEventWaiters(message, eventIndex) {
+    let waiterIndex = 0;
+    while (waiterIndex < this.eventWaiters.length) {
+      const waiter = this.eventWaiters[waiterIndex];
+      if (waiter.predicate(message, eventIndex)) {
+        this.eventWaiters.splice(waiterIndex, 1);
         waiter.resolve(message);
+        continue;
       }
+      waiterIndex += 1;
     }
   }
 

@@ -1,6 +1,6 @@
-const SECRET_ASSIGNMENT_PATTERN = /(\b[A-Za-z_]\w*\s*=\s*)("[^"]*"|'[^']*'|[^\s"']+)/gi;
+const SECRET_ASSIGNMENT_PATTERN = /(\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*)("[^"]*"|'[^']*'|[^\s"']+)/gi;
 const AUTHORIZATION_BEARER_PATTERN = /(Authorization:\s*Bearer\s+)[^\s]+/gi;
-const SECRET_FLAG_PATTERN = /(^|\s)(--?[A-Za-z][\w-]*(?:=|\s+))("[^"]*"|'[^']*'|[^\s"']+)/gi;
+const SECRET_FLAG_PATTERN = /(^|\s)(--?[A-Za-z][A-Za-z0-9_-]*(?:=|\s+))("[^"]*"|'[^']*'|[^\s"']+)/gi;
 
 const SECRET_NAME_MARKERS = ["token", "secret", "password", "pass", "key"] as const;
 const SECRET_FLAG_NAMES = new Set(["apikey", "accesskey", "clientsecret", "token", "secret", "password", "passwd", "pass"]);

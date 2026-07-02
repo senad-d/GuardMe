@@ -18,6 +18,7 @@ export interface FrameSidebarItem {
 }
 
 export type FrameValueKind = "auto" | "boolean" | "empty" | "number" | "path" | "slider" | "status" | "text";
+export type FrameValue = string | number | boolean;
 
 export type FrameMainRow =
   | { readonly kind: "blank"; readonly selected?: boolean }
@@ -26,7 +27,7 @@ export type FrameMainRow =
       readonly kind: "text";
       readonly text: string;
       readonly selected?: boolean;
-      readonly value?: string | number | boolean;
+      readonly value?: FrameValue;
       readonly description?: string;
       readonly tone?: "dim" | "normal" | "warning";
       readonly preserveIndent?: boolean;
@@ -34,7 +35,7 @@ export type FrameMainRow =
   | {
       readonly kind: "value";
       readonly label: string;
-      readonly value: string | number | boolean;
+      readonly value: FrameValue;
       readonly selected?: boolean;
       readonly valueKind?: FrameValueKind;
       readonly description?: string;
@@ -57,7 +58,7 @@ export interface GuardMeFrameOptions {
 
 interface RenderSettingRowOptions {
   readonly label: string;
-  readonly value?: string | number | boolean;
+  readonly value?: FrameValue;
   readonly width: number;
   readonly selected: boolean;
   readonly focused: boolean;
@@ -110,7 +111,7 @@ export function renderMainRow(row: FrameMainRow, width: number, focused = true, 
   }
 }
 
-export function alignValue(label: string, value: string | number | boolean, width: number): string {
+export function alignValue(label: string, value: FrameValue, width: number): string {
   const safeLabel = sanitizeTerminalText(label);
   const formattedValue = formatValue(value, undefined);
   const rawValueText = sanitizeTerminalText(formattedValue.text);
@@ -341,7 +342,7 @@ function sanitizeCellText(value: string, preserveIndent: boolean): string {
   return stripAnsiEscapes(String(value)).replaceAll(/[\u0000-\u001F\u007F-\u009F]/g, " ");
 }
 
-function formatValue(value: string | number | boolean, explicitKind: FrameValueKind | undefined): { readonly text: string; readonly kind: FrameValueKind } {
+function formatValue(value: FrameValue, explicitKind: FrameValueKind | undefined): { readonly text: string; readonly kind: FrameValueKind } {
   if (typeof value === "boolean") {
     return { text: value ? "ON" : "OFF", kind: "boolean" };
   }
