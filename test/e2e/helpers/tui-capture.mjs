@@ -99,10 +99,23 @@ export async function captureGuardMeTuiPanels(options = {}) {
 }
 
 export function sanitizeTuiText(text) {
-  return stripAnsiEscapes(text)
-    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g, "")
-    .replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, "");
+  return removeTerminalControlCharacters(stripAnsiEscapes(text));
+}
+
+function removeTerminalControlCharacters(text) {
+  let output = "";
+  for (const character of text) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined || shouldRemoveTerminalControlCode(codePoint)) {
+      continue;
+    }
+    output += character;
+  }
+  return output;
+}
+
+function shouldRemoveTerminalControlCode(codePoint) {
+  return (codePoint >= 0x00 && codePoint <= 0x08) || (codePoint >= 0x0b && codePoint <= 0x1f) || (codePoint >= 0x7f && codePoint <= 0x9f);
 }
 
 async function captureSetupModeScreen() {

@@ -20,7 +20,7 @@ Polled Sonar snapshot:
 - Security hotspot baseline: 0 open security hotspots.
 - Quality gate baseline: `NONE`.
 - Issue traceability: Appendix A issue IDs are the baseline IDs to keep in commit and PR notes when refactors move lines.
-- Disposition control: no baseline issue is documented here as false-positive or accepted; any future false-positive or accepted disposition requires maintainer approval.
+- Disposition control: confirmed this baseline treats all 174 Appendix A issues as active and does not document any issue as false-positive or accepted; any future false-positive or accepted disposition requires maintainer approval.
 - Initial validation before remediation code changes: `npm run validate` passed on 2026-07-02, including `npm run typecheck`, `npm run test` with 213/213 tests passing, `npm run check`, and `npm run check:pack`.
 
 ## Objective
@@ -109,7 +109,7 @@ Use this matrix to understand where each task applies, why it matters, and the t
 - Baseline records zero security hotspots and quality gate `NONE`.
 - Initial `npm run validate` result is captured before code changes.
 
-- [ ] Task 2: Fix all security vulnerability findings
+- [x] Task 2: Fix all security vulnerability findings
 
 **Where to fix**
 
@@ -131,7 +131,7 @@ Use this matrix to understand where each task applies, why it matters, and the t
 - Regression tests prove malicious args, PATH injection, and unsafe temp paths are rejected or isolated.
 - Sonar no longer reports IDs `AZ8dpv_-IBtyveMqfJ06`, `AZ8dpv_-IBtyveMqfJ08`, `AZ8dpv_-IBtyveMqfJ03`, `AZ8dpv_-IBtyveMqfJ04`, `AZ8dpv_-IBtyveMqfJ07`, `AZ8dpv_qIBtyveMqfJ0x`, `AZ8dpv_qIBtyveMqfJ0y`, `AZ8dpv_qIBtyveMqfJ0z`, `AZ8dpv_HIBtyveMqfJ0q`, `AZ8dpv_HIBtyveMqfJ0r`, `AZ8dpv_HIBtyveMqfJ0s`, `AZ8dpv_HIBtyveMqfJ0t`, and `AZ8dpv_fIBtyveMqfJ0u`.
 
-- [ ] Task 3: Fix all Sonar bug findings
+- [x] Task 3: Fix all Sonar bug findings
 
 **Where to fix**
 
@@ -153,7 +153,7 @@ Use this matrix to understand where each task applies, why it matters, and the t
 - Targeted tests fail against the old behavior and pass with the corrected behavior.
 - Sonar no longer reports the seven bug IDs: `AZ8dpv-gIBtyveMqfJ0d`, `AZ8dpv-qIBtyveMqfJ0h`, `AZ8dpv8PIBtyveMqfJy_`, `AZ8dpv8YIBtyveMqfJzS`, `AZ8dpv-_IBtyveMqfJ0l`, `AZ8dpv-_IBtyveMqfJ0m`, and `AZ8dpv-_IBtyveMqfJ0n`.
 
-- [ ] Task 4: Refactor command and policy parsing complexity
+- [x] Task 4: Refactor command and policy parsing complexity
 
 **Where to fix**
 
@@ -318,31 +318,34 @@ IMPORTANT: Execute every step in order, top to bottom. Mark each task complete o
 - [x] Keep issue IDs from Appendix A in commit/PR notes so moved-line findings can be traced after refactors.
 - [x] Run the current validation suite before changes to separate existing failures from remediation regressions.
 
-- [ ] Task 2: Fix all security vulnerability findings
+- [x] Task 2: Fix all security vulnerability findings
 
-- [ ] Harden `scripts/publish-npm.mjs` command execution: validate CLI/package arguments before invoking OS commands and avoid untrusted shell interpolation.
-- [ ] Replace inherited or user-controlled `PATH` usage in `scripts/publish-npm.mjs` and `test/e2e/helpers/rpc-client.mjs` with fixed, minimal, expected executable lookup behavior.
-- [ ] Replace publicly writable temp-directory patterns in `test/e2e/fixtures/scripted-provider.ts` and `test/e2e/helpers/project-fixture.mjs` with safe per-test temporary directories and cleanup.
-- [ ] Add tests proving malicious publish arguments, unsafe PATH values, and unsafe temp paths are rejected or isolated.
+- [x] Harden `scripts/publish-npm.mjs` command execution: validate CLI/package arguments before invoking OS commands and avoid untrusted shell interpolation.
+- [x] Replace inherited or user-controlled `PATH` usage in `scripts/publish-npm.mjs` and `test/e2e/helpers/rpc-client.mjs` with fixed, minimal, expected executable lookup behavior.
+- [x] Replace publicly writable temp-directory patterns in `test/e2e/fixtures/scripted-provider.ts` and `test/e2e/helpers/project-fixture.mjs` with safe per-test temporary directories and cleanup.
+- [x] Add tests proving malicious publish arguments, unsafe PATH values, and unsafe temp paths are rejected or isolated.
 - Covers vulnerability IDs: `AZ8dpv_-IBtyveMqfJ06`, `AZ8dpv_-IBtyveMqfJ08`, `AZ8dpv_-IBtyveMqfJ03`, `AZ8dpv_-IBtyveMqfJ04`, `AZ8dpv_-IBtyveMqfJ07`, `AZ8dpv_qIBtyveMqfJ0x`, `AZ8dpv_qIBtyveMqfJ0y`, `AZ8dpv_qIBtyveMqfJ0z`, `AZ8dpv_HIBtyveMqfJ0q`, `AZ8dpv_HIBtyveMqfJ0r`, `AZ8dpv_HIBtyveMqfJ0s`, `AZ8dpv_HIBtyveMqfJ0t`, `AZ8dpv_fIBtyveMqfJ0u`.
+- Local validation: `npm run typecheck`, `npm run test`, `npm run test:e2e:rpc`, `npm run test:e2e:tui`, and `npm run validate` pass. Sonar re-poll remains part of Task 10 after analysis reruns.
 
-- [ ] Task 3: Fix all Sonar bug findings
+- [x] Task 3: Fix all Sonar bug findings
 
-- [ ] Add numeric or domain-specific compare functions for `.sort()` calls in `src/config/merge-policy.ts` and `src/config/write-policy.ts`.
-- [ ] Correct the conditional in `src/ui/detail-formatters.ts` so true/false branches do not return the same value unless the condition is removed.
-- [ ] Remove unintended regex control characters in `src/policy/script-content.ts` and `test/e2e/helpers/tui-capture.mjs` while preserving intended matching behavior.
-- [ ] Add regression tests for each corrected behavior.
+- [x] Add numeric or domain-specific compare functions for `.sort()` calls in `src/config/merge-policy.ts` and `src/config/write-policy.ts`.
+- [x] Correct the conditional in `src/ui/detail-formatters.ts` so true/false branches do not return the same value unless the condition is removed.
+- [x] Remove unintended regex control characters in `src/policy/script-content.ts` and `test/e2e/helpers/tui-capture.mjs` while preserving intended matching behavior.
+- [x] Add regression tests for each corrected behavior.
 - Covers bug IDs: `AZ8dpv-gIBtyveMqfJ0d`, `AZ8dpv-qIBtyveMqfJ0h`, `AZ8dpv8PIBtyveMqfJy_`, `AZ8dpv8YIBtyveMqfJzS`, `AZ8dpv-_IBtyveMqfJ0l`, `AZ8dpv-_IBtyveMqfJ0m`, `AZ8dpv-_IBtyveMqfJ0n`.
+- Local validation: `npm run typecheck`, `npm run test`, `npm run test:e2e:rpc`, `npm run test:e2e:tui`, and `npm run validate` pass. Sonar re-poll remains part of Task 10 after analysis reruns.
 
-- [ ] Task 4: Refactor command and policy parsing complexity
+- [x] Task 4: Refactor command and policy parsing complexity
 
-- [ ] Split `src/policy/commands.ts` high-complexity functions into parser stages, predicate helpers, and small result builders.
-- [ ] Replace deep branch chains with data-driven rule tables where rule order matters and tests can assert precedence.
-- [ ] Replace nested ternaries with explicit named local variables or helper functions.
-- [ ] Reduce `classification` parameter count by introducing a typed options/context object.
-- [ ] Remove duplicate branches and redundant `index` assignments without changing classifier decisions.
-- [ ] Update `test/command-classifier.test.mjs` and related policy tests to lock down command classification before and after refactors.
+- [x] Split `src/policy/commands.ts` high-complexity functions into parser stages, predicate helpers, and small result builders.
+- [x] Replace deep branch chains with data-driven rule tables where rule order matters and tests can assert precedence.
+- [x] Replace nested ternaries with explicit named local variables or helper functions.
+- [x] Reduce `classification` parameter count by introducing a typed options/context object.
+- [x] Remove duplicate branches and redundant `index` assignments without changing classifier decisions.
+- [x] Update `test/command-classifier.test.mjs` and related policy tests to lock down command classification before and after refactors.
 - Covers primary IDs in `src/policy/commands.ts`: `AZ8dpv6kIBtyveMqfJyQ`, `AZ8dpv6kIBtyveMqfJyR`, `AZ8dpv6kIBtyveMqfJyS`, `AZ8dpv6kIBtyveMqfJyT`, `AZ8dpv6kIBtyveMqfJyU`, `AZ8dpv6kIBtyveMqfJyV`, `AZ8dpv6kIBtyveMqfJyW`, `AZ8dpv6kIBtyveMqfJyX`, `AZ8dpv6kIBtyveMqfJyY`, `AZ8dpv6kIBtyveMqfJyZ`, `AZ8dpv6kIBtyveMqfJya`, `AZ8dpv6kIBtyveMqfJyb`, `AZ8dpv6kIBtyveMqfJyc`, `AZ8dpv6kIBtyveMqfJyd`, `AZ8dpv6kIBtyveMqfJye`, `AZ8dpv6kIBtyveMqfJyf`, `AZ8dpv6kIBtyveMqfJyg`, `AZ8dpv6kIBtyveMqfJyh`, `AZ8dpv6kIBtyveMqfJyi`, `AZ8dpv6kIBtyveMqfJyj`, `AZ8dpv6kIBtyveMqfJyk`, `AZ8dpv6kIBtyveMqfJyl`, `AZ8dpv6kIBtyveMqfJym`, `AZ8dpv6kIBtyveMqfJyn`, `AZ8dpv6kIBtyveMqfJyo`, `AZ8dpv6kIBtyveMqfJyp`, `AZ8dpv6kIBtyveMqfJyq`, `AZ8dpv6kIBtyveMqfJyr`, `AZ8dpv6kIBtyveMqfJys`, `AZ8dpv6kIBtyveMqfJyt`, `AZ8dpv6kIBtyveMqfJyu`, `AZ8dpv6kIBtyveMqfJyv`.
+- Local validation: `npm run typecheck`, `npm run test`, `npm run test:e2e:rpc`, `npm run test:e2e:tui`, and `npm run validate` pass. Sonar re-poll remains part of Task 10 after analysis reruns.
 
 - [ ] Task 5: Refactor core config, evaluation, state, and command modules
 

@@ -18,9 +18,6 @@ import {
 import {
   EDITED_SAFE_NOTE_CONTENT,
   FAKE_ENV_SECRET,
-  OUTSIDE_DELETE_PATH,
-  OUTSIDE_READ_PATH,
-  OUTSIDE_WRITE_PATH,
   SAFE_NOTE_CONTENT,
   SAFE_SCRIPT_CONTENT,
   createProjectFixture,
@@ -187,12 +184,12 @@ async function assertOutsideRepositoryProtections(client, fixture) {
   run = await runScenario(client, "outside-write-block");
   end = expectToolEnd(run.events, "write", { error: true });
   assert.match(resultText(end), /Outside-project write requires|explicit allowPaths/i);
-  assert.equal(await readFile(OUTSIDE_WRITE_PATH, "utf8"), "outside original\n");
+  assert.equal(await readFile(fixture.outsideWritePath, "utf8"), "outside original\n");
 
   run = await runScenario(client, "outside-delete-block");
   end = expectToolEnd(run.events, "bash", { error: true });
   assert.match(resultText(end), /Outside-project .*requires|explicit allowPaths/i);
-  assert.equal(await pathExists(OUTSIDE_DELETE_PATH), true, "outside delete target must remain");
+  assert.equal(await pathExists(fixture.outsideDeletePath), true, "outside delete target must remain");
 }
 
 async function assertOutsideReadExplicitAllow(client, fixture) {
@@ -343,7 +340,7 @@ async function addOutsideReadPolicyRule(fixture) {
       readOnlyPaths: [
         ...loaded.config.readOnlyPaths,
         {
-          pattern: OUTSIDE_READ_PATH,
+          pattern: fixture.outsideReadPath,
           actions: ["read"],
           reason: "Allow this deterministic outside read fixture for e2e coverage.",
         },

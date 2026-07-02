@@ -152,7 +152,7 @@ test("TUI custom setup uses framed rule-section selector and in-frame rule input
 
   assert.equal(result?.scope, "local");
   assert.equal(result?.config.allowPaths[0]?.pattern, "custom/**");
-  assert.ok(rendered.some((line) => line.includes("GuardMe Config")));
+  assert.ok(rendered.some((line) => line.includes("GuardMe")));
   assert.ok(rendered.some((line) => line.includes("custom project policy • writes .pi/agent/guardme.yaml")));
   assert.ok(rendered.some((line) => line.includes("CUSTOM POLICY START")));
   assert.ok(rendered.some((line) => line.includes("No, start blank")));

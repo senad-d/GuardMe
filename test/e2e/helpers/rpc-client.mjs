@@ -1,12 +1,40 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { env as processEnv, execPath } from "node:process";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "../../..");
 const SCRIPTED_PROVIDER = join(REPO_ROOT, "test", "e2e", "fixtures", "scripted-provider.ts");
+const PI_CLI_PATH = join(REPO_ROOT, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
 const DEFAULT_TIMEOUT_MS = 60_000;
+
+export const SAFE_RPC_PATH = [
+  dirname(execPath),
+  join(REPO_ROOT, "node_modules", ".bin"),
+  "/opt/homebrew/bin",
+  "/usr/local/bin",
+  "/usr/bin",
+  "/bin",
+].join(delimiter);
+
+export function createRpcChildEnv(options, sourceEnv = processEnv) {
+  return {
+    ...sourceEnv,
+    HOME: options.homeDir,
+    PI_CODING_AGENT_DIR: join(options.homeDir, ".pi", "agent"),
+    PI_OFFLINE: "1",
+    PI_SKIP_VERSION_CHECK: "1",
+    PI_TELEMETRY: "0",
+    NO_COLOR: "1",
+    PATH: SAFE_RPC_PATH,
+  };
+}
+
+export function createRpcSpawnCommand(args) {
+  return { command: execPath, args: [PI_CLI_PATH, ...args] };
+}
 
 export async function startRpcPi(options) {
   const client = new RpcPiClient(options);
@@ -56,17 +84,10 @@ export class RpcPiClient {
       "--approve",
     ];
 
-    this.proc = spawn("pi", args, {
+    const spawnCommand = createRpcSpawnCommand(args);
+    this.proc = spawn(spawnCommand.command, spawnCommand.args, {
       cwd: this.options.projectDir,
-      env: {
-        ...process.env,
-        HOME: this.options.homeDir,
-        PI_CODING_AGENT_DIR: join(this.options.homeDir, ".pi", "agent"),
-        PI_OFFLINE: "1",
-        PI_SKIP_VERSION_CHECK: "1",
-        PI_TELEMETRY: "0",
-        NO_COLOR: "1",
-      },
+      env: createRpcChildEnv(this.options),
       stdio: ["pipe", "pipe", "pipe"],
     });
 

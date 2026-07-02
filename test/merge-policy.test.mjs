@@ -85,6 +85,25 @@ test("merge deduplicates duplicate rules predictably by keeping first source", (
   assert.equal(merged.config.denyCommands[0]?.source.kind, "global");
 });
 
+test("merge deduplicates path rules with actions in different input orders", () => {
+  const globalConfig = {
+    ...createEmptyPolicyConfig(),
+    allowPaths: [{ pattern: "src/**", actions: ["read", "write", "delete"], reason: "source access" }],
+  };
+  const localConfig = {
+    ...createEmptyPolicyConfig(),
+    allowPaths: [{ pattern: "src/**", actions: ["delete", "read", "write"], reason: "source access" }],
+  };
+
+  const merged = mergePolicyConfigs([
+    sourcePolicyConfig("global", globalConfig, "/global.yaml"),
+    sourcePolicyConfig("local", localConfig, "/local.yaml"),
+  ]);
+
+  assert.equal(merged.config.allowPaths.length, 1);
+  assert.equal(merged.config.allowPaths[0]?.source.kind, "global");
+});
+
 test("loadGuardMeConfig returns merged built-in, global, and local policy sources", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-merge-load-"));
   const home = join(root, "home");

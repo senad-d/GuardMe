@@ -47,6 +47,11 @@ export interface ExtractScriptContentOptions {
 }
 
 const DEFAULT_MAX_SCRIPT_BYTES = 256 * 1024;
+const ANSI_SEQUENCE_START_CHARS = String.fromCharCode(0x1b, 0x9b);
+const ANSI_CONTROL_SEQUENCE_PATTERN = new RegExp(
+  `[${ANSI_SEQUENCE_START_CHARS}][[\\]()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]`,
+  "g",
+);
 const SHELL_EXTENSIONS = new Set([".sh", ".bash", ".zsh", ".command", ".ksh"]);
 const CI_EXTENSIONS = new Set([".yml", ".yaml"]);
 const SHELL_CONTROL_ONLY = new Set([
@@ -151,7 +156,7 @@ export function extractScriptCommandsFromContent(options: ExtractScriptContentOp
 
 export function redactedCommandPreview(command: string, maxLength = 160): string {
   const normalized = normalizeCommand(command);
-  const redacted = redactSensitiveText(normalized).replace(/[\u001B\u009B][[\]()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, "");
+  const redacted = redactSensitiveText(normalized).replace(ANSI_CONTROL_SEQUENCE_PATTERN, "");
   return redacted.length <= maxLength ? redacted : `${redacted.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 

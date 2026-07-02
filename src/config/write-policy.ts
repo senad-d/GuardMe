@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { POLICY_VERSION } from "../constants.ts";
-import type { PolicyDiagnostic, PolicyRequest, UserDecision } from "../policy/action.ts";
+import { POLICY_ACTIONS, type PolicyAction, type PolicyDiagnostic, type PolicyRequest, type UserDecision } from "../policy/action.ts";
 import { redactSensitiveText } from "../policy/redact.ts";
 import { loadPolicyConfigFile, resolvePolicyConfigPaths } from "./load-config.ts";
 import {
@@ -18,6 +18,8 @@ import {
 } from "./schema.ts";
 
 export type PolicyWriteScope = "local" | "global";
+
+const POLICY_ACTION_ORDER = new Map<PolicyAction, number>(POLICY_ACTIONS.map((action, index) => [action, index]));
 
 export interface PersistUserDecisionRuleOptions {
   readonly cwd: string;
@@ -526,7 +528,11 @@ function appendRule(
 }
 
 function ruleKey(rule: GuardMeRule): string {
-  return `${rule.pattern}\u0000${[...(rule.actions ?? [])].sort().join(",")}\u0000${rule.reason ?? ""}`;
+  return `${rule.pattern}\u0000${[...(rule.actions ?? [])].sort(comparePolicyActionOrder).join(",")}\u0000${rule.reason ?? ""}`;
+}
+
+function comparePolicyActionOrder(left: PolicyAction, right: PolicyAction): number {
+  return (POLICY_ACTION_ORDER.get(left) ?? Number.MAX_SAFE_INTEGER) - (POLICY_ACTION_ORDER.get(right) ?? Number.MAX_SAFE_INTEGER);
 }
 
 function quoteYaml(value: string): string {

@@ -416,7 +416,7 @@ test("/guardme opens framed setup confirmation before writing", async () => {
   await handleGuardMeCommand("", ctx);
   const yaml = await readFile(paths.localPolicyPath, "utf8");
 
-  assert.ok(rendered.some((line) => line.includes("GuardMe Config")));
+  assert.ok(rendered.some((line) => line.includes("GuardMe")));
   assert.ok(rendered.some((line) => line.includes("CONFIRM WRITE")));
   assert.ok(rendered.some((line) => line.includes("GENERAL")));
   assert.ok(rendered.some((line) => line.includes("POLICIES")));

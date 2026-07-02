@@ -13,7 +13,7 @@ test("GuardMe TUI capture writes one sanitized panel artifact", { timeout: 60_00
 
   assert.match(artifact, /# GuardMe TUI Capture/);
   assert.match(artifact, /Captured Screen Index/);
-  assert.match(artifact, /GuardMe Config/);
+  assert.match(artifact, /GuardMe/);
   assert.match(artifact, /Command - Help/);
   assert.match(artifact, /Setup - Select Local Defaults/);
   assert.match(artifact, /Create project policy with sensible defaults/);

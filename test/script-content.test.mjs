@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { detectLocalScriptExecutions } from "../src/policy/commands.ts";
-import { extractScriptCommandsFromContent, isCommandBearingPath } from "../src/policy/script-content.ts";
+import { extractScriptCommandsFromContent, isCommandBearingPath, redactedCommandPreview } from "../src/policy/script-content.ts";
 
 test("script content extraction detects shell scripts and redacts previews", () => {
   const result = extractScriptCommandsFromContent({
@@ -37,6 +37,14 @@ test("script content extraction covers package json Dockerfile Makefile and CI r
   assert.equal(makefile.commands[0]?.command, "cat ~/.aws/credentials");
   assert.deepEqual(workflow.commands.map((command) => command.command), ["echo ok", "aws sts get-caller-identity"]);
   assert.deepEqual(workflowWithChomping.commands.map((command) => command.command), ["echo release", "gcloud projects list"]);
+});
+
+test("redacted command previews remove terminal control sequences", () => {
+  const escape = String.fromCharCode(0x1b);
+  const csi = String.fromCharCode(0x9b);
+
+  assert.equal(redactedCommandPreview(`echo ${escape}[31mred${escape}[0m`), "echo red");
+  assert.equal(redactedCommandPreview(`printf ${csi}31mred${csi}0m`), "printf red");
 });
 
 test("script content extraction reports uninspectable command-bearing content", () => {

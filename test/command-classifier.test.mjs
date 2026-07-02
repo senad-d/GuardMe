@@ -18,6 +18,20 @@ test("shell tokenizer preserves quoted command strings and redirection targets",
   assert.deepEqual(tokenizeShellCommand("echo ok\naws sts get-caller-identity"), ["echo", "ok", ";", "aws", "sts", "get-caller-identity"]);
 });
 
+test("shell tokenizer preserves ANSI-C escapes and descriptor redirection tokens", () => {
+  assert.deepEqual(tokenizeShellCommand("printf $'a\\n' 2>>err.log 1>&2 0<>input"), [
+    "printf",
+    "a\n",
+    "2>>",
+    "err.log",
+    "1>&",
+    "2",
+    "0<>",
+    "input",
+  ]);
+  assert.deepEqual(tokenizeShellCommand("echo a\\\r\nb"), ["echo", "ab"]);
+});
+
 test("cloud CLIs are hard denied through common wrappers", () => {
   for (const command of [
     "aws sts get-caller-identity",
@@ -105,12 +119,33 @@ test("cloud CLIs are hard denied through command-executing wrappers", () => {
     "timeout --kill-after 1s 5s aws sts get-caller-identity",
     "nice -n 10 aws s3 ls",
     "xargs bash -lc 'az account show'",
+    "npx --call='aws sts get-caller-identity'",
   ]) {
     const classified = classifyShellCommand(command);
     assert.equal(classified.hardDenied, true, command);
     assert.equal(classified.risk, "hard-denied", command);
     assert.match(classified.reason, /wrapper/i, command);
   }
+});
+
+test("classification precedence preserves guarded policy boundary decisions", () => {
+  const credentialRead = classifyShellCommand("cat .env");
+  assert.equal(credentialRead.hardDenied, true);
+  assert.equal(credentialRead.primaryAction, "read");
+  assert.equal(credentialRead.credentialAccess, true);
+
+  const outsideRedirection = classifyShellCommand("echo ok > /tmp/guardme-output.txt");
+  assert.equal(outsideRedirection.primaryAction, "write");
+  assert.equal(outsideRedirection.risk, "dangerous");
+  assert.equal(outsideRedirection.requiresUserDecision, true);
+
+  const wrappedDelete = classifyShellCommand("bash -lc 'rm -rf build'");
+  assert.equal(wrappedDelete.primaryAction, "delete");
+  assert.equal(wrappedDelete.risk, "dangerous");
+
+  const ambiguous = classifyShellCommand("git clean -fdx");
+  assert.equal(ambiguous.kind, "ambiguous");
+  assert.equal(ambiguous.requiresUserDecision, true);
 });
 
 test("command rule candidates normalize absolute executable paths", () => {

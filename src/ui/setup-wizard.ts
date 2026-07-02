@@ -387,7 +387,7 @@ function buildSetupBooleanLines(width: number, theme: SetupTheme, prompt: SetupB
 
   return renderGuardMeFrame(
     {
-      title: "GuardMe Config",
+      title: "GuardMe",
       activePane: "Setup",
       context: prompt.context,
       keys: "↑↓ choice  Enter select  Esc/q quit",
@@ -410,7 +410,7 @@ function buildSetupModeLines(width: number, theme: SetupTheme, selectedIndex: nu
 
   return renderGuardMeFrame(
     {
-      title: "GuardMe Config",
+      title: "GuardMe",
       activePane: "Setup",
       context: "GuardMe setup • writes ~/.pi/agent/guardme.yaml or .pi/agent/guardme.yaml • custom rules available",
       keys: "↑↓ option  Enter select  Esc/q quit",
@@ -518,7 +518,7 @@ function buildRuleSectionLines(
 
   return renderGuardMeFrame(
     {
-      title: "GuardMe Config",
+      title: "GuardMe",
       activePane: "Setup",
       context: setupScopeContext(scope),
       keys: "↑↓ section  Enter select  Esc/q quit",
@@ -712,7 +712,7 @@ function buildSetupTextInputLines(
 
   return renderGuardMeFrame(
     {
-      title: "GuardMe Config",
+      title: "GuardMe",
       activePane: "Setup",
       context: setupScopeContext(scope),
       keys: "type value  Enter submit  Esc/Ctrl-C cancel",

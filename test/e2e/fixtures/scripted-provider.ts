@@ -1,11 +1,10 @@
+import { resolve } from "node:path";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const PROVIDER = "guardme-e2e";
 const MODEL = "scripted";
 const API = "guardme-e2e-scripted";
-const OUTSIDE_READ_PATH = "/tmp/guardme-e2e-outside-read/file.txt";
-const OUTSIDE_WRITE_PATH = "/tmp/guardme-e2e-outside-write/file.txt";
-const OUTSIDE_DELETE_PATH = "/tmp/guardme-e2e-outside-delete/file.txt";
 
 let toolCallCounter = 0;
 
@@ -104,6 +103,14 @@ type ScriptedResponse =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "tool"; readonly scenario: string; readonly toolCall: ScriptedToolCall };
 
+function outsideFixturePath(directoryName: "outside-read" | "outside-write" | "outside-delete"): string {
+  return resolve(process.cwd(), "..", directoryName, "file.txt");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function toolCallForScenario(scenario: string): ScriptedToolCall | undefined {
   switch (scenario) {
     case "allowed-read":
@@ -131,13 +138,13 @@ function toolCallForScenario(scenario: string): ScriptedToolCall | undefined {
     case "protected-metadata-delete":
       return { name: "bash", arguments: { command: "rm -rf .git" } };
     case "outside-read-block":
-      return { name: "read", arguments: { path: OUTSIDE_READ_PATH } };
+      return { name: "read", arguments: { path: outsideFixturePath("outside-read") } };
     case "outside-read-allowed":
-      return { name: "read", arguments: { path: OUTSIDE_READ_PATH } };
+      return { name: "read", arguments: { path: outsideFixturePath("outside-read") } };
     case "outside-write-block":
-      return { name: "write", arguments: { path: OUTSIDE_WRITE_PATH, content: "outside changed by guardme e2e\n" } };
+      return { name: "write", arguments: { path: outsideFixturePath("outside-write"), content: "outside changed by guardme e2e\n" } };
     case "outside-delete-block":
-      return { name: "bash", arguments: { command: `rm -rf ${OUTSIDE_DELETE_PATH}` } };
+      return { name: "bash", arguments: { command: `rm -rf ${shellQuote(outsideFixturePath("outside-delete"))}` } };
     case "command-allow-boundary":
       return { name: "bash", arguments: { command: "npm test -- --help && rm -rf build" } };
     case "script-write-denied-content":
@@ -153,7 +160,7 @@ function toolCallForScenario(scenario: string): ScriptedToolCall | undefined {
     case "local-script-exec-denied-content":
       return { name: "bash", arguments: { command: "bash scripts/unsafe.sh" } };
     case "policy-missing-generic-command":
-      return { name: "bash", arguments: { command: "printf 'guardme generic\\n'" } };
+      return { name: "bash", arguments: { command: "awk 'BEGIN { print \"guardme generic\" }'" } };
     case "approval-dangerous-delete":
       return { name: "bash", arguments: { command: "rm -rf approval-target/file.txt" } };
     case "approval-dangerous-deny":

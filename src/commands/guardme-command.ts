@@ -54,6 +54,10 @@ const GUARDME_SUBCOMMANDS: readonly GuardMeAutocompleteItem[] = [
   { value: "help", label: "help", description: "Show /guardme command usage" },
 ];
 
+type GuardMeNotificationType = "info" | "warning" | "error";
+type SetupPolicyMode = Extract<SetupMode, "global-custom" | "local-custom">;
+type PolicyWriteAction = "create" | "overwrite" | "update";
+
 interface SetupPolicyFlowResult {
   readonly written: boolean;
   readonly next?: PolicyWriteSuccessResult;
@@ -67,7 +71,7 @@ export interface GuardMeCommandContext {
   readonly homeDir?: string;
   readonly isProjectTrusted?: () => boolean;
   readonly ui: {
-    readonly notify?: (message: string, type?: "info" | "warning" | "error") => void;
+    readonly notify?: (message: string, type?: GuardMeNotificationType) => void;
     readonly confirm?: (title: string, message: string) => Promise<boolean>;
     readonly select?: (title: string, options: string[]) => Promise<string | undefined>;
     readonly input?: (title: string, placeholder?: string) => Promise<string | undefined>;
@@ -94,7 +98,7 @@ export function getGuardMeArgumentCompletions(prefix: string): GuardMeAutocomple
 }
 
 export async function handleGuardMeCommand(args: string, ctx: GuardMeCommandContext): Promise<void> {
-  const [subcommand = "conf"] = args.trim().split(/\s+/).filter(Boolean);
+  const subcommand = args.trim().split(/\s+/).find(Boolean) ?? "conf";
   switch (subcommand.toLowerCase()) {
     case "conf":
     case "config":
@@ -210,64 +214,13 @@ async function runConfig(ctx: GuardMeCommandContext): Promise<void> {
       return;
     }
 
-    if (action.kind === "custom") {
-      const result = await runCustomSetupFromConfig(ctx, action.mode, sensibleDefaults, successOptions);
-      const next = nextActionAfterSetupFlow(result);
-      if (next === "continue") {
-        continue;
-      }
-      if (next) {
-        pendingAction = next;
-        continue;
-      }
-      return;
+    const next = await handleConfigAction(ctx, action, sensibleDefaults, successOptions);
+    if (next === "continue") {
+      continue;
     }
-
-    if (action.kind === "append-rules") {
-      const result = await runAppendRulesFromConfig(ctx, action.scope, successOptions);
-      const next = nextActionAfterSetupFlow(result);
-      if (next === "continue") {
-        continue;
-      }
-      if (next) {
-        pendingAction = next;
-        continue;
-      }
-      return;
-    }
-
-    if (action.kind === "set-guardme-enabled") {
-      if (await setGuardMeEnabled(ctx, action.enabled)) {
-        continue;
-      }
-      return;
-    }
-
-    if (action.kind === "set-insecure-edits") {
-      if (await setInsecureEdits(ctx, action.enabled)) {
-        continue;
-      }
-      return;
-    }
-
-    if (action.kind === "set-project-trusted") {
-      if (await setProjectTrusted(ctx, action.trusted)) {
-        continue;
-      }
-      return;
-    }
-
-    const written = await writeConfirmedSetupPolicy(ctx, action.setupConfig, action.plan);
-    if (written) {
-      const snapshot = createConfigSnapshot(ctx);
-      const next = await showPolicyWriteSuccess(toConfigTuiContext(ctx), snapshot, action.plan, successOptions);
-      if (next.kind === "continue") {
-        continue;
-      }
-      if (next.kind !== "closed") {
-        pendingAction = next;
-        continue;
-      }
+    if (next) {
+      pendingAction = next;
+      continue;
     }
     return;
   }
@@ -297,7 +250,7 @@ function nextActionAfterSetupFlow(result: SetupPolicyFlowResult): ConfigAction |
 
 async function runCustomSetupFromConfig(
   ctx: GuardMeCommandContext,
-  mode: Extract<SetupMode, "global-custom" | "local-custom">,
+  mode: SetupPolicyMode,
   sensibleDefaults: GuardMePolicyConfig,
   successOptions?: PolicyWriteSuccessOptions,
 ): Promise<SetupPolicyFlowResult> {
@@ -391,16 +344,8 @@ async function confirmPolicyWrite(
     return requestPolicyWriteConfirmationAction(toConfigTuiContext(ctx), setupConfig, plan);
   }
 
-  const appendMode = setupConfig.writeMode === "append";
-  const action = appendMode ? (plan.existing ? "update" : "create") : plan.existing ? "overwrite" : "create";
-  const scopeLabel = setupScopeLabel(plan.scope);
-  const message = appendMode
-    ? plan.existing
-      ? `This will append ${setupConfig.summary} to the existing ${scopeLabel} file at ${plan.displayPath}.`
-      : `This will create ${scopeLabel} at ${plan.displayPath} with ${setupConfig.summary}.`
-    : plan.existing
-      ? `This will overwrite the existing ${scopeLabel} file at ${plan.displayPath} with ${setupConfig.summary}.`
-      : `This will create ${scopeLabel} at ${plan.displayPath} with ${setupConfig.summary}.`;
+  const action = policyWriteAction(setupConfig, plan);
+  const message = policyWriteConfirmationMessage(setupConfig, plan);
 
   if (ctx.ui.confirm) {
     return (await ctx.ui.confirm(`${confirmActionLabel(action)} GuardMe policy?`, message)) ? "write" : "cancel";
@@ -442,7 +387,7 @@ async function createSetupWritePlan(ctx: GuardMeCommandContext, setupConfig: Set
         scope: setupConfig.scope,
         targetPath,
         displayPath,
-        policyKind: setupConfig.writeMode === "append" ? "append" : setupConfig.summary.includes("custom") ? "custom" : "default",
+        policyKind: setupPolicyKind(setupConfig),
         existing: await fileExists(targetPath),
         rules: countPolicyRules(setupConfig.config),
       },
@@ -506,16 +451,16 @@ async function setGuardMeEnabled(ctx: GuardMeCommandContext, enabled: boolean): 
     return false;
   }
 
-  if (!projectTrusted) {
-    notify(
-      ctx,
-      `GuardMe ${enabled ? "on" : "off"} setting saved in .pi/agent/guardme-settings.json. Project is not trusted, so this setting will apply after project trust is enabled.`,
-      "info",
-    );
+  if (projectTrusted) {
+    notify(ctx, enabled ? "GuardMe is active for this project." : "GuardMe is off for this project.", "info");
     return true;
   }
 
-  notify(ctx, enabled ? "GuardMe is active for this project." : "GuardMe is off for this project.", "info");
+  notify(
+    ctx,
+    `GuardMe ${enabled ? "on" : "off"} setting saved in .pi/agent/guardme-settings.json. Project is not trusted, so this setting will apply after project trust is enabled.`,
+    "info",
+  );
   return true;
 }
 
@@ -532,16 +477,16 @@ async function setInsecureEdits(ctx: GuardMeCommandContext, enabled: boolean): P
   const stateMessage = enabled
     ? "Insecure edits are ON: write/edit content scanning is skipped, but path protections still apply."
     : "Insecure edits are OFF: write/edit content scanning is guarded again.";
-  if (!projectTrusted) {
-    notify(
-      ctx,
-      `${stateMessage} Project is not trusted, so this setting will apply after project trust is enabled.`,
-      "info",
-    );
+  if (projectTrusted) {
+    notify(ctx, stateMessage, "info");
     return true;
   }
 
-  notify(ctx, stateMessage, "info");
+  notify(
+    ctx,
+    `${stateMessage} Project is not trusted, so this setting will apply after project trust is enabled.`,
+    "info",
+  );
   return true;
 }
 
@@ -595,7 +540,7 @@ function createConfigSnapshot(ctx: Pick<GuardMeCommandContext, "cwd" | "homeDir"
   return {
     cwd: ctx.cwd,
     projectTrusted: trusted,
-    guardMe: state ? (!state.enabled ? "off" : state.degraded ? "degraded" : "active") : "inactive",
+    guardMe: snapshotGuardMeStatus(state),
     insecureEdits: state?.insecureEdits ?? false,
     policyRules: countPolicyRules(config),
     warnedFingerprints: state?.warnings.warnedFingerprints.size ?? 0,
@@ -696,7 +641,7 @@ function toSetupWizardContext(ctx: GuardMeCommandContext): SetupWizardContext {
   } as SetupWizardContext;
 }
 
-function notify(ctx: GuardMeCommandContext, message: string, type: "info" | "warning" | "error"): void {
+function notify(ctx: GuardMeCommandContext, message: string, type: GuardMeNotificationType): void {
   ctx.ui.notify?.(sanitizeNotificationText(redactSensitiveText(message)), type);
 }
 

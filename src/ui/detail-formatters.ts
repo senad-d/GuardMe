@@ -47,7 +47,7 @@ function formatMatchedRuleLines(record: GuardMeStateRecord): readonly string[] {
     return [];
   }
 
-  return renderMatchedRules(record.matchedRules).map((rule, index) => `  ${index === 0 ? "Rule        " : "Rule        "}${rule}`);
+  return renderMatchedRules(record.matchedRules).map((rule, index) => `  ${index === 0 ? "Rule        " : "            "}${rule}`);
 }
 
 export function formatDiagnostics(diagnostics: readonly PolicyDiagnostic[]): readonly string[] {

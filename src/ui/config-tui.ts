@@ -1104,7 +1104,7 @@ function renderSearchScreen(
 
   return renderGuardMeFrame(
     {
-      title: "GuardMe Config",
+      title: "GuardMe",
       activePane: state.searchQuery.trim().length > 0 ? "Search" : state.pane,
       context: contextForPane(snapshot, state.pane),
       keys: keysForPane(state.pane, "main"),
@@ -1252,7 +1252,7 @@ function renderPaneScreen(
   const baseFooter = footerForPane(snapshot, pane, selectedIndex, busy, effectiveFocus);
   return renderGuardMeFrame(
     {
-      title: "GuardMe Config",
+      title: "GuardMe",
       activePane: pane,
       context: contextOverride ?? contextForPane(snapshot, pane),
       keys: keysOverride ?? keysForPane(pane, effectiveFocus),
@@ -1282,7 +1282,7 @@ function renderDetailScreen(
   const baseFooter = detailFooter(snapshot, detail);
   return renderGuardMeFrame(
     {
-      title: "GuardMe Config",
+      title: "GuardMe",
       activePane: "General",
       context: contextForPane(snapshot, "General"),
       keys: "↑↓ scroll  Esc back  q back",
@@ -1304,7 +1304,7 @@ function renderConfirmScreen(confirm: ConfirmState, width: number, footerOverrid
 
   return renderGuardMeFrame(
     {
-      title: "GuardMe Config",
+      title: "GuardMe",
       activePane,
       context: confirmContext(confirm),
       keys: CONFIRM_HELP,

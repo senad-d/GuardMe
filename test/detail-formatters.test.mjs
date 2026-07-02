@@ -26,6 +26,13 @@ test("warning and decision records render in human-readable form", () => {
           actions: ["delete"],
           reason: "Recursive force deletion requires coaching or user approval.",
         },
+        {
+          category: "noDeletePaths",
+          source: { kind: "builtin", label: "repository metadata" },
+          pattern: ".git/**",
+          actions: ["delete"],
+          reason: "Repository metadata is protected.",
+        },
       ],
       count: 2,
     },
@@ -48,6 +55,7 @@ test("warning and decision records render in human-readable form", () => {
   assert.ok(lines.includes("  Target      rm -rf build"));
   assert.ok(lines.includes("  Reason      Protected by GuardMe: dangerousCommands rm -rf * -> Recursive force deletion requires coaching or user approval."));
   assert.ok(lines.some((line) => line.includes("dangerousCommands rm -rf *")));
+  assert.ok(lines.some((line) => line.startsWith("              noDeletePaths .git/**")), "subsequent matched rules should align without repeating the Rule label");
   assert.ok(lines.includes("DECISION 2026-06-22T10:05:00.000Z"));
   assert.ok(lines.includes("  Decision    deny-once"));
   assert.ok(lines.includes("  Reason      User selected deny-once."));

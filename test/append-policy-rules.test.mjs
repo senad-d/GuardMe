@@ -101,6 +101,30 @@ test("appendPolicyConfigRules skips duplicate rules", async () => {
   assert.equal(loaded.config.denyCommands.length, 1);
 });
 
+test("appendPolicyConfigRules skips duplicate path rules with actions in different input orders", async () => {
+  const { cwd, home, paths } = await tempProject("guardme-append-duplicate-actions-");
+
+  const first = await appendPolicyConfigRules({
+    cwd,
+    homeDir: home,
+    scope: "local",
+    rules: [{ section: "allowPaths", rule: { pattern: "src/**", actions: ["read", "write", "delete"], reason: "Source access" } }],
+  });
+  const second = await appendPolicyConfigRules({
+    cwd,
+    homeDir: home,
+    scope: "local",
+    rules: [{ section: "allowPaths", rule: { pattern: "src/**", actions: ["delete", "read", "write"], reason: "Source access" } }],
+  });
+  const loaded = await loadPolicyConfigFile(paths.localPolicyPath, "local");
+
+  assert.equal(first.saved, true);
+  assert.equal(second.saved, false);
+  assert.match(second.reason ?? "", /already exist/);
+  assert.equal(loaded.config.allowPaths.length, 1);
+  assert.deepEqual(loaded.config.allowPaths[0]?.actions, ["read", "write", "delete"]);
+});
+
 test("appendPolicyConfigRules refuses secret-like command rules", async () => {
   const { cwd, home, paths } = await tempProject("guardme-append-secret-command-");
 

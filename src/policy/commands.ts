@@ -80,10 +80,80 @@ interface SegmentClassification extends CommandClassification {
   readonly priority: number;
 }
 
+type ShellQuote = "\"" | "'";
+
 interface ShellSubcommand {
   readonly command: string;
   readonly syntax: "command substitution" | "process substitution" | "backtick substitution";
 }
+
+interface ShellTokenizerState {
+  tokens: string[];
+  current: string;
+  quote?: ShellQuote;
+  ansiCQuote: boolean;
+  escaped: boolean;
+  index: number;
+}
+
+interface ShellOperatorToken {
+  readonly token: string;
+  readonly nextIndex: number;
+}
+
+interface ShellSubcommandScanState {
+  subcommands: ShellSubcommand[];
+  quote?: ShellQuote;
+  escaped: boolean;
+  index: number;
+}
+
+interface BalancedParenthesisScanState {
+  depth: number;
+  quote?: ShellQuote;
+  escaped: boolean;
+  index: number;
+}
+
+interface UnwrappedExecutable {
+  readonly commandName?: string;
+  readonly args: readonly string[];
+  readonly innerCommand?: string;
+}
+
+interface ClassificationOptions {
+  readonly rawCommand: string;
+  readonly kind: CommandClassificationKind;
+  readonly primaryAction: PolicyAction;
+  readonly risk: RiskLevel;
+  readonly reason: string;
+  readonly matchedPatterns: readonly string[];
+  readonly targetPaths: readonly string[];
+  readonly hardDenied: boolean;
+  readonly dangerous: boolean;
+  readonly requiresUserDecision: boolean;
+  readonly credentialAccess?: boolean;
+}
+
+interface SegmentClassificationContext {
+  readonly rawCommand: string;
+  readonly commandName?: string;
+  readonly args: readonly string[];
+  readonly segmentTokens: readonly string[];
+  readonly inputRedirectionTargets: readonly string[];
+  readonly targetPaths: readonly string[];
+  readonly credentialAccess: boolean;
+  readonly credentialLiteralAccess: boolean;
+  readonly cloudCliLiteralAccess: boolean;
+}
+
+interface ExecutableSegmentClassificationContext extends SegmentClassificationContext {
+  readonly commandName: string;
+}
+
+type SegmentClassificationOptions = Omit<ClassificationOptions, "rawCommand" | "targetPaths"> & {
+  readonly targetPaths?: readonly string[];
+};
 
 const CLOUD_CLI_COMMANDS = new Set(["aws", "az", "gcloud"]);
 const READ_COMMANDS = new Set(["cat", "less", "more", "head", "tail"]);
@@ -132,7 +202,7 @@ const ANSI_C_SIMPLE_ESCAPES: Readonly<Record<string, string>> = {
   '"': '"',
   "?": "?",
 };
-const DYNAMIC_EXECUTABLE_NAME_PATTERN = /[$`*?\[\]{}]/u;
+const DYNAMIC_EXECUTABLE_NAME_PATTERN = /[$`*?[\]{}]/u;
 const CLOUD_CLI_LITERAL_PATTERN = /(?:^|[^a-z0-9_-])(?:aws|az|gcloud)(?:$|[^a-z0-9_-])/iu;
 const CREDENTIAL_LITERAL_MARKERS = [
   ".npmrc",
@@ -216,7 +286,18 @@ function detectPackageScriptExecutionsInternal(command: string, depth: number): 
 function classifyShellCommandInternal(command: string, depth: number): CommandClassification {
   const tokens = tokenizeShellCommand(command);
   if (tokens.length === 0) {
-    return classification(command, "shell", "shell", "low", "Empty shell command.", [], [], false, false, false);
+    return classification({
+      rawCommand: command,
+      kind: "shell",
+      primaryAction: "shell",
+      risk: "low",
+      reason: "Empty shell command.",
+      matchedPatterns: [],
+      targetPaths: [],
+      hardDenied: false,
+      dangerous: false,
+      requiresUserDecision: false,
+    });
   }
 
   const nestedClassifications = depth >= 5
@@ -229,7 +310,18 @@ function classifyShellCommandInternal(command: string, depth: number): CommandCl
   const selected = [...classifications].sort((left, right) => right.priority - left.priority)[0];
   return selected
     ? aggregateCommandClassification(command, selected, classifications)
-    : classification(command, "shell", "shell", "low", "No classifiable shell command found.", [], [], false, false, false);
+    : classification({
+        rawCommand: command,
+        kind: "shell",
+        primaryAction: "shell",
+        risk: "low",
+        reason: "No classifiable shell command found.",
+        matchedPatterns: [],
+        targetPaths: [],
+        hardDenied: false,
+        dangerous: false,
+        requiresUserDecision: false,
+      });
 }
 
 function extractExecutableCommandSegmentsInternal(
@@ -346,122 +438,198 @@ function uniqueExecutableCommandSegments(segments: readonly ExecutableCommandSeg
 }
 
 export function tokenizeShellCommand(command: string): readonly string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | undefined;
-  let ansiCQuote = false;
-  let escaped = false;
+  const state = createShellTokenizerState();
+  while (state.index < command.length) {
+    advanceShellTokenizer(command, state);
+  }
+  pushShellTokenizerCurrent(state);
+  return state.tokens;
+}
 
-  const pushCurrent = () => {
-    if (current !== "") {
-      tokens.push(current);
-      current = "";
-    }
-  };
+function createShellTokenizerState(): ShellTokenizerState {
+  return { tokens: [], current: "", ansiCQuote: false, escaped: false, index: 0 };
+}
 
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-
-    if (escaped) {
-      current += escapedShellOperatorToken(character, current);
-      escaped = false;
-      continue;
-    }
-
-    if (quote === "'" && ansiCQuote && character === "\\") {
-      const parsed = readAnsiCEscape(command, index);
-      current += parsed.value;
-      index = parsed.endIndex;
-      continue;
-    }
-
-    if (character === "\\" && quote !== "'") {
-      const next = command[index + 1];
-      if (next && isShellLineSeparator(next)) {
-        index += next === "\r" && command[index + 2] === "\n" ? 2 : 1;
-        continue;
-      }
-      escaped = true;
-      continue;
-    }
-
-    if ((character === '"' || character === "'") && !quote) {
-      quote = character;
-      ansiCQuote = false;
-      continue;
-    }
-    if (character === quote) {
-      quote = undefined;
-      ansiCQuote = false;
-      continue;
-    }
-
-    if (!quote && isShellLineSeparator(character)) {
-      pushCurrent();
-      if (tokens[tokens.length - 1] !== ";") {
-        tokens.push(";");
-      }
-      if (character === "\r" && command[index + 1] === "\n") {
-        index += 1;
-      }
-      continue;
-    }
-
-    if (!quote && /\s/.test(character)) {
-      pushCurrent();
-      continue;
-    }
-
-    if (!quote && character === "$" && (command[index + 1] === "'" || command[index + 1] === '"')) {
-      quote = command[index + 1] as "'" | '"';
-      ansiCQuote = quote === "'";
-      index += 1;
-      continue;
-    }
-
-    if (!quote && isShellOperatorStart(character, command[index + 1])) {
-      pushCurrent();
-      const next = command[index + 1];
-      if ((character === ">" || character === "&" || character === "|") && next === character) {
-        tokens.push(`${character}${next}`);
-        index += 1;
-      } else if (character === ">" && next === "&") {
-        tokens.push(">&");
-        index += 1;
-      } else if (character === "<" && next === "<") {
-        if (command[index + 2] === "<") {
-          tokens.push("<<<");
-          index += 2;
-        } else {
-          tokens.push("<<");
-          index += 1;
-        }
-      } else if (character === "<" && (next === ">" || next === "&")) {
-        tokens.push(`<${next}`);
-        index += 1;
-      } else if ((character === "0" && next === "<") || ((character === "1" || character === "2") && next === ">")) {
-        const afterNext = command[index + 2];
-        if (afterNext === next) {
-          tokens.push(`${character}${next}${afterNext}`);
-          index += 2;
-        } else if (afterNext === "&" || (character === "0" && afterNext === ">")) {
-          tokens.push(`${character}${next}${afterNext}`);
-          index += 2;
-        } else {
-          tokens.push(`${character}${next}`);
-          index += 1;
-        }
-      } else {
-        tokens.push(character);
-      }
-      continue;
-    }
-
-    current += character;
+function advanceShellTokenizer(command: string, state: ShellTokenizerState): void {
+  const character = command[state.index] ?? "";
+  if (consumeEscapedShellCharacter(state, character)) {
+    return;
+  }
+  if (consumeAnsiCShellEscape(command, state, character)) {
+    return;
+  }
+  if (consumeShellEscapeStart(command, state, character)) {
+    return;
+  }
+  if (consumeShellQuoteBoundary(state, character)) {
+    return;
+  }
+  if (consumeShellLineSeparator(command, state, character)) {
+    return;
+  }
+  if (consumeShellWhitespace(state, character)) {
+    return;
+  }
+  if (consumeAnsiCQuotePrefix(command, state, character)) {
+    return;
+  }
+  if (consumeShellOperatorToken(command, state, character)) {
+    return;
   }
 
-  pushCurrent();
-  return tokens;
+  state.current += character;
+  state.index += 1;
+}
+
+function consumeEscapedShellCharacter(state: ShellTokenizerState, character: string): boolean {
+  if (!state.escaped) {
+    return false;
+  }
+  state.current += escapedShellOperatorToken(character, state.current);
+  state.escaped = false;
+  state.index += 1;
+  return true;
+}
+
+function consumeAnsiCShellEscape(command: string, state: ShellTokenizerState, character: string): boolean {
+  if (state.quote !== "'" || !state.ansiCQuote || character !== "\\") {
+    return false;
+  }
+  const parsed = readAnsiCEscape(command, state.index);
+  state.current += parsed.value;
+  state.index = parsed.endIndex + 1;
+  return true;
+}
+
+function consumeShellEscapeStart(command: string, state: ShellTokenizerState, character: string): boolean {
+  if (character !== "\\" || state.quote === "'") {
+    return false;
+  }
+  const next = command[state.index + 1];
+  if (next && isShellLineSeparator(next)) {
+    state.index += next === "\r" && command[state.index + 2] === "\n" ? 3 : 2;
+    return true;
+  }
+  state.escaped = true;
+  state.index += 1;
+  return true;
+}
+
+function consumeShellQuoteBoundary(state: ShellTokenizerState, character: string): boolean {
+  if (isShellQuote(character) && !state.quote) {
+    state.quote = character;
+    state.ansiCQuote = false;
+    state.index += 1;
+    return true;
+  }
+  if (character === state.quote) {
+    state.quote = undefined;
+    state.ansiCQuote = false;
+    state.index += 1;
+    return true;
+  }
+  return false;
+}
+
+function consumeShellLineSeparator(command: string, state: ShellTokenizerState, character: string): boolean {
+  if (state.quote || !isShellLineSeparator(character)) {
+    return false;
+  }
+  pushShellTokenizerCurrent(state);
+  if (state.tokens.at(-1) !== ";") {
+    state.tokens.push(";");
+  }
+  state.index += character === "\r" && command[state.index + 1] === "\n" ? 2 : 1;
+  return true;
+}
+
+function consumeShellWhitespace(state: ShellTokenizerState, character: string): boolean {
+  if (state.quote || !isShellWhitespace(character)) {
+    return false;
+  }
+  pushShellTokenizerCurrent(state);
+  state.index += 1;
+  return true;
+}
+
+function consumeAnsiCQuotePrefix(command: string, state: ShellTokenizerState, character: string): boolean {
+  const quote = command[state.index + 1];
+  if (state.quote || character !== "$" || !isShellQuote(quote)) {
+    return false;
+  }
+  state.quote = quote;
+  state.ansiCQuote = quote === "'";
+  state.index += 2;
+  return true;
+}
+
+function consumeShellOperatorToken(command: string, state: ShellTokenizerState, character: string): boolean {
+  if (state.quote || !isShellOperatorStart(character, command[state.index + 1])) {
+    return false;
+  }
+  pushShellTokenizerCurrent(state);
+  const operator = readShellOperatorToken(command, state.index);
+  state.tokens.push(operator.token);
+  state.index = operator.nextIndex;
+  return true;
+}
+
+function readShellOperatorToken(command: string, index: number): ShellOperatorToken {
+  const character = command[index] ?? "";
+  const next = command[index + 1];
+  if (isRepeatedShellOperator(character, next)) {
+    return { token: `${character}${next}`, nextIndex: index + 2 };
+  }
+  if (character === ">" && next === "&") {
+    return { token: ">&", nextIndex: index + 2 };
+  }
+  if (character === "<" && next === "<") {
+    return readHereDocumentOperator(command, index);
+  }
+  if (character === "<" && (next === ">" || next === "&")) {
+    return { token: `<${next}`, nextIndex: index + 2 };
+  }
+  if (isFileDescriptorRedirectionStart(character, next)) {
+    return readFileDescriptorRedirectionOperator(command, index);
+  }
+  return { token: character, nextIndex: index + 1 };
+}
+
+function readHereDocumentOperator(command: string, index: number): ShellOperatorToken {
+  return command[index + 2] === "<"
+    ? { token: "<<<", nextIndex: index + 3 }
+    : { token: "<<", nextIndex: index + 2 };
+}
+
+function readFileDescriptorRedirectionOperator(command: string, index: number): ShellOperatorToken {
+  const character = command[index] ?? "";
+  const next = command[index + 1] ?? "";
+  const afterNext = command[index + 2];
+  const tokenLength = afterNext === next || afterNext === "&" || (character === "0" && afterNext === ">") ? 3 : 2;
+  return { token: command.slice(index, index + tokenLength), nextIndex: index + tokenLength };
+}
+
+function pushShellTokenizerCurrent(state: ShellTokenizerState): void {
+  if (state.current !== "") {
+    state.tokens.push(state.current);
+    state.current = "";
+  }
+}
+
+function isShellQuote(character: string | undefined): character is ShellQuote {
+  return character === '"' || character === "'";
+}
+
+function isShellWhitespace(character: string): boolean {
+  return character.trim() === "";
+}
+
+function isRepeatedShellOperator(character: string, next: string | undefined): boolean {
+  return (character === ">" || character === "&" || character === "|") && next === character;
+}
+
+function isFileDescriptorRedirectionStart(character: string, next: string | undefined): boolean {
+  return (character === "0" && next === "<") || ((character === "1" || character === "2") && next === ">");
 }
 
 function readAnsiCEscape(command: string, backslashIndex: number): { readonly value: string; readonly endIndex: number } {
@@ -538,208 +706,429 @@ function classifySegment(rawCommand: string, segmentTokens: readonly string[], d
     return withPriority(classifyShellCommandInternal(unwrapped.innerCommand, depth + 1));
   }
 
+  const context = createSegmentClassificationContext(rawCommand, segmentTokens, unwrapped);
+  if (!hasExecutableSegmentContext(context)) {
+    return withPriority(noExecutableClassification(rawCommand));
+  }
+
+  const preWrapperClassification = classifyPreWrapperSegment(context);
+  if (preWrapperClassification) {
+    return withPriority(preWrapperClassification);
+  }
+
+  const wrapperClassification = depth < 5 ? riskyWrapperCommandClassification(rawCommand, context.commandName, context.args, depth) : undefined;
+  if (wrapperClassification) {
+    return withPriority(wrapperClassification);
+  }
+
+  const classified = classifyPostWrapperSegment(context) ?? genericShellClassification(context);
+  return withPriority(classified);
+}
+
+function createSegmentClassificationContext(
+  rawCommand: string,
+  segmentTokens: readonly string[],
+  unwrapped: UnwrappedExecutable,
+): SegmentClassificationContext {
   const commandName = unwrapped.commandName;
   const args = unwrapped.args;
   const inputRedirectionTargets = extractInputRedirectionTargets(segmentTokens);
   const targetPaths = uniqueStrings([...extractLikelyPathOperands(commandName, args, segmentTokens), ...inputRedirectionTargets]);
   const credentialAccess = targetPaths.some(isCredentialLikePath);
   const inlineCode = inlineCodeSnippets(commandName, args);
-  const credentialLiteralAccess = !credentialAccess && args.some(containsCredentialLikeLiteral);
-  const cloudCliLiteralAccess = inlineCode.some(containsCloudCliLiteral);
+  return {
+    rawCommand,
+    ...(commandName ? { commandName } : {}),
+    args,
+    segmentTokens,
+    inputRedirectionTargets,
+    targetPaths,
+    credentialAccess,
+    credentialLiteralAccess: !credentialAccess && args.some(containsCredentialLikeLiteral),
+    cloudCliLiteralAccess: inlineCode.some(containsCloudCliLiteral),
+  };
+}
 
-  if (!commandName) {
-    return withPriority(classification(rawCommand, "shell", "shell", "low", "No executable found.", [], [], false, false, false));
+function hasExecutableSegmentContext(context: SegmentClassificationContext): context is ExecutableSegmentClassificationContext {
+  return typeof context.commandName === "string" && context.commandName !== "";
+}
+
+function noExecutableClassification(rawCommand: string): CommandClassification {
+  return classification({
+    rawCommand,
+    kind: "shell",
+    primaryAction: "shell",
+    risk: "low",
+    reason: "No executable found.",
+    matchedPatterns: [],
+    targetPaths: [],
+    hardDenied: false,
+    dangerous: false,
+    requiresUserDecision: false,
+  });
+}
+
+function classifyPreWrapperSegment(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
+  if (TEST_COMMANDS.has(context.commandName)) {
+    return shellTestClassification(context);
   }
-
-  if (TEST_COMMANDS.has(commandName)) {
-    return withPriority(
-      classification(rawCommand, "list", "list", credentialAccess ? "dangerous" : "low", "Shell test inspects path existence or metadata.", [commandName], targetPaths, false, credentialAccess, credentialAccess, credentialAccess),
-    );
+  if (isDynamicExecutableName(context.commandName)) {
+    return segmentClassification(context, {
+      kind: "hard-denied",
+      primaryAction: "shell",
+      risk: "hard-denied",
+      reason: "Shell-expanded command names are denied because GuardMe cannot safely classify the executable.",
+      matchedPatterns: [context.commandName],
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+    });
   }
-
-  if (isDynamicExecutableName(commandName)) {
-    return withPriority(
-      classification(rawCommand, "hard-denied", "shell", "hard-denied", "Shell-expanded command names are denied because GuardMe cannot safely classify the executable.", [commandName], targetPaths, true, true, false),
-    );
+  if (CLOUD_CLI_COMMANDS.has(context.commandName)) {
+    return segmentClassification(context, {
+      kind: "hard-denied",
+      primaryAction: "shell",
+      risk: "hard-denied",
+      reason: `Cloud CLI '${context.commandName}' is always denied by GuardMe.`,
+      matchedPatterns: [context.commandName],
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+    });
   }
-
-  if (CLOUD_CLI_COMMANDS.has(commandName)) {
-    return withPriority(
-      classification(rawCommand, "hard-denied", "shell", "hard-denied", `Cloud CLI '${commandName}' is always denied by GuardMe.`, [commandName], targetPaths, true, true, false),
-    );
+  if (context.cloudCliLiteralAccess) {
+    return segmentClassification(context, {
+      kind: "hard-denied",
+      primaryAction: "shell",
+      risk: "hard-denied",
+      reason: "Inline code invokes a cloud CLI that GuardMe always denies.",
+      matchedPatterns: ["cloud-cli-inline-code"],
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+    });
   }
+  return undefined;
+}
 
-  if (cloudCliLiteralAccess) {
-    return withPriority(
-      classification(rawCommand, "hard-denied", "shell", "hard-denied", "Inline code invokes a cloud CLI that GuardMe always denies.", ["cloud-cli-inline-code"], targetPaths, true, true, false),
-    );
-  }
+function shellTestClassification(context: ExecutableSegmentClassificationContext): CommandClassification {
+  return segmentClassification(context, {
+    kind: "list",
+    primaryAction: "list",
+    risk: context.credentialAccess ? "dangerous" : "low",
+    reason: "Shell test inspects path existence or metadata.",
+    matchedPatterns: [context.commandName],
+    hardDenied: false,
+    dangerous: context.credentialAccess,
+    requiresUserDecision: context.credentialAccess,
+    credentialAccess: context.credentialAccess,
+  });
+}
 
-  const wrapperClassification = depth < 5 ? riskyWrapperCommandClassification(rawCommand, commandName, args, depth) : undefined;
-  if (wrapperClassification) {
-    return withPriority(wrapperClassification);
-  }
-
-  const diskReason = hardDeniedDiskReason(commandName, args);
-  if (diskReason) {
-    return withPriority(
-      classification(rawCommand, "hard-denied", "shell", "hard-denied", diskReason, [commandName], targetPaths, true, true, false),
-    );
-  }
-
-  if (commandName === "dd") {
-    return withPriority(
-      classification(rawCommand, "write", "write", credentialAccess ? "dangerous" : mutationRisk(targetPaths), "dd copies between file operands.", [commandName], targetPaths, false, credentialAccess || isOutsideishMutation(targetPaths), credentialAccess || isOutsideishMutation(targetPaths), credentialAccess),
-    );
-  }
-
-  if (credentialAccess && isReadLikeCommand(commandName)) {
-    return withPriority(
-      classification(rawCommand, "hard-denied", "read", "hard-denied", "Credential-like file read detected.", ["credential-read"], targetPaths, true, true, false, true),
-    );
-  }
-
-  if (credentialLiteralAccess) {
-    return withPriority(
-      classification(rawCommand, "hard-denied", "read", "hard-denied", "Credential-like file reference detected in shell command.", ["credential-literal"], targetPaths, true, true, false, true),
-    );
-  }
-
-  const outputRedirectionTargets = extractOutputRedirectionTargets(segmentTokens);
-  if (outputRedirectionTargets.length > 0) {
-    const redirectionTargets = uniqueStrings([...inputRedirectionTargets, ...outputRedirectionTargets]);
-    return withPriority(
-      classification(rawCommand, "write", "write", mutationRisk(redirectionTargets), "Shell redirection writes to a file.", ["redirection"], redirectionTargets, false, isOutsideishMutation(redirectionTargets), isOutsideishMutation(redirectionTargets)),
-    );
-  }
-
-  if (commandName === "rm") {
-    const deletesGit = targetPaths.some(isGitPath);
-    if (deletesGit) {
-      return withPriority(
-        classification(rawCommand, "hard-denied", "delete", "hard-denied", "Deleting .git metadata is denied.", [".git-delete"], targetPaths, true, true, false),
-      );
-    }
-    const recursiveForce = isRecursiveForceRm(args);
-    return withPriority(
-      classification(
-        rawCommand,
-        recursiveForce ? "dangerous" : "delete",
-        "delete",
-        recursiveForce ? "dangerous" : mutationRisk(targetPaths),
-        recursiveForce ? "Recursive force deletion requires coaching or user approval." : "File deletion command detected.",
-        recursiveForce ? ["rm -rf"] : ["rm"],
-        targetPaths,
-        false,
-        recursiveForce || isOutsideishMutation(targetPaths),
-        recursiveForce || isOutsideishMutation(targetPaths),
-      ),
-    );
-  }
-
-  if (commandName === "rmdir") {
-    return withPriority(
-      classification(rawCommand, "delete", "delete", mutationRisk(targetPaths), "Directory deletion command detected.", ["rmdir"], targetPaths, false, isOutsideishMutation(targetPaths), isOutsideishMutation(targetPaths)),
-    );
-  }
-
-  if (commandName === "mv" || commandName === "rename") {
-    const primaryAction: PolicyAction = commandName === "rename" || looksLikeRename(targetPaths) ? "rename" : "move";
-    return withPriority(
-      classification(rawCommand, primaryAction, primaryAction, mutationRisk(targetPaths), `${primaryAction === "rename" ? "Rename" : "Move"} command detected.`, [commandName], targetPaths, false, isOutsideishMutation(targetPaths), isOutsideishMutation(targetPaths)),
-    );
-  }
-
-  if (commandName === "rsync" && hasRsyncDeleteOption(args)) {
-    return withPriority(
-      classification(rawCommand, "dangerous", "delete", "dangerous", "rsync --delete may remove files and requires user approval.", ["rsync --delete"], targetPaths, false, true, true),
-    );
-  }
-
-  if (commandName === "find" && args.includes("-delete")) {
-    return withPriority(
-      classification(rawCommand, "dangerous", "delete", "dangerous", "find -delete may remove files and requires user approval.", ["find -delete"], targetPaths, false, true, true),
-    );
-  }
-
-  if (COPY_COMMANDS.has(commandName)) {
-    return withPriority(
-      classification(rawCommand, "write", "write", credentialAccess ? "dangerous" : mutationRisk(targetPaths), `${commandName} copies file operands.`, [commandName], targetPaths, false, credentialAccess || isOutsideishMutation(targetPaths), credentialAccess || isOutsideishMutation(targetPaths), credentialAccess),
-    );
-  }
-
-  if (ARCHIVE_COMMANDS.has(commandName)) {
-    return withPriority(
-      classification(rawCommand, "write", "write", credentialAccess ? "dangerous" : mutationRisk(targetPaths), `${commandName} archives or extracts file operands.`, [commandName], targetPaths, false, credentialAccess || isOutsideishMutation(targetPaths), credentialAccess || isOutsideishMutation(targetPaths), credentialAccess),
-    );
-  }
-
-  if (WRITE_COMMANDS.has(commandName)) {
-    return withPriority(
-      classification(rawCommand, "write", "write", credentialAccess ? "dangerous" : mutationRisk(targetPaths), `${commandName} writes filesystem paths.`, [commandName], targetPaths, false, credentialAccess || isOutsideishMutation(targetPaths), credentialAccess || isOutsideishMutation(targetPaths), credentialAccess),
-    );
-  }
-
-  if (METADATA_EDIT_COMMANDS.has(commandName)) {
-    return withPriority(
-      classification(rawCommand, "edit", "edit", credentialAccess ? "dangerous" : mutationRisk(targetPaths), `${commandName} mutates filesystem metadata.`, [commandName], targetPaths, false, credentialAccess || isOutsideishMutation(targetPaths), credentialAccess || isOutsideishMutation(targetPaths), credentialAccess),
-    );
-  }
-
-  if (commandName === "sed" && args.some((arg) => arg === "-i" || arg.startsWith("-i"))) {
-    return withPriority(
-      classification(rawCommand, "edit", "edit", mutationRisk(targetPaths), "In-place sed edit detected.", ["sed -i"], targetPaths, false, isOutsideishMutation(targetPaths), isOutsideishMutation(targetPaths)),
-    );
-  }
-
-  if (commandName === "tee") {
-    return withPriority(
-      classification(rawCommand, "write", "write", mutationRisk(targetPaths), "tee writes to file operands.", ["tee"], targetPaths, false, isOutsideishMutation(targetPaths), isOutsideishMutation(targetPaths)),
-    );
-  }
-
-  if (GREP_COMMANDS.has(commandName)) {
-    return withPriority(
-      classification(rawCommand, "read", "read", credentialAccess ? "dangerous" : "low", `${commandName} reads file operands.`, [commandName], targetPaths, false, credentialAccess, credentialAccess, credentialAccess),
-    );
-  }
-
-  if (READ_COMMANDS.has(commandName) || ADDITIONAL_READ_COMMANDS.has(commandName)) {
-    return withPriority(
-      classification(rawCommand, "read", "read", credentialAccess ? "dangerous" : "low", `${commandName} reads file operands.`, [commandName], targetPaths, false, credentialAccess, credentialAccess, credentialAccess),
-    );
-  }
-
-  if (LIST_COMMANDS.has(commandName)) {
-    return withPriority(
-      classification(rawCommand, "list", "list", credentialAccess ? "dangerous" : "low", `${commandName} lists or discovers files.`, [commandName], targetPaths, false, credentialAccess, credentialAccess, credentialAccess),
-    );
-  }
-
-  if (looksDestructiveButAmbiguous(commandName, args)) {
-    return withPriority(
-      classification(rawCommand, "ambiguous", "shell", "dangerous", "Ambiguous destructive shell command requires user approval.", [commandName], targetPaths, false, true, true),
-    );
-  }
-
-  return withPriority(
-    classification(rawCommand, "shell", "shell", outsideishTargetPresent(targetPaths) ? "medium" : "low", "Generic shell command detected.", [commandName], targetPaths, false, false, false),
+function classifyPostWrapperSegment(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
+  return (
+    classifyGuardedSegment(context) ??
+    classifyMutationSegment(context) ??
+    classifyReadListSegment(context) ??
+    classifyAmbiguousSegment(context)
   );
 }
 
-function classification(
-  rawCommand: string,
-  kind: CommandClassificationKind,
-  primaryAction: PolicyAction,
-  risk: RiskLevel,
+function classifyGuardedSegment(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
+  const diskReason = hardDeniedDiskReason(context.commandName, context.args);
+  if (diskReason) {
+    return segmentClassification(context, {
+      kind: "hard-denied",
+      primaryAction: "shell",
+      risk: "hard-denied",
+      reason: diskReason,
+      matchedPatterns: [context.commandName],
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+    });
+  }
+  if (context.commandName === "dd") {
+    return filesystemMutationClassification(context, "write", "dd copies between file operands.", [context.commandName]);
+  }
+  if (context.credentialAccess && isReadLikeCommand(context.commandName)) {
+    return segmentClassification(context, {
+      kind: "hard-denied",
+      primaryAction: "read",
+      risk: "hard-denied",
+      reason: "Credential-like file read detected.",
+      matchedPatterns: ["credential-read"],
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+      credentialAccess: true,
+    });
+  }
+  if (context.credentialLiteralAccess) {
+    return segmentClassification(context, {
+      kind: "hard-denied",
+      primaryAction: "read",
+      risk: "hard-denied",
+      reason: "Credential-like file reference detected in shell command.",
+      matchedPatterns: ["credential-literal"],
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+      credentialAccess: true,
+    });
+  }
+  return outputRedirectionClassification(context);
+}
+
+function outputRedirectionClassification(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
+  const outputRedirectionTargets = extractOutputRedirectionTargets(context.segmentTokens);
+  if (outputRedirectionTargets.length === 0) {
+    return undefined;
+  }
+  const targetPaths = uniqueStrings([...context.inputRedirectionTargets, ...outputRedirectionTargets]);
+  return segmentClassification(context, {
+    kind: "write",
+    primaryAction: "write",
+    risk: mutationRisk(targetPaths),
+    reason: "Shell redirection writes to a file.",
+    matchedPatterns: ["redirection"],
+    targetPaths,
+    hardDenied: false,
+    dangerous: isOutsideishMutation(targetPaths),
+    requiresUserDecision: isOutsideishMutation(targetPaths),
+  });
+}
+
+function classifyMutationSegment(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
+  if (context.commandName === "rm") {
+    return rmCommandClassification(context);
+  }
+  if (context.commandName === "rmdir") {
+    return deleteCommandClassification(context, "Directory deletion command detected.", ["rmdir"]);
+  }
+  if (context.commandName === "mv" || context.commandName === "rename") {
+    return moveOrRenameClassification(context);
+  }
+  if (context.commandName === "rsync" && hasRsyncDeleteOption(context.args)) {
+    return dangerousDeleteClassification(context, "rsync --delete may remove files and requires user approval.", ["rsync --delete"]);
+  }
+  if (context.commandName === "find" && context.args.includes("-delete")) {
+    return dangerousDeleteClassification(context, "find -delete may remove files and requires user approval.", ["find -delete"]);
+  }
+  return classifyFilesystemMutationCommand(context);
+}
+
+function classifyFilesystemMutationCommand(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
+  if (COPY_COMMANDS.has(context.commandName)) {
+    return filesystemMutationClassification(context, "write", `${context.commandName} copies file operands.`, [context.commandName]);
+  }
+  if (ARCHIVE_COMMANDS.has(context.commandName)) {
+    return filesystemMutationClassification(context, "write", `${context.commandName} archives or extracts file operands.`, [context.commandName]);
+  }
+  if (WRITE_COMMANDS.has(context.commandName)) {
+    return filesystemMutationClassification(context, "write", `${context.commandName} writes filesystem paths.`, [context.commandName]);
+  }
+  if (METADATA_EDIT_COMMANDS.has(context.commandName)) {
+    return filesystemMutationClassification(context, "edit", `${context.commandName} mutates filesystem metadata.`, [context.commandName]);
+  }
+  if (context.commandName === "sed" && context.args.some((arg) => arg === "-i" || arg.startsWith("-i"))) {
+    return segmentClassification(context, {
+      kind: "edit",
+      primaryAction: "edit",
+      risk: mutationRisk(context.targetPaths),
+      reason: "In-place sed edit detected.",
+      matchedPatterns: ["sed -i"],
+      hardDenied: false,
+      dangerous: isOutsideishMutation(context.targetPaths),
+      requiresUserDecision: isOutsideishMutation(context.targetPaths),
+    });
+  }
+  if (context.commandName === "tee") {
+    return filesystemMutationClassification(context, "write", "tee writes to file operands.", ["tee"]);
+  }
+  return undefined;
+}
+
+function rmCommandClassification(context: ExecutableSegmentClassificationContext): CommandClassification {
+  if (context.targetPaths.some(isGitPath)) {
+    return segmentClassification(context, {
+      kind: "hard-denied",
+      primaryAction: "delete",
+      risk: "hard-denied",
+      reason: "Deleting .git metadata is denied.",
+      matchedPatterns: [".git-delete"],
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+    });
+  }
+  if (isRecursiveForceRm(context.args)) {
+    return segmentClassification(context, {
+      kind: "dangerous",
+      primaryAction: "delete",
+      risk: "dangerous",
+      reason: "Recursive force deletion requires coaching or user approval.",
+      matchedPatterns: ["rm -rf"],
+      hardDenied: false,
+      dangerous: true,
+      requiresUserDecision: true,
+    });
+  }
+  return deleteCommandClassification(context, "File deletion command detected.", ["rm"]);
+}
+
+function moveOrRenameClassification(context: ExecutableSegmentClassificationContext): CommandClassification {
+  const primaryAction: PolicyAction = context.commandName === "rename" || looksLikeRename(context.targetPaths) ? "rename" : "move";
+  const actionLabel = primaryAction === "rename" ? "Rename" : "Move";
+  return segmentClassification(context, {
+    kind: primaryAction,
+    primaryAction,
+    risk: mutationRisk(context.targetPaths),
+    reason: `${actionLabel} command detected.`,
+    matchedPatterns: [context.commandName],
+    hardDenied: false,
+    dangerous: isOutsideishMutation(context.targetPaths),
+    requiresUserDecision: isOutsideishMutation(context.targetPaths),
+  });
+}
+
+function filesystemMutationClassification(
+  context: ExecutableSegmentClassificationContext,
+  primaryAction: Extract<PolicyAction, "write" | "edit">,
   reason: string,
   matchedPatterns: readonly string[],
-  targetPaths: readonly string[],
-  hardDenied: boolean,
-  dangerous: boolean,
-  requiresUserDecision: boolean,
-  credentialAccess = false,
 ): CommandClassification {
+  const dangerous = context.credentialAccess || isOutsideishMutation(context.targetPaths);
+  return segmentClassification(context, {
+    kind: primaryAction,
+    primaryAction,
+    risk: context.credentialAccess ? "dangerous" : mutationRisk(context.targetPaths),
+    reason,
+    matchedPatterns,
+    hardDenied: false,
+    dangerous,
+    requiresUserDecision: dangerous,
+    credentialAccess: context.credentialAccess,
+  });
+}
+
+function deleteCommandClassification(
+  context: ExecutableSegmentClassificationContext,
+  reason: string,
+  matchedPatterns: readonly string[],
+): CommandClassification {
+  return segmentClassification(context, {
+    kind: "delete",
+    primaryAction: "delete",
+    risk: mutationRisk(context.targetPaths),
+    reason,
+    matchedPatterns,
+    hardDenied: false,
+    dangerous: isOutsideishMutation(context.targetPaths),
+    requiresUserDecision: isOutsideishMutation(context.targetPaths),
+  });
+}
+
+function dangerousDeleteClassification(
+  context: ExecutableSegmentClassificationContext,
+  reason: string,
+  matchedPatterns: readonly string[],
+): CommandClassification {
+  return segmentClassification(context, {
+    kind: "dangerous",
+    primaryAction: "delete",
+    risk: "dangerous",
+    reason,
+    matchedPatterns,
+    hardDenied: false,
+    dangerous: true,
+    requiresUserDecision: true,
+  });
+}
+
+function classifyReadListSegment(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
+  if (GREP_COMMANDS.has(context.commandName) || READ_COMMANDS.has(context.commandName) || ADDITIONAL_READ_COMMANDS.has(context.commandName)) {
+    return readCommandClassification(context);
+  }
+  if (LIST_COMMANDS.has(context.commandName)) {
+    return segmentClassification(context, {
+      kind: "list",
+      primaryAction: "list",
+      risk: context.credentialAccess ? "dangerous" : "low",
+      reason: `${context.commandName} lists or discovers files.`,
+      matchedPatterns: [context.commandName],
+      hardDenied: false,
+      dangerous: context.credentialAccess,
+      requiresUserDecision: context.credentialAccess,
+      credentialAccess: context.credentialAccess,
+    });
+  }
+  return undefined;
+}
+
+function readCommandClassification(context: ExecutableSegmentClassificationContext): CommandClassification {
+  return segmentClassification(context, {
+    kind: "read",
+    primaryAction: "read",
+    risk: context.credentialAccess ? "dangerous" : "low",
+    reason: `${context.commandName} reads file operands.`,
+    matchedPatterns: [context.commandName],
+    hardDenied: false,
+    dangerous: context.credentialAccess,
+    requiresUserDecision: context.credentialAccess,
+    credentialAccess: context.credentialAccess,
+  });
+}
+
+function classifyAmbiguousSegment(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
+  if (!looksDestructiveButAmbiguous(context.commandName, context.args)) {
+    return undefined;
+  }
+  return segmentClassification(context, {
+    kind: "ambiguous",
+    primaryAction: "shell",
+    risk: "dangerous",
+    reason: "Ambiguous destructive shell command requires user approval.",
+    matchedPatterns: [context.commandName],
+    hardDenied: false,
+    dangerous: true,
+    requiresUserDecision: true,
+  });
+}
+
+function genericShellClassification(context: ExecutableSegmentClassificationContext): CommandClassification {
+  return segmentClassification(context, {
+    kind: "shell",
+    primaryAction: "shell",
+    risk: outsideishTargetPresent(context.targetPaths) ? "medium" : "low",
+    reason: "Generic shell command detected.",
+    matchedPatterns: [context.commandName],
+    hardDenied: false,
+    dangerous: false,
+    requiresUserDecision: false,
+  });
+}
+
+function segmentClassification(context: SegmentClassificationContext, options: SegmentClassificationOptions): CommandClassification {
+  const { targetPaths = context.targetPaths, ...classificationOptions } = options;
+  return classification({ rawCommand: context.rawCommand, targetPaths, ...classificationOptions });
+}
+
+function classification(options: ClassificationOptions): CommandClassification {
+  const {
+    rawCommand,
+    kind,
+    primaryAction,
+    risk,
+    reason,
+    matchedPatterns,
+    targetPaths,
+    hardDenied,
+    dangerous,
+    requiresUserDecision,
+    credentialAccess = false,
+  } = options;
+
   return {
     rawCommand,
     normalizedCommand: normalizeCommandText(rawCommand),
@@ -762,48 +1151,54 @@ function commandRuleMatchCandidatesInternal(command: string, depth: number): rea
   const candidates = new Set<string>();
   addCommandRuleCandidate(candidates, command);
 
-  if (depth >= 5) {
-    return [...candidates];
-  }
-
-  for (const subcommand of extractExecutableShellSubcommands(command)) {
-    for (const candidate of commandRuleMatchCandidatesInternal(subcommand.command, depth + 1)) {
-      addCommandRuleCandidate(candidates, candidate);
-    }
-  }
-
-  for (const segment of splitCommandSegments(tokenizeShellCommand(command))) {
-    const segmentText = joinTokensAsRuleCommand(segment);
-    if (segmentText) {
-      addCommandRuleCandidate(candidates, segmentText);
-    }
-
-    const leadingWrapperCommand = leadingWrapperInvokedCommandText(segment);
-    if (leadingWrapperCommand) {
-      for (const candidate of commandRuleMatchCandidatesInternal(leadingWrapperCommand, depth + 1)) {
-        addCommandRuleCandidate(candidates, candidate);
-      }
-    }
-
-    const unwrapped = unwrapExecutable(segment);
-    if (unwrapped.innerCommand) {
-      for (const candidate of commandRuleMatchCandidatesInternal(unwrapped.innerCommand, depth + 1)) {
-        addCommandRuleCandidate(candidates, candidate);
-      }
-    }
-
-    const commandName = unwrapped.commandName;
-    if (commandName) {
-      const wrapperCommand = wrapperInvokedCommandText(commandName, unwrapped.args);
-      if (wrapperCommand) {
-        for (const candidate of commandRuleMatchCandidatesInternal(wrapperCommand, depth + 1)) {
-          addCommandRuleCandidate(candidates, candidate);
-        }
-      }
-    }
+  if (depth < 5) {
+    addNestedCommandRuleCandidates(candidates, command, depth);
   }
 
   return [...candidates];
+}
+
+function addNestedCommandRuleCandidates(candidates: Set<string>, command: string, depth: number): void {
+  for (const subcommand of extractExecutableShellSubcommands(command)) {
+    addCommandRuleCandidatesFromNestedCommand(candidates, subcommand.command, depth);
+  }
+  for (const segment of splitCommandSegments(tokenizeShellCommand(command))) {
+    addSegmentCommandRuleCandidates(candidates, segment, depth);
+  }
+}
+
+function addSegmentCommandRuleCandidates(candidates: Set<string>, segment: readonly string[], depth: number): void {
+  const segmentText = joinTokensAsRuleCommand(segment);
+  if (segmentText) {
+    addCommandRuleCandidate(candidates, segmentText);
+  }
+
+  const leadingWrapperCommand = leadingWrapperInvokedCommandText(segment);
+  if (leadingWrapperCommand) {
+    addCommandRuleCandidatesFromNestedCommand(candidates, leadingWrapperCommand, depth);
+  }
+
+  const unwrapped = unwrapExecutable(segment);
+  if (unwrapped.innerCommand) {
+    addCommandRuleCandidatesFromNestedCommand(candidates, unwrapped.innerCommand, depth);
+  }
+  addWrapperCommandRuleCandidates(candidates, unwrapped, depth);
+}
+
+function addWrapperCommandRuleCandidates(candidates: Set<string>, unwrapped: UnwrappedExecutable, depth: number): void {
+  if (!unwrapped.commandName) {
+    return;
+  }
+  const wrapperCommand = wrapperInvokedCommandText(unwrapped.commandName, unwrapped.args);
+  if (wrapperCommand) {
+    addCommandRuleCandidatesFromNestedCommand(candidates, wrapperCommand, depth);
+  }
+}
+
+function addCommandRuleCandidatesFromNestedCommand(candidates: Set<string>, command: string, depth: number): void {
+  for (const candidate of commandRuleMatchCandidatesInternal(command, depth + 1)) {
+    addCommandRuleCandidate(candidates, candidate);
+  }
 }
 
 function leadingWrapperInvokedCommandText(tokens: readonly string[]): string | undefined {
@@ -887,8 +1282,20 @@ function joinTokensAsRuleCommand(tokens: readonly string[]): string | undefined 
 }
 
 function withPriority(classified: CommandClassification): SegmentClassification {
-  const priority = classified.hardDenied ? 4 : classified.risk === "dangerous" ? 3 : classified.risk === "medium" ? 2 : classified.primaryAction === "shell" ? 0 : 1;
-  return { ...classified, priority };
+  return { ...classified, priority: classificationPriority(classified) };
+}
+
+function classificationPriority(classified: CommandClassification): number {
+  if (classified.hardDenied) {
+    return 4;
+  }
+  if (classified.risk === "dangerous") {
+    return 3;
+  }
+  if (classified.risk === "medium") {
+    return 2;
+  }
+  return classified.primaryAction === "shell" ? 0 : 1;
 }
 
 function rebaseNestedClassification(
@@ -931,7 +1338,7 @@ function aggregateCommandClassification(
 function splitCommandSegments(tokens: readonly string[]): readonly (readonly string[])[] {
   const segments: string[][] = [[]];
   for (const token of tokens) {
-    const current = segments[segments.length - 1];
+    const current = segments.at(-1);
     if (!current) {
       segments.push([]);
       continue;
@@ -949,119 +1356,166 @@ function splitCommandSegments(tokens: readonly string[]): readonly (readonly str
 }
 
 function extractExecutableShellSubcommands(command: string): readonly ShellSubcommand[] {
-  const subcommands: ShellSubcommand[] = [];
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-
-    if (character === "\\" && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-
-    if (quote !== "'" && character === "`") {
-      const parsed = readBacktickSubcommand(command, index + 1);
-      if (parsed) {
-        if (parsed.command.trim() !== "") {
-          subcommands.push({ command: parsed.command, syntax: "backtick substitution" });
-        }
-        index = parsed.endIndex;
-      }
-      continue;
-    }
-
-    if ((character === '"' || character === "'") && !quote) {
-      quote = character;
-      continue;
-    }
-    if (character === quote) {
-      quote = undefined;
-      continue;
-    }
-
-    if (quote === "'") {
-      continue;
-    }
-
-    if (character === "$" && command[index + 1] === "(" && command[index + 2] !== "(") {
-      const parsed = readBalancedParenthesizedSubcommand(command, index + 2);
-      if (parsed) {
-        if (parsed.command.trim() !== "") {
-          subcommands.push({ command: parsed.command, syntax: "command substitution" });
-        }
-        index = parsed.endIndex;
-      }
-      continue;
-    }
-
-    if ((character === "<" || character === ">") && command[index + 1] === "(") {
-      const parsed = readBalancedParenthesizedSubcommand(command, index + 2);
-      if (parsed) {
-        if (parsed.command.trim() !== "") {
-          subcommands.push({ command: parsed.command, syntax: "process substitution" });
-        }
-        index = parsed.endIndex;
-      }
-    }
+  const state: ShellSubcommandScanState = { subcommands: [], escaped: false, index: 0 };
+  while (state.index < command.length) {
+    advanceShellSubcommandScanner(command, state);
   }
+  return state.subcommands;
+}
 
-  return subcommands;
+function advanceShellSubcommandScanner(command: string, state: ShellSubcommandScanState): void {
+  const character = command[state.index] ?? "";
+  if (consumeSubcommandEscapedCharacter(state)) {
+    return;
+  }
+  if (consumeSubcommandEscapeStart(state, character)) {
+    return;
+  }
+  if (consumeBacktickSubcommand(command, state, character)) {
+    return;
+  }
+  if (consumeSubcommandQuoteBoundary(state, character)) {
+    return;
+  }
+  if (state.quote === "'") {
+    state.index += 1;
+    return;
+  }
+  if (consumeCommandSubstitution(command, state, character)) {
+    return;
+  }
+  if (consumeProcessSubstitution(command, state, character)) {
+    return;
+  }
+  state.index += 1;
+}
+
+function consumeSubcommandEscapedCharacter(state: ShellSubcommandScanState): boolean {
+  if (!state.escaped) {
+    return false;
+  }
+  state.escaped = false;
+  state.index += 1;
+  return true;
+}
+
+function consumeSubcommandEscapeStart(state: ShellSubcommandScanState, character: string): boolean {
+  if (character !== "\\" || state.quote === "'") {
+    return false;
+  }
+  state.escaped = true;
+  state.index += 1;
+  return true;
+}
+
+function consumeBacktickSubcommand(command: string, state: ShellSubcommandScanState, character: string): boolean {
+  if (state.quote === "'" || character !== "`") {
+    return false;
+  }
+  const parsed = readBacktickSubcommand(command, state.index + 1);
+  advanceSubcommandScanFromParsed(state, parsed, "backtick substitution");
+  return true;
+}
+
+function consumeSubcommandQuoteBoundary(state: ShellSubcommandScanState, character: string): boolean {
+  if (isShellQuote(character) && !state.quote) {
+    state.quote = character;
+    state.index += 1;
+    return true;
+  }
+  if (character === state.quote) {
+    state.quote = undefined;
+    state.index += 1;
+    return true;
+  }
+  return false;
+}
+
+function consumeCommandSubstitution(command: string, state: ShellSubcommandScanState, character: string): boolean {
+  if (character !== "$" || command[state.index + 1] !== "(" || command[state.index + 2] === "(") {
+    return false;
+  }
+  const parsed = readBalancedParenthesizedSubcommand(command, state.index + 2);
+  advanceSubcommandScanFromParsed(state, parsed, "command substitution");
+  return true;
+}
+
+function consumeProcessSubstitution(command: string, state: ShellSubcommandScanState, character: string): boolean {
+  if ((character !== "<" && character !== ">") || command[state.index + 1] !== "(") {
+    return false;
+  }
+  const parsed = readBalancedParenthesizedSubcommand(command, state.index + 2);
+  advanceSubcommandScanFromParsed(state, parsed, "process substitution");
+  return true;
+}
+
+function advanceSubcommandScanFromParsed(
+  state: ShellSubcommandScanState,
+  parsed: { readonly command: string; readonly endIndex: number } | undefined,
+  syntax: ShellSubcommand["syntax"],
+): void {
+  if (!parsed) {
+    state.index += 1;
+    return;
+  }
+  addParsedShellSubcommand(state, parsed.command, syntax);
+  state.index = parsed.endIndex + 1;
+}
+
+function addParsedShellSubcommand(state: ShellSubcommandScanState, command: string, syntax: ShellSubcommand["syntax"]): void {
+  if (command.trim() !== "") {
+    state.subcommands.push({ command, syntax });
+  }
 }
 
 function readBalancedParenthesizedSubcommand(
   command: string,
   startIndex: number,
 ): { readonly command: string; readonly endIndex: number } | undefined {
-  let depth = 1;
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-
-  for (let index = startIndex; index < command.length; index += 1) {
-    const character = command[index];
-
-    if (escaped) {
-      escaped = false;
-      continue;
+  const state: BalancedParenthesisScanState = { depth: 1, escaped: false, index: startIndex };
+  while (state.index < command.length) {
+    if (scanBalancedParenthesisCharacter(command, state)) {
+      return { command: command.slice(startIndex, state.index), endIndex: state.index };
     }
-
-    if (character === "\\" && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-
-    if ((character === '"' || character === "'") && !quote) {
-      quote = character;
-      continue;
-    }
-    if (character === quote) {
-      quote = undefined;
-      continue;
-    }
-
-    if (quote) {
-      continue;
-    }
-
-    if (character === "(") {
-      depth += 1;
-      continue;
-    }
-    if (character === ")") {
-      depth -= 1;
-      if (depth === 0) {
-        return { command: command.slice(startIndex, index), endIndex: index };
-      }
-    }
+    state.index += 1;
   }
-
   return undefined;
+}
+
+function scanBalancedParenthesisCharacter(command: string, state: BalancedParenthesisScanState): boolean {
+  const character = command[state.index] ?? "";
+  if (state.escaped) {
+    state.escaped = false;
+    return false;
+  }
+  if (character === "\\" && state.quote !== "'") {
+    state.escaped = true;
+    return false;
+  }
+  if (consumeBalancedParenthesisQuoteBoundary(state, character) || state.quote) {
+    return false;
+  }
+  if (character === "(") {
+    state.depth += 1;
+    return false;
+  }
+  if (character !== ")") {
+    return false;
+  }
+  state.depth -= 1;
+  return state.depth === 0;
+}
+
+function consumeBalancedParenthesisQuoteBoundary(state: BalancedParenthesisScanState, character: string): boolean {
+  if (isShellQuote(character) && !state.quote) {
+    state.quote = character;
+    return true;
+  }
+  if (character === state.quote) {
+    state.quote = undefined;
+    return true;
+  }
+  return false;
 }
 
 function readBacktickSubcommand(
@@ -1088,45 +1542,53 @@ function readBacktickSubcommand(
   return undefined;
 }
 
-function unwrapExecutable(tokens: readonly string[]): { readonly commandName?: string; readonly args: readonly string[]; readonly innerCommand?: string } {
-  let index = 0;
+function unwrapExecutable(tokens: readonly string[]): UnwrappedExecutable {
+  let index = skipLeadingEnvAssignments(tokens, 0);
+  while (index < tokens.length) {
+    const step = unwrapExecutableStep(tokens, index);
+    if (step.result) {
+      return step.result;
+    }
+    index = step.nextIndex;
+  }
+  return { args: [] };
+}
+
+function unwrapExecutableStep(tokens: readonly string[], index: number): { readonly nextIndex: number; readonly result?: UnwrappedExecutable } {
+  const commandName = basename(tokens[index] ?? "").toLowerCase();
+  const args = tokens.slice(index + 1);
+  if (SHELL_LEADING_CONTROL_WORDS.has(commandName)) {
+    return { nextIndex: index + 1 };
+  }
+  if (PREFIX_WRAPPERS.has(commandName)) {
+    return { nextIndex: skipPrefixWrapper(commandName, tokens, index + 1) };
+  }
+  if (commandName === "env") {
+    return unwrapEnvExecutableStep(tokens, index);
+  }
+  if (SHELL_WRAPPERS.has(commandName)) {
+    const innerCommand = shellCommandString(args);
+    if (innerCommand) {
+      return { nextIndex: tokens.length, result: { args: [], innerCommand } };
+    }
+  }
+  return { nextIndex: tokens.length, result: { commandName, args } };
+}
+
+function unwrapEnvExecutableStep(tokens: readonly string[], index: number): { readonly nextIndex: number; readonly result?: UnwrappedExecutable } {
+  const env = unwrapEnv(tokens, index + 1);
+  if (env.innerCommand) {
+    return { nextIndex: tokens.length, result: { args: [], innerCommand: env.innerCommand } };
+  }
+  return { nextIndex: env.index };
+}
+
+function skipLeadingEnvAssignments(tokens: readonly string[], startIndex: number): number {
+  let index = startIndex;
   while (index < tokens.length && isEnvAssignment(tokens[index] ?? "")) {
     index += 1;
   }
-
-  while (index < tokens.length) {
-    const commandName = basename(tokens[index] ?? "").toLowerCase();
-    const args = tokens.slice(index + 1);
-
-    if (SHELL_LEADING_CONTROL_WORDS.has(commandName)) {
-      index += 1;
-      continue;
-    }
-
-    if (PREFIX_WRAPPERS.has(commandName)) {
-      index = skipPrefixWrapper(commandName, tokens, index + 1);
-      continue;
-    }
-
-    if (commandName === "env") {
-      const env = unwrapEnv(tokens, index + 1);
-      if (env.innerCommand) {
-        return { args: [], innerCommand: env.innerCommand };
-      }
-      index = env.index;
-      continue;
-    }
-
-    if (SHELL_WRAPPERS.has(commandName)) {
-      const innerCommand = shellCommandString(args);
-      if (innerCommand) {
-        return { args: [], innerCommand };
-      }
-    }
-
-    return { commandName, args };
-  }
-  return { args: [] };
+  return index;
 }
 
 function localScriptExecutionFromSegment(tokens: readonly string[]): LocalScriptExecution | undefined {
@@ -1188,7 +1650,7 @@ function shellWrapperScriptPath(args: readonly string[]): string | undefined {
     if (arg === "--") {
       return args[index + 1];
     }
-    if (arg === "-c" || /^-[A-Za-z]*c[A-Za-z]*$/u.test(arg) || arg.startsWith("-c")) {
+    if (isShellCommandStringOption(arg)) {
       return undefined;
     }
     if (arg === "-o" || arg === "--init-file" || arg === "--rcfile") {
@@ -1275,36 +1737,39 @@ function packageScriptPackageJsonPath(args: readonly string[]): string {
 
 function packageManagerDirectoryOption(args: readonly string[]): string | undefined {
   let directory: string | undefined;
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index] ?? "";
-    if (arg === "--") {
+  let index = 0;
+  while (index < args.length) {
+    const step = readPackageManagerDirectoryOption(args, index);
+    if (step.directory) {
+      directory = step.directory;
+    }
+    if (step.stop) {
       break;
     }
-    if (PACKAGE_MANAGER_CWD_OPTIONS_WITH_VALUES.has(arg)) {
-      const value = args[index + 1];
-      if (value) {
-        directory = value;
-      }
-      index += 1;
-      continue;
-    }
-    const inlineLongOption = PACKAGE_MANAGER_CWD_LONG_OPTIONS_WITH_VALUES.find((option) => arg.startsWith(`${option}=`));
-    if (inlineLongOption) {
-      const value = arg.slice(inlineLongOption.length + 1);
-      if (value) {
-        directory = value;
-      }
-      continue;
-    }
-    if (arg.startsWith("-C") && arg.length > 2) {
-      directory = arg.slice(2);
-      continue;
-    }
-    if (PACKAGE_MANAGER_OPTIONS_WITH_VALUES.has(arg)) {
-      index += 1;
-    }
+    index = step.nextIndex;
   }
   return directory;
+}
+
+function readPackageManagerDirectoryOption(
+  args: readonly string[],
+  index: number,
+): { readonly nextIndex: number; readonly directory?: string; readonly stop?: boolean } {
+  const arg = args[index] ?? "";
+  if (arg === "--") {
+    return { nextIndex: index + 1, stop: true };
+  }
+  if (PACKAGE_MANAGER_CWD_OPTIONS_WITH_VALUES.has(arg)) {
+    return { nextIndex: index + 2, directory: args[index + 1] };
+  }
+  const inlineLongOption = PACKAGE_MANAGER_CWD_LONG_OPTIONS_WITH_VALUES.find((option) => arg.startsWith(`${option}=`));
+  if (inlineLongOption) {
+    return { nextIndex: index + 1, directory: arg.slice(inlineLongOption.length + 1) };
+  }
+  if (arg.startsWith("-C") && arg.length > 2) {
+    return { nextIndex: index + 1, directory: arg.slice(2) };
+  }
+  return { nextIndex: PACKAGE_MANAGER_OPTIONS_WITH_VALUES.has(arg) ? index + 2 : index + 1 };
 }
 
 function scriptNameAfterRunSubcommand(args: readonly string[]): string | undefined {
@@ -1412,50 +1877,72 @@ function shellCommandString(args: readonly string[]): string | undefined {
     if (arg === "--") {
       continue;
     }
-    if (arg === "-c") {
+    if (isShellCStringOption(arg)) {
       return args[index + 1];
     }
-    if (/^-[A-Za-z]*c[A-Za-z]*$/u.test(arg)) {
-      return args[index + 1];
-    }
-    if (arg.startsWith("-c") && arg.length > 2) {
+    if (isInlineShellCStringOption(arg)) {
       return arg.slice(2);
     }
   }
   return undefined;
 }
 
+function isShellCommandStringOption(arg: string): boolean {
+  return isShellCStringOption(arg) || isInlineShellCStringOption(arg);
+}
+
+function isShellCStringOption(arg: string): boolean {
+  return hasShortOptionFlag(arg, "c");
+}
+
+function isInlineShellCStringOption(arg: string): boolean {
+  return arg.startsWith("-c") && arg.length > 2 && !isShellCStringOption(arg);
+}
+
 function unwrapEnv(tokens: readonly string[], startIndex: number): { readonly index: number; readonly innerCommand?: string } {
   let index = startIndex;
   while (index < tokens.length) {
-    const token = tokens[index] ?? "";
-    if (token === "--") {
-      return { index: index + 1 };
+    const step = readEnvUnwrapStep(tokens, index);
+    if (step.result) {
+      return step.result;
     }
-    if (token === "-S" || token === "--split-string") {
-      return tokens[index + 1] ? { index: tokens.length, innerCommand: tokens[index + 1] } : { index: index + 1 };
+    if (step.nextIndex === undefined) {
+      break;
     }
-    if (token.startsWith("--split-string=")) {
-      return { index: tokens.length, innerCommand: token.slice("--split-string=".length) };
-    }
-    if (token.startsWith("-S") && token.length > 2) {
-      return { index: tokens.length, innerCommand: token.slice(2) };
-    }
-    if (ENV_OPTIONS_WITH_VALUES.has(token)) {
-      index += 2;
-      continue;
-    }
-    if ([...ENV_OPTIONS_WITH_VALUES].some((option) => option.startsWith("--") && token.startsWith(`${option}=`))) {
-      index += 1;
-      continue;
-    }
-    if (token.startsWith("-") || isEnvAssignment(token)) {
-      index += 1;
-      continue;
-    }
-    break;
+    index = step.nextIndex;
   }
   return { index };
+}
+
+function readEnvUnwrapStep(
+  tokens: readonly string[],
+  index: number,
+): { readonly nextIndex?: number; readonly result?: { readonly index: number; readonly innerCommand?: string } } {
+  const token = tokens[index] ?? "";
+  if (token === "--") {
+    return { result: { index: index + 1 } };
+  }
+  if (token === "-S" || token === "--split-string") {
+    return { result: envSplitStringResult(tokens, index) };
+  }
+  if (token.startsWith("--split-string=")) {
+    return { result: { index: tokens.length, innerCommand: token.slice("--split-string=".length) } };
+  }
+  if (token.startsWith("-S") && token.length > 2) {
+    return { result: { index: tokens.length, innerCommand: token.slice(2) } };
+  }
+  if (ENV_OPTIONS_WITH_VALUES.has(token)) {
+    return { nextIndex: index + 2 };
+  }
+  if (hasInlineLongOptionValue(token, ENV_OPTIONS_WITH_VALUES) || token.startsWith("-") || isEnvAssignment(token)) {
+    return { nextIndex: index + 1 };
+  }
+  return {};
+}
+
+function envSplitStringResult(tokens: readonly string[], index: number): { readonly index: number; readonly innerCommand?: string } {
+  const innerCommand = tokens[index + 1];
+  return innerCommand ? { index: tokens.length, innerCommand } : { index: index + 1 };
 }
 
 function skipPrefixWrapper(commandName: string, tokens: readonly string[], startIndex: number): number {
@@ -1477,7 +1964,7 @@ function skipPrefixWrapper(commandName: string, tokens: readonly string[], start
       index += 2;
       continue;
     }
-    if ([...optionsWithValues].some((option) => option.startsWith("--") && token.startsWith(`${option}=`))) {
+    if (hasInlineLongOptionValue(token, optionsWithValues)) {
       index += 1;
       continue;
     }
@@ -1514,7 +2001,7 @@ function findExecCommandText(args: readonly string[]): string | undefined {
 }
 
 function isFindExecTerminator(token: string): boolean {
-  return token === ";" || token === "\\;" || token === "+";
+  return token === ";" || token === String.raw`\;` || token === "+";
 }
 
 function niceCommandText(args: readonly string[]): string | undefined {
@@ -1525,13 +2012,17 @@ function niceCommandText(args: readonly string[]): string | undefined {
       index += 2;
       continue;
     }
-    if (/^--adjustment=/.test(arg) || /^-\d+$/.test(arg)) {
+    if (arg.startsWith("--adjustment=") || isNegativeIntegerOption(arg)) {
       index += 1;
       continue;
     }
     return joinTokensAsCommand(args.slice(index));
   }
   return undefined;
+}
+
+function isNegativeIntegerOption(arg: string): boolean {
+  return arg.length > 1 && arg.startsWith("-") && [...arg.slice(1)].every(isAsciiDigit);
 }
 
 function timeoutCommandText(args: readonly string[]): string | undefined {
@@ -1557,32 +2048,44 @@ function packageRunnerCommandText(args: readonly string[]): string | undefined {
 }
 
 function packageRunnerCallCommand(args: readonly string[]): string | undefined {
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index] ?? "";
-    if (arg === "--") {
+  let index = 0;
+  while (index < args.length) {
+    const step = readPackageRunnerCallStep(args, index);
+    if (step.kind === "command") {
+      return step.command;
+    }
+    if (step.stop) {
       return undefined;
     }
-    if (arg === "-c" || arg === "--call") {
-      return args[index + 1];
-    }
-    if (arg.startsWith("--call=")) {
-      return arg.slice("--call=".length);
-    }
-    if (arg.startsWith("-c") && arg.length > 2) {
-      return arg.slice(2);
-    }
-    if (PACKAGE_EXEC_OPTIONS_WITH_VALUES.has(arg)) {
-      index += 1;
-      continue;
-    }
-    if ([...PACKAGE_EXEC_OPTIONS_WITH_VALUES].some((option) => option.startsWith("--") && arg.startsWith(`${option}=`))) {
-      continue;
-    }
-    if (!arg.startsWith("-") || arg === "-") {
-      return undefined;
-    }
+    index = step.nextIndex;
   }
   return undefined;
+}
+
+function readPackageRunnerCallStep(
+  args: readonly string[],
+  index: number,
+): { readonly kind: "command"; readonly command?: string } | { readonly kind: "advance"; readonly nextIndex: number; readonly stop?: boolean } {
+  const arg = args[index] ?? "";
+  if (arg === "--") {
+    return { kind: "advance", nextIndex: index + 1, stop: true };
+  }
+  if (arg === "-c" || arg === "--call") {
+    return { kind: "command", command: args[index + 1] };
+  }
+  if (arg.startsWith("--call=")) {
+    return { kind: "command", command: arg.slice("--call=".length) };
+  }
+  if (arg.startsWith("-c") && arg.length > 2) {
+    return { kind: "command", command: arg.slice(2) };
+  }
+  if (PACKAGE_EXEC_OPTIONS_WITH_VALUES.has(arg)) {
+    return { kind: "advance", nextIndex: index + 2 };
+  }
+  if (hasInlineLongOptionValue(arg, PACKAGE_EXEC_OPTIONS_WITH_VALUES)) {
+    return { kind: "advance", nextIndex: index + 1 };
+  }
+  return { kind: "advance", nextIndex: index + 1, stop: !arg.startsWith("-") || arg === "-" };
 }
 
 function packageManagerInvokedCommandText(args: readonly string[]): string | undefined {
@@ -1611,7 +2114,7 @@ function firstNonOptionIndex(args: readonly string[], optionsWithValues: Readonl
       index += 1;
       continue;
     }
-    if ([...optionsWithValues].some((option) => option.startsWith("--") && arg.startsWith(`${option}=`))) {
+    if (hasInlineLongOptionValue(arg, optionsWithValues)) {
       continue;
     }
     if (arg.startsWith("-") && arg !== "-") {
@@ -1664,7 +2167,7 @@ function hardDeniedDiskReason(commandName: string, args: readonly string[]): str
   if (commandName.startsWith("mkfs") || commandName === "fdisk") {
     return "Disk formatting/raw disk operation is denied.";
   }
-  if (commandName === "dd" && args.some((arg) => /^(if|of)=\/dev\//.test(arg))) {
+  if (commandName === "dd" && args.some(isDdBlockDeviceOperand)) {
     return "dd access to block devices is denied.";
   }
   return undefined;
@@ -1753,7 +2256,7 @@ function grepPathOperands(args: readonly string[]): readonly string[] {
 }
 
 function grepArgsAreRecursive(args: readonly string[]): boolean {
-  return args.some((arg) => arg === "--recursive" || /^-[A-Za-z]*[rR][A-Za-z]*$/u.test(arg));
+  return args.some((arg) => arg === "--recursive" || hasShortOptionFlag(arg, "r"));
 }
 
 function findPathOperands(args: readonly string[]): readonly string[] {
@@ -1776,9 +2279,17 @@ function isFindExpressionToken(arg: string): boolean {
 
 function ddPathOperands(args: readonly string[]): readonly string[] {
   return args.flatMap((arg) => {
-    const match = /^(?:if|of)=(.+)$/u.exec(arg);
-    return match?.[1] ? [match[1]] : [];
+    const path = ddOperandPath(arg);
+    return path ? [path] : [];
   });
+}
+
+function ddOperandPath(arg: string): string | undefined {
+  return arg.startsWith("if=") || arg.startsWith("of=") ? arg.slice(3) : undefined;
+}
+
+function isDdBlockDeviceOperand(arg: string): boolean {
+  return ddOperandPath(arg)?.startsWith("/dev/") ?? false;
 }
 
 function testPathOperands(args: readonly string[]): readonly string[] {
@@ -1819,7 +2330,7 @@ function isRecursiveForceRm(args: readonly string[]): boolean {
 }
 
 function hasRsyncDeleteOption(args: readonly string[]): boolean {
-  return args.some((arg) => /^--delete(?:$|[-=])/u.test(arg));
+  return args.some((arg) => arg === "--delete" || arg.startsWith("--delete-") || arg.startsWith("--delete="));
 }
 
 function isReadLikeCommand(commandName: string): boolean {
@@ -1877,23 +2388,33 @@ function isCredentialLikePath(pathValue: string): boolean {
 
 function isProtectedEnvPathOperand(pathValue: string): boolean {
   return pathValue
-    .replace(/\\/g, "/")
+    .replaceAll("\\", "/")
     .split("/")
     .filter(Boolean)
-    .some((segment) => segment === ".env" || (segment.startsWith(".env") && /[*?[\]]/u.test(segment)));
+    .some((segment) => segment === ".env" || (segment.startsWith(".env") && hasEnvGlobWildcard(segment)));
+}
+
+function hasEnvGlobWildcard(segment: string): boolean {
+  return segment.includes("*") || segment.includes("?") || segment.includes("[") || segment.includes("]");
 }
 
 function containsProtectedEnvPathReference(value: string): boolean {
-  return /(?:^|[\s'"`(<>=:,/])(?:\.\/)?\.env(?:$|[\s'"`)>:,/]|[*?[\]])/u.test(value.replace(/\\/g, "/"));
+  return /(?:^|[\s'"`(<>=:,/])(?:\.\/)?\.env(?:$|[\s'"`)>:,/]|[*?[\]])/u.test(value.replaceAll("\\", "/"));
 }
 
 function isGitPath(pathValue: string): boolean {
-  const segments = pathValue
-    .replace(/\\/g, "/")
-    .replace(/\/+$/u, "")
+  const segments = trimTrailingSlashes(pathValue.replaceAll("\\", "/"))
     .split("/")
     .filter(Boolean);
   return segments.includes(".git");
+}
+
+function trimTrailingSlashes(value: string): string {
+  let endIndex = value.length;
+  while (endIndex > 0 && value[endIndex - 1] === "/") {
+    endIndex -= 1;
+  }
+  return value.slice(0, endIndex);
 }
 
 function mutationRisk(targetPaths: readonly string[]): RiskLevel {
@@ -1928,7 +2449,34 @@ function looksLikeSedExpression(value: string): boolean {
 }
 
 function isEnvAssignment(value: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(value);
+  return /^[A-Za-z_]\w*=.*/u.test(value);
+}
+
+function hasInlineLongOptionValue(arg: string, optionsWithValues: ReadonlySet<string>): boolean {
+  for (const option of optionsWithValues) {
+    if (option.startsWith("--") && arg.startsWith(`${option}=`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasShortOptionFlag(arg: string, flag: string): boolean {
+  if (!arg.startsWith("-") || arg.startsWith("--") || arg.length <= 1) {
+    return false;
+  }
+  const flags = arg.slice(1);
+  return [...flags].every(isAsciiLetter) && flags.toLowerCase().includes(flag.toLowerCase());
+}
+
+function isAsciiLetter(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return codePoint !== undefined && ((codePoint >= 65 && codePoint <= 90) || (codePoint >= 97 && codePoint <= 122));
+}
+
+function isAsciiDigit(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return codePoint !== undefined && codePoint >= 48 && codePoint <= 57;
 }
 
 function isShellLineSeparator(character: string): boolean {

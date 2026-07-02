@@ -1,24 +1,26 @@
+import { realpathSync } from "node:fs";
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 export const FAKE_ENV_SECRET = "guardme-e2e-fake-token-do-not-leak";
-export const OUTSIDE_READ_DIR = "/tmp/guardme-e2e-outside-read";
-export const OUTSIDE_WRITE_DIR = "/tmp/guardme-e2e-outside-write";
-export const OUTSIDE_DELETE_DIR = "/tmp/guardme-e2e-outside-delete";
-export const OUTSIDE_READ_PATH = `${OUTSIDE_READ_DIR}/file.txt`;
-export const OUTSIDE_WRITE_PATH = `${OUTSIDE_WRITE_DIR}/file.txt`;
-export const OUTSIDE_DELETE_PATH = `${OUTSIDE_DELETE_DIR}/file.txt`;
 
 export const SAFE_SCRIPT_CONTENT = "#!/bin/sh\necho safe\n";
 export const SAFE_NOTE_CONTENT = "original safe note\n";
 export const EDITED_SAFE_NOTE_CONTENT = "edited safe note\n";
 
-const FIXTURE_PREFIX = "/tmp/guardme-e2e-";
+const FIXTURE_PREFIX = join(realpathSync(tmpdir()), "guardme-e2e-");
 
 export async function createProjectFixture(label = "rpc") {
-  const rootDir = await mkdtemp(`${FIXTURE_PREFIX}${label}-`);
+  const rootDir = await mkdtemp(`${FIXTURE_PREFIX}${safeFixtureLabel(label)}-`);
   const homeDir = join(rootDir, "home");
   const projectDir = join(rootDir, "project");
+  const outsideReadDir = join(rootDir, "outside-read");
+  const outsideWriteDir = join(rootDir, "outside-write");
+  const outsideDeleteDir = join(rootDir, "outside-delete");
+  const outsideReadPath = join(outsideReadDir, "file.txt");
+  const outsideWritePath = join(outsideWriteDir, "file.txt");
+  const outsideDeletePath = join(outsideDeleteDir, "file.txt");
   const markerPath = join(projectDir, "tmp", "e2e-unsafe-marker.txt");
   const approvalTargetPath = join(projectDir, "approval-target", "file.txt");
   const denyTargetPath = join(projectDir, "deny-target", "file.txt");
@@ -32,14 +34,29 @@ export async function createProjectFixture(label = "rpc") {
 
   await mkdir(homeDir, { recursive: true });
   await mkdir(projectDir, { recursive: true });
+  const outsideFixture = {
+    outsideReadDir,
+    outsideWriteDir,
+    outsideDeleteDir,
+    outsideReadPath,
+    outsideWritePath,
+    outsideDeletePath,
+  };
+
   await populateProject(projectDir);
-  await recreateOutsideFiles();
+  await recreateOutsideFiles(outsideFixture);
   await recreateApprovalTarget(projectDir);
 
   return {
     rootDir,
     homeDir,
     projectDir,
+    outsideReadDir,
+    outsideWriteDir,
+    outsideDeleteDir,
+    outsideReadPath,
+    outsideWritePath,
+    outsideDeletePath,
     markerPath,
     approvalTargetPath,
     denyTargetPath,
@@ -57,7 +74,7 @@ export async function createProjectFixture(label = "rpc") {
       await recreateBuild(projectDir);
     },
     async recreateOutsideFiles() {
-      await recreateOutsideFiles();
+      await recreateOutsideFiles(outsideFixture);
     },
     async recreateApprovalTarget() {
       await recreateApprovalTarget(projectDir);
@@ -82,7 +99,6 @@ export async function createProjectFixture(label = "rpc") {
     },
     async cleanup() {
       await safeRm(rootDir);
-      await Promise.all([safeRm(OUTSIDE_READ_DIR), safeRm(OUTSIDE_WRITE_DIR), safeRm(OUTSIDE_DELETE_DIR)]);
     },
   };
 }
@@ -105,6 +121,13 @@ export async function readIfExists(path) {
     }
     throw error;
   }
+}
+
+function safeFixtureLabel(label) {
+  if (typeof label !== "string" || !/^[a-z0-9-]+$/i.test(label)) {
+    throw new Error(`Unsafe e2e fixture label: ${String(label)}`);
+  }
+  return label;
 }
 
 async function populateProject(projectDir) {
@@ -171,13 +194,13 @@ async function recreateGitMetadata(projectDir) {
   await writeFile(join(projectDir, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
 }
 
-async function recreateOutsideFiles() {
-  await mkdir(OUTSIDE_READ_DIR, { recursive: true });
-  await mkdir(OUTSIDE_WRITE_DIR, { recursive: true });
-  await mkdir(OUTSIDE_DELETE_DIR, { recursive: true });
-  await writeFile(OUTSIDE_READ_PATH, "outside fixture content should not leak\n", "utf8");
-  await writeFile(OUTSIDE_WRITE_PATH, "outside original\n", "utf8");
-  await writeFile(OUTSIDE_DELETE_PATH, "outside delete original\n", "utf8");
+async function recreateOutsideFiles({ outsideReadDir, outsideWriteDir, outsideDeleteDir, outsideReadPath, outsideWritePath, outsideDeletePath }) {
+  await mkdir(outsideReadDir, { recursive: true });
+  await mkdir(outsideWriteDir, { recursive: true });
+  await mkdir(outsideDeleteDir, { recursive: true });
+  await writeFile(outsideReadPath, "outside fixture content should not leak\n", "utf8");
+  await writeFile(outsideWritePath, "outside original\n", "utf8");
+  await writeFile(outsideDeletePath, "outside delete original\n", "utf8");
 }
 
 async function safeRm(path) {

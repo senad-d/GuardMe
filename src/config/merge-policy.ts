@@ -1,5 +1,5 @@
 import { POLICY_VERSION } from "../constants.ts";
-import type { PolicyDiagnostic, RuleSource, RuleSourceKind } from "../policy/action.ts";
+import { POLICY_ACTIONS, type PolicyAction, type PolicyDiagnostic, type RuleSource, type RuleSourceKind } from "../policy/action.ts";
 import type {
   CommandRuleSection,
   GuardMePathRule,
@@ -67,6 +67,7 @@ const PROTECTION_PATH_SECTIONS: readonly PathRuleSection[] = [
 
 const DELETE_LIKE_ACTIONS = new Set(["delete", "move", "rename"]);
 const MUTATION_ACTIONS = new Set(["write", "edit", "delete", "move", "rename"]);
+const POLICY_ACTION_ORDER = new Map<PolicyAction, number>(POLICY_ACTIONS.map((action, index) => [action, index]));
 
 export function mergePolicyConfigs(sources: readonly PolicyConfigSource[]): MergePolicyResult {
   const mutable = createMutableMergedConfig();
@@ -196,8 +197,12 @@ function appendUnique<T extends SourcedGuardMeRule>(
 }
 
 function ruleDedupeKey(rule: GuardMeRule): string {
-  const actions = [...(rule.actions ?? [])].sort().join(",");
+  const actions = [...(rule.actions ?? [])].sort(comparePolicyActionOrder).join(",");
   return `${rule.pattern}\u0000${actions}\u0000${rule.reason ?? ""}`;
+}
+
+function comparePolicyActionOrder(left: PolicyAction, right: PolicyAction): number {
+  return (POLICY_ACTION_ORDER.get(left) ?? Number.MAX_SAFE_INTEGER) - (POLICY_ACTION_ORDER.get(right) ?? Number.MAX_SAFE_INTEGER);
 }
 
 function localAllowConflictsWithProtection(allowRule: SourcedGuardMePathRule, protection: SourcedGuardMePathRule): boolean {
