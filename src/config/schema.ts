@@ -153,7 +153,7 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "mv *", reason: "Common project mv command." },
       { pattern: "cat *", reason: "Common project cat command." },
       { pattern: "test *", reason: "Common project test command." },
-      { pattern: "2>/dev/null", reason: "Common project redirection command." },
+      { pattern: "2>*", reason: "Common project redirection command." },
       { pattern: "echo *", reason: "Common project echo command." },
       { pattern: "printf *", reason: "Common project printf command." },
       { pattern: "chmod *", reason: "Common project chmod command." },
@@ -170,6 +170,8 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "go *", reason: "Common project go command." },
       { pattern: "docker *", reason: "Common project docker command." },
       { pattern: "set -*", reason: "Common project pipeline command." },
+      { pattern: "date *", reason: "Common project date command." },
+      { pattern: "gh *", reason: "Common project github cli command." },
     ],
     denyPaths: [
       {
