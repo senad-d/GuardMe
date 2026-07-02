@@ -258,8 +258,8 @@ export async function showPolicyWriteSuccess(
   return result ?? { kind: "closed" };
 }
 
-export function renderConfigPane(snapshot: ConfigSnapshot, pane: ConfigPane, width = 100, selectedIndex?: number): string {
-  return renderPaneScreen({ snapshot, pane, selectedIndex: selectedIndex ?? selectedIndexForPane(pane, undefined), width }).join("\n");
+export function renderConfigPane(snapshot: ConfigSnapshot, pane: ConfigPane, width?: number, selectedIndex?: number): string {
+  return renderPaneScreen({ snapshot, pane, selectedIndex: selectedIndex ?? selectedIndexForPane(pane, undefined), width: width ?? 100 }).join("\n");
 }
 
 export function renderGuardMeHelp(width = 100): string {
@@ -1748,7 +1748,7 @@ function splitLongWord(word: string, maxWidth: number): readonly string[] {
   const chunks: string[] = [];
   let chunk = "";
   let chunkWidth = 0;
-  for (const character of Array.from(word)) {
+  for (const character of word) {
     const characterWidth = visibleWidth(character);
     if (chunk.length > 0 && chunkWidth + characterWidth > width) {
       chunks.push(chunk);

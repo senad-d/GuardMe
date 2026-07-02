@@ -18,7 +18,11 @@ import {
 } from "./schema.ts";
 
 export type PolicyWriteScope = "local" | "global";
+type WritableRuleSection = PathRuleSection | CommandRuleSection;
+type PolicyWriteRuleSource = { readonly kind: PolicyWriteScope; readonly path: string };
 
+const PATH_RULE_SECTION_SET: ReadonlySet<string> = new Set(PATH_RULE_SECTIONS);
+const COMMAND_RULE_SECTION_SET: ReadonlySet<string> = new Set(COMMAND_RULE_SECTIONS);
 const POLICY_ACTION_ORDER = new Map<PolicyAction, number>(POLICY_ACTIONS.map((action, index) => [action, index]));
 
 export interface PersistUserDecisionRuleOptions {
@@ -35,13 +39,13 @@ export interface PersistUserDecisionRuleOptions {
 export interface PersistUserDecisionRuleResult {
   readonly saved: boolean;
   readonly path: string;
-  readonly section?: PathRuleSection | CommandRuleSection;
+  readonly section?: WritableRuleSection;
   readonly diagnostics: readonly PolicyDiagnostic[];
   readonly reason?: string;
 }
 
 export interface AppendPolicyConfigRule {
-  readonly section: PathRuleSection | CommandRuleSection;
+  readonly section: WritableRuleSection;
   readonly rule: GuardMeRule;
 }
 
@@ -235,7 +239,7 @@ type PreparedAppendRulesResult =
 
 function prepareAppendRules(
   rules: readonly AppendPolicyConfigRule[],
-  source: { readonly kind: "global" | "local"; readonly path: string },
+  source: PolicyWriteRuleSource,
   diagnostics: readonly PolicyDiagnostic[],
   path: string,
   created: boolean,
@@ -391,7 +395,7 @@ function appendRulesToPolicyYamlText(text: string, rules: readonly AppendPolicyC
   return groupedRules.reduce((currentText, [section, sectionRules]) => appendRulesToSectionText(currentText, section, sectionRules), normalizeLineEndings(text));
 }
 
-function groupAppendRulesBySection(rules: readonly AppendPolicyConfigRule[]): readonly (readonly [PathRuleSection | CommandRuleSection, readonly GuardMeRule[]])[] {
+function groupAppendRulesBySection(rules: readonly AppendPolicyConfigRule[]): readonly (readonly [WritableRuleSection, readonly GuardMeRule[]])[] {
   return [...PATH_RULE_SECTIONS, ...COMMAND_RULE_SECTIONS].flatMap((section) => {
     const sectionRules = rules.filter((entry) => entry.section === section).map((entry) => entry.rule);
     return sectionRules.length > 0 ? [[section, sectionRules] as const] : [];
@@ -400,7 +404,7 @@ function groupAppendRulesBySection(rules: readonly AppendPolicyConfigRule[]): re
 
 function appendRulesToSectionText(
   text: string,
-  section: PathRuleSection | CommandRuleSection,
+  section: WritableRuleSection,
   rules: readonly GuardMeRule[],
 ): string {
   const body = text.endsWith("\n") ? text.slice(0, -1) : text;
@@ -446,7 +450,7 @@ function renderRuleYamlLines(rule: GuardMeRule): string[] {
   return lines;
 }
 
-function findLastSectionIndex(lines: readonly string[], section: PathRuleSection | CommandRuleSection): number {
+function findLastSectionIndex(lines: readonly string[], section: WritableRuleSection): number {
   let foundIndex = -1;
   const sectionPattern = new RegExp(String.raw`^${section}:\s*(?:#.*)?$`);
   for (const [index, line] of lines.entries()) {
@@ -458,15 +462,15 @@ function findLastSectionIndex(lines: readonly string[], section: PathRuleSection
 }
 
 function normalizeLineEndings(text: string): string {
-  return text.replace(/\r\n?/g, "\n");
+  return text.replaceAll(/\r\n?/g, "\n");
 }
 
-function normalizeAppendRule(section: PathRuleSection | CommandRuleSection, rule: GuardMeRule): GuardMeRule | undefined {
+function normalizeAppendRule(section: WritableRuleSection, rule: GuardMeRule): GuardMeRule | undefined {
   const pattern = rule.pattern.trim();
   if (!pattern) {
     return undefined;
   }
-  const actions = (PATH_RULE_SECTIONS as readonly string[]).includes(section) && rule.actions && rule.actions.length > 0 ? [...new Set(rule.actions)] : undefined;
+  const actions = PATH_RULE_SECTION_SET.has(section) && rule.actions && rule.actions.length > 0 ? [...new Set(rule.actions)] : undefined;
   const reason = rule.reason?.trim();
   return {
     pattern,
@@ -476,11 +480,11 @@ function normalizeAppendRule(section: PathRuleSection | CommandRuleSection, rule
 }
 
 function secretCommandRuleDiagnostic(
-  section: PathRuleSection | CommandRuleSection,
+  section: WritableRuleSection,
   rule: GuardMeRule,
-  source: { readonly kind: "global" | "local"; readonly path: string },
+  source: PolicyWriteRuleSource,
 ): PolicyDiagnostic | undefined {
-  if (!(COMMAND_RULE_SECTIONS as readonly string[]).includes(section)) {
+  if (!COMMAND_RULE_SECTION_SET.has(section)) {
     return undefined;
   }
   if (redactSensitiveText(rule.pattern) === rule.pattern) {
@@ -509,7 +513,7 @@ function policyPathForScope(scope: PolicyWriteScope, cwd: string, homeDir?: stri
 }
 
 type DecisionRuleResult =
-  | { readonly section: PathRuleSection | CommandRuleSection; readonly rule: GuardMeRule }
+  | { readonly section: WritableRuleSection; readonly rule: GuardMeRule }
   | {
       readonly rejected: true;
       readonly code: string;
@@ -526,7 +530,7 @@ function ruleFromDecision(options: PersistUserDecisionRuleOptions): DecisionRule
 
   const reason = options.reason ?? `Saved from GuardMe approval decision '${options.decision}'.`;
   if (options.request.command) {
-    const commandPattern = options.request.command.trim().replace(/\s+/g, " ");
+    const commandPattern = options.request.command.trim().replaceAll(/\s+/g, " ");
     if (redactSensitiveText(commandPattern) !== commandPattern) {
       return {
         rejected: true,
@@ -561,7 +565,7 @@ function ruleFromDecision(options: PersistUserDecisionRuleOptions): DecisionRule
 
 function appendRule(
   config: GuardMePolicyConfig,
-  section: PathRuleSection | CommandRuleSection,
+  section: WritableRuleSection,
   rule: GuardMeRule,
 ): GuardMePolicyConfig {
   const existingRules = config[section];

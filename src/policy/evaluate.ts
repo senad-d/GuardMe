@@ -636,7 +636,7 @@ function hasCommandGlob(pattern: string): boolean {
 }
 
 function normalizeCommandText(command: string): string {
-  return command.trim().replace(/\s+/g, " ");
+  return command.trim().replaceAll(/\s+/g, " ");
 }
 
 export function commandGlobToRegExp(pattern: string): RegExp {

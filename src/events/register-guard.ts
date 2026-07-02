@@ -49,6 +49,10 @@ export interface ToolCallBlockResult {
 }
 
 type ScriptInspectionSourceKind = "script-content" | "local-script";
+type PersistedPolicyTarget = "none" | "local-yaml" | "global-yaml";
+type StateFileSourceKind = "global" | "local";
+
+const GUARDED_TOOL_NAME_SET: ReadonlySet<string> = new Set(GUARDED_TOOL_NAMES);
 
 interface ScriptInspectionSource {
   readonly sourceKind: ScriptInspectionSourceKind;
@@ -765,7 +769,7 @@ export async function persistApprovalRuleIfRequested(
   request: PolicyRequest,
   userDecision: UserDecision,
   policyDecision: PolicyDecision,
-): Promise<{ readonly saved: boolean; readonly reason: string; readonly persistedTo: "none" | "local-yaml" | "global-yaml" }> {
+): Promise<{ readonly saved: boolean; readonly reason: string; readonly persistedTo: PersistedPolicyTarget }> {
   if (!isPersistentUserDecision(userDecision)) {
     return { saved: true, reason: "No persistent rule requested.", persistedTo: "none" };
   }
@@ -795,7 +799,7 @@ export async function persistApprovalRuleIfRequested(
 
 export async function reloadPolicyAfterPersistentDecision(
   state: GuardMeSessionState,
-  persistedTo: "none" | "local-yaml" | "global-yaml",
+  persistedTo: PersistedPolicyTarget,
 ): Promise<void> {
   if (persistedTo === "none") {
     return;
@@ -814,7 +818,7 @@ export async function reloadPolicyAfterPersistentDecision(
 export async function appendApprovalDecisionRecord(
   state: GuardMeSessionState,
   userDecision: UserDecision,
-  persistedTo: "none" | "local-yaml" | "global-yaml",
+  persistedTo: PersistedPolicyTarget,
   fingerprint: string,
 ): Promise<void> {
   const globalDecision = persistedTo === "global-yaml" || userDecision.endsWith("global") || (!state.projectTrusted && persistedTo === "none");
@@ -896,7 +900,7 @@ export async function persistCoachingWarningIfNeeded(
 function recordStateWriteFailure(
   state: GuardMeSessionState,
   path: string,
-  sourceKind: "global" | "local",
+  sourceKind: StateFileSourceKind,
   error: unknown,
 ): void {
   const diagnostic: PolicyDiagnostic = {
@@ -970,7 +974,7 @@ function isPersistentUserDecision(decision: UserDecision): boolean {
 }
 
 function isGuardedToolName(toolName: string): boolean {
-  return (GUARDED_TOOL_NAMES as readonly string[]).includes(toolName);
+  return GUARDED_TOOL_NAME_SET.has(toolName);
 }
 
 function isEditMutationToolName(toolName: string): boolean {
@@ -1101,11 +1105,15 @@ function shellGrepIsRecursive(command: string): boolean {
     if (token === "--") {
       return false;
     }
-    if (token === "--recursive" || /^-[A-Za-z]*[rR][A-Za-z]*$/u.test(token)) {
+    if (token === "--recursive" || isRecursiveShortGrepOption(token)) {
       return true;
     }
   }
   return false;
+}
+
+function isRecursiveShortGrepOption(token: string): boolean {
+  return token.startsWith("-") && !token.startsWith("--") && token.slice(1).toLowerCase().includes("r");
 }
 
 function shellFindPattern(command: string): string | undefined {
@@ -1295,7 +1303,7 @@ function isProtectedDiscoveryEntry(entry: string): boolean {
 
 function isCredentialLikeDiscoveryPattern(pattern: string): boolean {
   const lower = pattern.toLowerCase();
-  const basename = lower.split(/[\\/]/u).pop() ?? lower;
+  const basename = lower.replaceAll("\\", "/").split("/").pop() ?? lower;
   return (
     isProtectedDiscoveryEntry(basename) ||
     isProtectedEnvDiscoveryPattern(lower) ||
@@ -1320,7 +1328,11 @@ function isProtectedEnvDiscoveryPattern(pattern: string): boolean {
     .replaceAll("\\", "/")
     .split("/")
     .filter(Boolean)
-    .some((segment) => segment === ".env" || (segment.startsWith(".env") && /[*?[\]]/u.test(segment)));
+    .some((segment) => segment === ".env" || (segment.startsWith(".env") && hasGlobWildcard(segment)));
+}
+
+function hasGlobWildcard(segment: string): boolean {
+  return segment.includes("*") || segment.includes("?") || segment.includes("[") || segment.includes("]");
 }
 
 async function normalizeTargets(

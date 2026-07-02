@@ -39,6 +39,10 @@ async function collectFiles(root) {
   return files;
 }
 
+function hasTrailingWhitespace(line) {
+  return line.endsWith(" ") || line.endsWith("\t");
+}
+
 async function checkFile(path) {
   const text = await readFile(path, "utf8");
   const failures = [];
@@ -48,7 +52,7 @@ async function checkFile(path) {
 
   const lines = text.split("\n");
   lines.forEach((line, index) => {
-    if (/[ \t]+$/.test(line)) failures.push(`line ${index + 1} has trailing whitespace`);
+    if (hasTrailingWhitespace(line)) failures.push(`line ${index + 1} has trailing whitespace`);
   });
 
   if (extensionOf(path) === ".json") {

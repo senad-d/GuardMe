@@ -23,7 +23,7 @@ export function visibleWidth(value: string): number {
 
 export function sanitizeTerminalText(value: string): string {
   return stripAnsiEscapes(String(value))
-    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+    .replaceAll(/[\u0000-\u001F\u007F-\u009F]/g, " ")
     .trim();
 }
 

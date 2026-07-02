@@ -225,7 +225,7 @@ Use this matrix to understand where each task applies, why it matters, and the t
 - TUI capture helper return values are meaningful or the constant-return functions are removed.
 - Existing UI tests pass and include focused assertions for any changed output or helper behavior.
 
-- [ ] Task 7: Fix regex performance and maintainability issues
+- [x] Task 7: Fix regex performance and maintainability issues
 
 **Where to fix**
 
@@ -248,7 +248,7 @@ Use this matrix to understand where each task applies, why it matters, and the t
 - `.match()` checks flagged by Sonar use `RegExp.exec()`.
 - Tests cover representative accepted and rejected inputs, including long adversarial strings.
 
-- [ ] Task 8: Apply low-risk TypeScript and JavaScript readability fixes
+- [x] Task 8: Apply low-risk TypeScript and JavaScript readability fixes
 
 **Where to fix**
 
@@ -268,7 +268,7 @@ Use this matrix to understand where each task applies, why it matters, and the t
 - Default parameters are last, or the function uses an options object.
 - `npm run typecheck` and relevant tests pass after mechanical changes.
 
-- [ ] Task 9: Add coverage reporting for Sonar
+- [x] Task 9: Add coverage reporting for Sonar
 
 **Where to fix**
 
@@ -366,33 +366,36 @@ IMPORTANT: Execute every step in order, top to bottom. Mark each task complete o
 - Covers IDs listed for `src/ui/approval-modal.ts`, `src/ui/config-frame.ts`, `src/ui/config-tui.ts`, `src/ui/detail-formatters.ts`, `src/ui/setup-wizard.ts`, and `src/ui/text.ts` in Appendix A.
 - Local validation: `npm run typecheck`, focused UI tests, `npm run test`, `npm run test:e2e:tui`, `npm run test:e2e`, `npm run validate`, and `git diff --check` pass. Sonar re-poll remains part of Task 10 after analysis reruns.
 
-- [ ] Task 7: Fix regex performance and maintainability issues
+- [x] Task 7: Fix regex performance and maintainability issues
 
-- [ ] Simplify or split regexes with super-linear backtracking risk in `scripts/check-format.mjs`, `src/events/register-guard.ts`, `src/policy/commands.ts`, and `src/policy/script-content.ts`.
-- [ ] Rewrite `src/policy/redact.ts` regexes to reduce complexity, remove duplicate character-class entries, and use concise character classes where safe.
-- [ ] Replace `.match()` checks with `RegExp.exec()` where Sonar requires it.
-- [ ] Use `String.raw` for regex/string literals that currently rely on hard-to-read escaping.
-- [ ] Add targeted tests for representative safe and malicious inputs for every regex that changes.
+- [x] Simplify or split regexes with super-linear backtracking risk in `scripts/check-format.mjs`, `src/events/register-guard.ts`, `src/policy/commands.ts`, and `src/policy/script-content.ts`.
+- [x] Rewrite `src/policy/redact.ts` regexes to reduce complexity, remove duplicate character-class entries, and use concise character classes where safe.
+- [x] Replace `.match()` checks with `RegExp.exec()` where Sonar requires it.
+- [x] Use `String.raw` for regex/string literals that currently rely on hard-to-read escaping.
+- [x] Add targeted tests for representative safe and malicious inputs for every regex that changes.
 - Covers regex-focused IDs in `scripts/check-format.mjs`, `src/config/schema.ts`, `src/config/write-policy.ts`, `src/events/register-guard.ts`, `src/policy/commands.ts`, `src/policy/evaluate.ts`, `src/policy/redact.ts`, `src/policy/script-content.ts`, `test/e2e/fixtures/scripted-provider.ts`, and `test/e2e/helpers/tui-capture.mjs`.
+- Local validation: `npm run typecheck`, focused regex tests, `npm run format:check`, `npm run test`, `npm run test:e2e`, `npm run validate`, and `git diff --check` pass. Sonar re-poll remains part of Task 10 after analysis reruns.
 
-- [ ] Task 8: Apply low-risk TypeScript and JavaScript readability fixes
+- [x] Task 8: Apply low-risk TypeScript and JavaScript readability fixes
 
-- [ ] Replace `.filter(...)[0]` or destructured `.filter()` patterns with `.find()` where only one element is needed.
-- [ ] Introduce type aliases for repeated inline union types.
-- [ ] Replace array membership lists with `Set` where Sonar flagged repeated inclusion checks.
-- [ ] Replace `.indexOf() >= 0` with `.includes()`, and replace `.findIndex()` with `.indexOf()` when searching for the exact item index.
-- [ ] Use `.at()`, `replaceAll()`, `startsWith()`, `codePointAt()`, direct `for...of` iteration, and direct `export ... from` syntax where flagged.
-- [ ] Reorder default parameters so defaults are last, or replace the parameter list with an options object if call sites become unclear.
+- [x] Replace `.filter(...)[0]` or destructured `.filter()` patterns with `.find()` where only one element is needed.
+- [x] Introduce type aliases for repeated inline union types.
+- [x] Replace array membership lists with `Set` where Sonar flagged repeated inclusion checks.
+- [x] Replace `.indexOf() >= 0` with `.includes()`, and replace `.findIndex()` with `.indexOf()` when searching for the exact item index.
+- [x] Use `.at()`, `replaceAll()`, `startsWith()`, `codePointAt()`, direct `for...of` iteration, and direct `export ... from` syntax where flagged.
+- [x] Reorder default parameters so defaults are last, or replace the parameter list with an options object if call sites become unclear.
 - Covers all remaining minor/major maintainability IDs in Appendix A not resolved by tasks 4-7.
+- Local validation: `npm run typecheck`, focused readability tests, `npm run test`, `npm run format:check`, `npm run test:e2e`, `npm run validate`, and `git diff --check` pass. Sonar re-poll remains part of Task 10 after analysis reruns.
 
-- [ ] Task 9: Add coverage reporting for Sonar
+- [x] Task 9: Add coverage reporting for Sonar
 
-- [ ] Add exactly one coverage implementation path that works with the current Node test runner.
-- [ ] Prefer a script that generates `coverage/lcov.info` for Sonar, for example `npm run coverage` using native Node test coverage if it can emit LCOV, or a small dev dependency such as `c8` if native output cannot satisfy Sonar.
-- [ ] Add or update Sonar configuration so JavaScript/TypeScript coverage points to `coverage/lcov.info`.
-- [ ] Ensure `coverage/` remains ignored and generated reports are not committed.
-- [ ] Document the local command in `package.json` scripts and, if needed, project docs.
-- [ ] Add coverage for the riskiest refactored modules first: command classification, policy evaluation, config merge/write, script-content regex parsing, and UI render helpers.
+- [x] Add exactly one coverage implementation path that works with the current Node test runner.
+- [x] Prefer a script that generates `coverage/lcov.info` for Sonar, for example `npm run coverage` using native Node test coverage if it can emit LCOV, or a small dev dependency such as `c8` if native output cannot satisfy Sonar.
+- [x] Add or update Sonar configuration so JavaScript/TypeScript coverage points to `coverage/lcov.info`.
+- [x] Ensure `coverage/` remains ignored and generated reports are not committed.
+- [x] Document the local command in `package.json` scripts and, if needed, project docs.
+- [x] Add coverage for the riskiest refactored modules first: command classification, policy evaluation, config merge/write, script-content regex parsing, and UI render helpers.
+- Local validation: `npm run typecheck`, `npm run test`, `npm run test:e2e`, `npm run validate`, `npm run coverage`, `test -f coverage/lcov.info`, `npm run format:check`, and `git diff --check` pass. Sonar analysis/re-poll remains part of Task 10.
 
 - [ ] Task 10: Validate and re-poll Sonar
 

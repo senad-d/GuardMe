@@ -53,6 +53,9 @@ export const USER_DECISIONS = [
 ] as const;
 export type UserDecision = (typeof USER_DECISIONS)[number];
 
+const POLICY_ACTION_SET: ReadonlySet<string> = new Set(POLICY_ACTIONS);
+const USER_DECISION_SET: ReadonlySet<string> = new Set(USER_DECISIONS);
+
 export interface RuleSource {
   readonly kind: RuleSourceKind;
   readonly path?: string;
@@ -160,9 +163,9 @@ export type PolicyDecision =
   | NeedsUserDecisionPolicyDecision;
 
 export function isPolicyAction(value: string): value is PolicyAction {
-  return (POLICY_ACTIONS as readonly string[]).includes(value);
+  return POLICY_ACTION_SET.has(value);
 }
 
 export function isUserDecision(value: string): value is UserDecision {
-  return (USER_DECISIONS as readonly string[]).includes(value);
+  return USER_DECISION_SET.has(value);
 }

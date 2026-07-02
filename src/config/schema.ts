@@ -25,6 +25,10 @@ export type CommandRuleSection = (typeof COMMAND_RULE_SECTIONS)[number];
 export const POLICY_CONFIG_SECTIONS = [...PATH_RULE_SECTIONS, ...COMMAND_RULE_SECTIONS] as const;
 export type PolicyConfigSection = (typeof POLICY_CONFIG_SECTIONS)[number];
 
+const PATH_RULE_SECTION_SET: ReadonlySet<string> = new Set(PATH_RULE_SECTIONS);
+const COMMAND_RULE_SECTION_SET: ReadonlySet<string> = new Set(COMMAND_RULE_SECTIONS);
+const POLICY_CONFIG_SECTION_SET: ReadonlySet<string> = new Set(POLICY_CONFIG_SECTIONS);
+
 export interface GuardMeRule {
   readonly pattern: string;
   readonly actions?: readonly PolicyAction[];
@@ -338,7 +342,7 @@ export function validateGuardMeConfig(input: unknown, source: RuleSource): Confi
   ) as Record<PolicyConfigSection, readonly GuardMeRule[]>;
 
   for (const key of Object.keys(input)) {
-    if (key !== "version" && !(POLICY_CONFIG_SECTIONS as readonly string[]).includes(key)) {
+    if (key !== "version" && !POLICY_CONFIG_SECTION_SET.has(key)) {
       diagnostics.push(configDiagnostic("warning", "config.unknownKey", `Unknown GuardMe policy key '${key}' ignored.`, source));
     }
   }
@@ -490,7 +494,7 @@ function parsePolicyYamlRuleProperty(line: ParsedYamlLine, state: PolicyYamlPars
 }
 
 function isPolicyConfigSection(value: string): value is PolicyConfigSection {
-  return (POLICY_CONFIG_SECTIONS as readonly string[]).includes(value);
+  return POLICY_CONFIG_SECTION_SET.has(value);
 }
 
 function validateRuleSection(
@@ -570,7 +574,7 @@ function validateActions(
     return { actions: [], usable: true };
   }
 
-  if ((COMMAND_RULE_SECTIONS as readonly string[]).includes(section)) {
+  if (COMMAND_RULE_SECTION_SET.has(section)) {
     diagnostics.push(
       configDiagnostic(
         "error",
@@ -600,7 +604,7 @@ function validateActions(
       diagnostics.push(configDiagnostic("error", "config.invalidAction", `Invalid policy action '${String(rawAction)}'.`, source));
       continue;
     }
-    if ((PATH_RULE_SECTIONS as readonly string[]).includes(section) && rawAction === "shell") {
+    if (PATH_RULE_SECTION_SET.has(section) && rawAction === "shell") {
       invalidActionFound = true;
       diagnostics.push(configDiagnostic("error", "config.invalidPathAction", "Path rules cannot use the shell action.", source));
       continue;

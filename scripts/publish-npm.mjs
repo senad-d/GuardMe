@@ -269,7 +269,9 @@ async function main() {
 const modulePath = fileURLToPath(import.meta.url);
 const invokedPath = argv[1] ? resolve(argv[1]) : undefined;
 if (invokedPath === modulePath) {
-  main().catch((error) => {
+  try {
+    await main();
+  } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
-  });
+  }
 }

@@ -5,6 +5,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const PROVIDER = "guardme-e2e";
 const MODEL = "scripted";
 const API = "guardme-e2e-scripted";
+const SCENARIO_PATTERN = /SCENARIO:\s*([a-z0-9-]+)/i;
 
 let toolCallCounter = 0;
 
@@ -76,7 +77,7 @@ function responseForContext(context: any): ScriptedResponse {
 
 function latestScenarioName(context: any): string | undefined {
   for (const message of [...(context.messages ?? [])].reverse()) {
-    const scenario = contentToText(message?.content).match(/SCENARIO:\s*([a-z0-9-]+)/i)?.[1];
+    const scenario = SCENARIO_PATTERN.exec(contentToText(message?.content))?.[1];
     if (scenario) {
       return scenario;
     }
@@ -108,7 +109,7 @@ function outsideFixturePath(directoryName: "outside-read" | "outside-write" | "o
 }
 
 function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+  return `'${value.replaceAll("'", String.raw`'\''`)}'`;
 }
 
 function toolCallForScenario(scenario: string): ScriptedToolCall | undefined {

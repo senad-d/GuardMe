@@ -22,11 +22,13 @@ export interface GuardMeConfigPaths {
   readonly displayLocalPolicyPath: typeof LOCAL_POLICY_PATH;
 }
 
+type PolicyConfigFileSourceKind = Exclude<RuleSourceKind, "builtin" | "default" | "user">;
+
 export interface PolicyConfigFileResult extends ConfigValidationResult {
   readonly path: string;
   readonly found: boolean;
   readonly skipped?: boolean;
-  readonly sourceKind: Exclude<RuleSourceKind, "builtin" | "default" | "user">;
+  readonly sourceKind: PolicyConfigFileSourceKind;
 }
 
 export interface LoadedGuardMeConfig {
@@ -56,7 +58,7 @@ export function resolvePolicyConfigPaths(cwd: string, homeDir = homedir()): Guar
 
 export async function loadPolicyConfigFile(
   path: string,
-  sourceKind: Exclude<RuleSourceKind, "builtin" | "default" | "user">,
+  sourceKind: PolicyConfigFileSourceKind,
 ): Promise<PolicyConfigFileResult> {
   const source = createRuleSource(sourceKind, path);
   const inspected = await inspectPolicyFileBeforeRead(path, sourceKind, source);
@@ -126,7 +128,7 @@ function skippedLocalPolicyConfigFile(path: string): PolicyConfigFileResult {
 
 async function inspectPolicyFileBeforeRead(
   path: string,
-  sourceKind: Exclude<RuleSourceKind, "builtin" | "default" | "user">,
+  sourceKind: PolicyConfigFileSourceKind,
   source: ReturnType<typeof createRuleSource>,
 ): Promise<PolicyConfigFileResult | undefined> {
   try {
@@ -160,7 +162,7 @@ async function inspectPolicyFileBeforeRead(
 
 function policyFileError(
   path: string,
-  sourceKind: Exclude<RuleSourceKind, "builtin" | "default" | "user">,
+  sourceKind: PolicyConfigFileSourceKind,
   source: ReturnType<typeof createRuleSource>,
   code: string,
   message: string,

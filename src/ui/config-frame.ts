@@ -338,7 +338,7 @@ function sanitizeCellText(value: string, preserveIndent: boolean): string {
   if (!preserveIndent) {
     return sanitizeTerminalText(value);
   }
-  return stripAnsiEscapes(String(value)).replace(/[\u0000-\u001F\u007F-\u009F]/g, " ");
+  return stripAnsiEscapes(String(value)).replaceAll(/[\u0000-\u001F\u007F-\u009F]/g, " ");
 }
 
 function formatValue(value: string | number | boolean, explicitKind: FrameValueKind | undefined): { readonly text: string; readonly kind: FrameValueKind } {
@@ -420,7 +420,7 @@ function buildTopBorder(width: number, title: string, activePane: string, theme:
   return style(theme, "accent", `${left}${"─".repeat(width - leftWidth - rightWidth)}${right}`);
 }
 
-function framedLine(value: string, width: number, theme: ConfigFrameTheme = {}, contentRole?: string, sanitize = true): string {
+function framedLine(value: string, width: number, theme?: ConfigFrameTheme, contentRole?: string, sanitize = true): string {
   const safeValue = sanitize ? sanitizeTerminalText(value) : value;
   const cell = sanitize && contentRole === undefined ? fitSourceCell(safeValue, width) : fitCell(safeValue, width);
   const content = contentRole ? style(theme, contentRole, cell) : cell;

@@ -96,6 +96,8 @@ export function setupModeRows(selectedIndex: number, options: { readonly include
 }
 
 const ALL_ACTIONS: readonly PolicyAction[] = ["read", "list", "write", "edit", "delete", "move", "rename"];
+const ALL_ACTION_SET: ReadonlySet<string> = new Set(ALL_ACTIONS);
+const PATH_RULE_SECTION_SET: ReadonlySet<string> = new Set(PATH_RULE_SECTIONS);
 const DEFAULT_DELETE_ACTIONS: readonly PolicyAction[] = ["delete", "move", "rename"];
 const DEFAULT_READONLY_ACTIONS: readonly PolicyAction[] = ["read", "list"];
 const CONFIG_FRAME_BODY_ROWS = 11;
@@ -163,15 +165,16 @@ export async function requestSetupMode(ctx: SetupWizardContext): Promise<SetupMo
 export async function collectCustomPolicy(
   ctx: SetupWizardContext,
   sensibleDefaults: GuardMePolicyConfig,
-  scope: SetupScope = "local",
+  scope?: SetupScope,
   initialConfig?: GuardMePolicyConfig,
 ): Promise<GuardMePolicyConfig | undefined> {
   if (!hasCustomPolicyInputs(ctx)) {
     return undefined;
   }
 
-  const config = await initialCustomPolicyConfig(ctx, sensibleDefaults, scope, initialConfig);
-  return config ? collectCustomPolicyRules(ctx, scope, config) : undefined;
+  const effectiveScope = scope ?? "local";
+  const config = await initialCustomPolicyConfig(ctx, sensibleDefaults, effectiveScope, initialConfig);
+  return config ? collectCustomPolicyRules(ctx, effectiveScope, config) : undefined;
 }
 
 function hasCustomPolicyInputs(ctx: SetupWizardContext): boolean {
@@ -657,7 +660,7 @@ async function promptForActions(
   const actions = raw
     .split(/[\s,]+/)
     .map((action) => action.trim())
-    .filter((action): action is PolicyAction => (ALL_ACTIONS as readonly string[]).includes(action));
+    .filter((action): action is PolicyAction => ALL_ACTION_SET.has(action));
   return actions.length > 0 ? [...new Set(actions)] : undefined;
 }
 
@@ -832,7 +835,7 @@ function defaultActionsForSection(section: PolicyConfigSection): readonly Policy
 }
 
 function isPathSection(section: PolicyConfigSection): boolean {
-  return (PATH_RULE_SECTIONS as readonly string[]).includes(section);
+  return PATH_RULE_SECTION_SET.has(section);
 }
 
 function sectionDescription(section: PolicyConfigSection): string {

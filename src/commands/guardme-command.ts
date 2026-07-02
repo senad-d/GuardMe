@@ -741,8 +741,8 @@ function notify(ctx: GuardMeCommandContext, message: string, type: GuardMeNotifi
 
 function sanitizeNotificationText(message: string): string {
   return stripAnsiEscapes(message)
-    .replace(/\r\n?/g, "\n")
-    .replace(/[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/g, " ");
+    .replaceAll(/\r\n?/g, "\n")
+    .replaceAll(/[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/g, " ");
 }
 
 function policyConfigRules(config: GuardMePolicyConfig): AppendPolicyConfigRule[] {

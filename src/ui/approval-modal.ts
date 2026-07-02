@@ -1,5 +1,5 @@
 import type { PolicyDecision, PolicyRequest, UserDecision } from "../policy/action.ts";
-import { USER_DECISIONS } from "../policy/action.ts";
+import { isUserDecision } from "../policy/action.ts";
 import { fitCell, footerSegments, type ConfigFrameTheme } from "./config-frame.ts";
 import { renderMatchedRules, renderPolicySummary, type PolicySummaryLine } from "./render-policy-summary.ts";
 import { visibleWidth } from "./text.ts";
@@ -360,7 +360,7 @@ function wrapTextToWidth(text: string, width: number): readonly string[] {
 function wrapTextToVariableWidths(text: string, firstWidth: number, continuationWidth: number): readonly string[] {
   const safeFirstWidth = Math.max(1, firstWidth);
   const safeContinuationWidth = Math.max(1, continuationWidth);
-  let remaining = text.replace(/\s+/g, " ").trim();
+  let remaining = text.replaceAll(/\s+/g, " ").trim();
   if (remaining.length === 0) {
     return [""];
   }
@@ -467,7 +467,7 @@ function isEscape(data: string): boolean {
 }
 
 for (const choice of APPROVAL_CHOICES) {
-  if (!(USER_DECISIONS as readonly string[]).includes(choice.decision)) {
+  if (!isUserDecision(choice.decision)) {
     throw new Error(`Unknown GuardMe approval decision: ${choice.decision}`);
   }
 }

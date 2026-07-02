@@ -49,6 +49,7 @@
     "lint": "npm run typecheck && npm run check",
     "format:check": "node scripts/check-format.mjs",
     "test": "node --test test/*.test.mjs",
+    "coverage": "node scripts/coverage.mjs",
     "test:e2e:rpc": "node --test test/e2e/guardme-rpc.e2e.mjs",
     "test:e2e:tui": "node --test test/e2e/guardme-tui-capture.e2e.mjs",
     "test:e2e": "npm run test:e2e:rpc && npm run test:e2e:tui",

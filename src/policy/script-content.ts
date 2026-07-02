@@ -47,11 +47,8 @@ export interface ExtractScriptContentOptions {
 }
 
 const DEFAULT_MAX_SCRIPT_BYTES = 256 * 1024;
-const ANSI_SEQUENCE_START_CHARS = String.fromCharCode(0x1b, 0x9b);
-const ANSI_CONTROL_SEQUENCE_PATTERN = new RegExp(
-  `[${ANSI_SEQUENCE_START_CHARS}][[\\]()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]`,
-  "g",
-);
+const ANSI_ESCAPE = String.fromCodePoint(0x1b);
+const ANSI_CSI = String.fromCodePoint(0x9b);
 const SHELL_EXTENSIONS = new Set([".sh", ".bash", ".zsh", ".command", ".ksh"]);
 const CI_EXTENSIONS = new Set([".yml", ".yaml"]);
 const SHELL_CONTROL_ONLY = new Set([
@@ -182,8 +179,44 @@ function contentRequiresConfidentInspection(
 
 export function redactedCommandPreview(command: string, maxLength = 160): string {
   const normalized = normalizeCommand(command);
-  const redacted = redactSensitiveText(normalized).replace(ANSI_CONTROL_SEQUENCE_PATTERN, "");
+  const redacted = stripAnsiControlSequences(redactSensitiveText(normalized));
   return redacted.length <= maxLength ? redacted : `${redacted.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function stripAnsiControlSequences(value: string): string {
+  let output = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character !== ANSI_ESCAPE && character !== ANSI_CSI) {
+      output += character;
+      continue;
+    }
+
+    const endIndex = ansiControlSequenceEndIndex(value, index + 1);
+    if (endIndex === undefined) {
+      output += character;
+      continue;
+    }
+    index = endIndex;
+  }
+  return output;
+}
+
+function ansiControlSequenceEndIndex(value: string, startIndex: number): number | undefined {
+  let index = startIndex;
+  while (index < value.length && isAnsiSequenceParameterOrIntermediate(value[index] ?? "")) {
+    index += 1;
+  }
+  return index < value.length && isAnsiFinalByte(value[index] ?? "") ? index : undefined;
+}
+
+function isAnsiSequenceParameterOrIntermediate(character: string): boolean {
+  return character === "[" || character === "\\" || character === "]" || character === "(" || character === ")" || character === "#" || character === ";" || character === "?" || isAsciiDigit(character);
+}
+
+function isAnsiFinalByte(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return codePoint !== undefined && codePoint >= 0x40 && codePoint <= 0x7e;
 }
 
 function extractPackageJsonScripts(content: string, sourcePath: string | undefined): ScriptContentExtractionResult {
@@ -215,27 +248,45 @@ function extractPackageJsonScripts(content: string, sourcePath: string | undefin
 }
 
 function extractMakefileRecipes(content: string, sourcePath: string | undefined): readonly ExtractedScriptCommand[] {
-  return content.split(/\r?\n/).flatMap((line, index) => {
+  return splitLines(content).flatMap((line, index) => {
     if (!line.startsWith("\t")) {
       return [];
     }
-    const command = line.replace(/^\t[@+-]*/u, "").trim();
+    const command = trimMakefileRecipePrefix(line).trim();
     return shellLineLooksEvaluable(command) ? [commandRecord(command, index + 1, "makefile-recipe", "Makefile recipe", sourcePath)] : [];
   });
+}
+
+function trimMakefileRecipePrefix(line: string): string {
+  let index = 1;
+  while (index < line.length && isMakefileRecipeDecorator(line[index] ?? "")) {
+    index += 1;
+  }
+  return line.slice(index);
+}
+
+function isMakefileRecipeDecorator(character: string): boolean {
+  return character === "@" || character === "+" || character === "-";
 }
 
 function extractDockerfileRuns(content: string, sourcePath: string | undefined): readonly ExtractedScriptCommand[] {
   const logicalLines = joinContinuationLines(content);
   return logicalLines.flatMap((line) => {
-    const match = /^\s*RUN\s+(.+)$/iu.exec(line.text);
-    return match?.[1]
-      ? [commandRecord(match[1], line.lineStart, "dockerfile-run", "Dockerfile RUN", sourcePath, line.lineEnd)]
-      : [];
+    const command = dockerfileRunCommand(line.text);
+    return command ? [commandRecord(command, line.lineStart, "dockerfile-run", "Dockerfile RUN", sourcePath, line.lineEnd)] : [];
   });
 }
 
+function dockerfileRunCommand(line: string): string | undefined {
+  const trimmed = line.trimStart();
+  if (trimmed.slice(0, 3).toLowerCase() !== "run" || !isScriptWhitespace(trimmed[3] ?? "")) {
+    return undefined;
+  }
+  return trimmed.slice(4).trimStart();
+}
+
 function extractCiRunCommands(content: string, sourcePath: string | undefined): readonly ExtractedScriptCommand[] {
-  const lines = content.split(/\r?\n/);
+  const lines = splitLines(content);
   const commands: ExtractedScriptCommand[] = [];
   let index = 0;
 
@@ -254,13 +305,12 @@ function extractCiRunCommandAtLine(
   sourcePath: string | undefined,
 ): { readonly commands: readonly ExtractedScriptCommand[]; readonly nextIndex: number } {
   const line = lines[index] ?? "";
-  const match = /^(\s*)(?:-\s*)?run:\s*(.*)$/u.exec(line);
-  if (!match) {
+  const header = parseCiRunHeader(line);
+  if (!header) {
     return { commands: [], nextIndex: index + 1 };
   }
 
-  const indent = match[1]?.length ?? 0;
-  const value = (match[2] ?? "").trim();
+  const { indent, value } = header;
   if (isYamlBlockScalarHeader(value)) {
     return extractCiRunBlock(lines, index, indent, sourcePath);
   }
@@ -271,6 +321,21 @@ function extractCiRunCommandAtLine(
     commands: [commandRecord(unquoteYamlScalar(value), index + 1, "ci-run", "CI run", sourcePath)],
     nextIndex: index + 1,
   };
+}
+
+function parseCiRunHeader(line: string): { readonly indent: number; readonly value: string } | undefined {
+  const indent = countLeadingSpaces(line);
+  let cursor = indent;
+  if (line[cursor] === "-") {
+    cursor += 1;
+    while (isScriptWhitespace(line[cursor] ?? "")) {
+      cursor += 1;
+    }
+  }
+  if (line.slice(cursor, cursor + 4) !== "run:") {
+    return undefined;
+  }
+  return { indent, value: line.slice(cursor + 4).trim() };
 }
 
 function extractCiRunBlock(
@@ -303,7 +368,7 @@ function extractShellScriptCommands(
   label = "shell script",
 ): readonly ExtractedScriptCommand[] {
   const commands: ExtractedScriptCommand[] = [];
-  const lines = content.split(/\r?\n/);
+  const lines = splitLines(content);
   const heredocRanges = findShellHeredocRanges(lines);
 
   for (const heredoc of heredocRanges) {
@@ -350,13 +415,10 @@ function findShellHeredocRanges(lines: readonly string[]): readonly ShellHeredoc
 }
 
 function parseShellHeredocRange(lines: readonly string[], index: number): ShellHeredocRange | undefined {
-  const line = lines[index] ?? "";
-  const match = /(?:^|\s)(?:bash|sh|zsh)\b[^\n]*<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/u.exec(line);
-  if (!match?.[1]) {
+  const marker = shellHeredocMarker(lines[index] ?? "");
+  if (!marker) {
     return undefined;
   }
-
-  const marker = match[1];
   const body: string[] = [];
   let bodyIndex = index + 1;
   while (bodyIndex < lines.length) {
@@ -368,6 +430,44 @@ function parseShellHeredocRange(lines: readonly string[], index: number): ShellH
     bodyIndex += 1;
   }
   return { marker, start: index + 1, bodyStart: index + 1, end: bodyIndex, body };
+}
+
+function shellHeredocMarker(line: string): string | undefined {
+  const heredocIndex = line.indexOf("<<");
+  if (heredocIndex < 0 || !lineStartsShellHeredoc(line.slice(0, heredocIndex))) {
+    return undefined;
+  }
+
+  let markerStart = heredocIndex + 2;
+  if (line[markerStart] === "-") {
+    markerStart += 1;
+  }
+  while (isScriptWhitespace(line[markerStart] ?? "")) {
+    markerStart += 1;
+  }
+  return readHeredocMarker(line, markerStart);
+}
+
+function lineStartsShellHeredoc(prefix: string): boolean {
+  return tokenizeShellCommand(prefix).some((token) => SHELL_HEREDOC_COMMANDS.has(basename(token).toLowerCase()));
+}
+
+const SHELL_HEREDOC_COMMANDS = new Set(["bash", "sh", "zsh"]);
+
+function readHeredocMarker(line: string, startIndex: number): string | undefined {
+  const quote = line[startIndex] === "\"" || line[startIndex] === "'" ? line[startIndex] : undefined;
+  let index = quote ? startIndex + 1 : startIndex;
+  const first = line[index] ?? "";
+  if (!isShellIdentifierStart(first)) {
+    return undefined;
+  }
+  let marker = first;
+  index += 1;
+  while (isShellIdentifierPart(line[index] ?? "")) {
+    marker += line[index];
+    index += 1;
+  }
+  return marker;
 }
 
 function commandRecord(
@@ -395,14 +495,14 @@ function joinContinuationLines(content: string): readonly { readonly text: strin
   const joined: { text: string; lineStart: number; lineEnd: number }[] = [];
   let current = "";
   let start = 1;
-  const lines = content.split(/\r?\n/);
+  const lines = splitLines(content);
 
   for (const [index, line] of lines.entries()) {
     const lineNumber = index + 1;
     if (current === "") {
       start = lineNumber;
     }
-    const trimmedEnd = line.replace(/\s+$/u, "");
+    const trimmedEnd = line.trimEnd();
     if (trimmedEnd.endsWith("\\")) {
       current += `${trimmedEnd.slice(0, -1)} `;
       continue;
@@ -422,18 +522,75 @@ function shellLineLooksEvaluable(line: string): boolean {
   if (line === "" || line.startsWith("#!")) {
     return false;
   }
-  const withoutLeadingDecorators = line.replace(/^[@+-]+/u, "").trim();
+  const withoutLeadingDecorators = trimLeadingShellDecorators(line).trim();
   if (withoutLeadingDecorators === "" || withoutLeadingDecorators.startsWith("#")) {
     return false;
   }
-  if (/^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:.|\s)*$/u.test(withoutLeadingDecorators) && !/[;&|`$()<>]/u.test(withoutLeadingDecorators)) {
+  if (isPlainShellAssignment(withoutLeadingDecorators) && !containsShellEvaluationOperator(withoutLeadingDecorators)) {
     return false;
   }
-  if (/^[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*\{?\s*$/u.test(withoutLeadingDecorators)) {
+  if (isShellFunctionDeclaration(withoutLeadingDecorators)) {
     return false;
   }
   const firstToken = tokenizeShellCommand(withoutLeadingDecorators)[0]?.toLowerCase();
   return firstToken ? !SHELL_CONTROL_ONLY.has(firstToken) : false;
+}
+
+function trimLeadingShellDecorators(line: string): string {
+  let index = 0;
+  while (line[index] === "@" || line[index] === "+" || line[index] === "-") {
+    index += 1;
+  }
+  return line.slice(index);
+}
+
+function isPlainShellAssignment(line: string): boolean {
+  const withoutExport = trimLeadingExportKeyword(line);
+  const equalsIndex = withoutExport.indexOf("=");
+  return equalsIndex > 0 && isShellIdentifier(withoutExport.slice(0, equalsIndex));
+}
+
+function trimLeadingExportKeyword(line: string): string {
+  if (!line.startsWith("export") || !isScriptWhitespace(line[6] ?? "")) {
+    return line;
+  }
+  return line.slice(6).trimStart();
+}
+
+function containsShellEvaluationOperator(value: string): boolean {
+  for (const character of value) {
+    if (SHELL_EVALUATION_OPERATORS.has(character)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const SHELL_EVALUATION_OPERATORS = new Set([";", "&", "|", "`", "$", "(", ")", "<", ">"]);
+
+function isShellFunctionDeclaration(line: string): boolean {
+  const openParenIndex = line.indexOf("(");
+  if (openParenIndex <= 0 || !isShellIdentifier(line.slice(0, openParenIndex).trim())) {
+    return false;
+  }
+  let cursor = openParenIndex + 1;
+  while (isScriptWhitespace(line[cursor] ?? "")) {
+    cursor += 1;
+  }
+  if (line[cursor] !== ")") {
+    return false;
+  }
+  cursor += 1;
+  while (isScriptWhitespace(line[cursor] ?? "")) {
+    cursor += 1;
+  }
+  if (line[cursor] === "{") {
+    cursor += 1;
+    while (isScriptWhitespace(line[cursor] ?? "")) {
+      cursor += 1;
+    }
+  }
+  return cursor === line.length;
 }
 
 function stripShellComment(line: string): string {
@@ -457,7 +614,7 @@ function stripShellComment(line: string): string {
       quote = undefined;
       continue;
     }
-    if (character === "#" && !quote && (index === 0 || /\s/u.test(line[index - 1] ?? ""))) {
+    if (character === "#" && !quote && (index === 0 || isScriptWhitespace(line[index - 1] ?? ""))) {
       return line.slice(0, index);
     }
   }
@@ -465,20 +622,28 @@ function stripShellComment(line: string): string {
 }
 
 function normalizeCommand(command: string): string {
-  return command.trim().replace(/\s+/g, " ");
+  return collapseWhitespace(command.trim());
 }
 
 function hasShellShebang(content: string): boolean {
-  const firstLine = content.split(/\r?\n/, 1)[0] ?? "";
-  return /^#!.*\b(?:ba|z|k)?sh\b/u.test(firstLine) || /^#!.*\benv\s+(?:ba|z|k)?sh\b/u.test(firstLine);
+  const firstLine = splitLines(content)[0] ?? "";
+  if (!firstLine.startsWith("#!")) {
+    return false;
+  }
+  const parts = splitWhitespace(firstLine.slice(2).trim());
+  const executable = basename(parts[0] ?? "").toLowerCase();
+  if (SHELL_EXECUTABLE_NAMES.has(executable)) {
+    return true;
+  }
+  return executable === "env" && SHELL_EXECUTABLE_NAMES.has(basename(parts[1] ?? "").toLowerCase());
 }
 
 function contentHasObviousCommandContext(content: string): boolean {
-  return /^\s*run:\s*(?:\||>|\S)/mu.test(content) || /^\s*RUN\s+\S/imu.test(content);
+  return splitLines(content).some((line) => ciRunLineHasValue(line) || dockerfileRunCommand(line) !== undefined);
 }
 
 function contentHasCiRunBlock(content: string): boolean {
-  return /^\s*run:\s*(?:\||>|\S)/mu.test(content);
+  return splitLines(content).some(ciRunLineHasValue);
 }
 
 function isShellPath(pathValue: string | undefined): boolean {
@@ -508,16 +673,56 @@ function findLineNumber(content: string, needle: string): number {
   if (index < 0) {
     return 1;
   }
-  return content.slice(0, index).split(/\r?\n/).length;
+  return countLineBreaksBefore(content, index) + 1;
+}
+
+function countLineBreaksBefore(value: string, endIndex: number): number {
+  let count = 0;
+  for (let index = 0; index < endIndex; index += 1) {
+    if (value[index] === "\n") {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function countLeadingSpaces(line: string): number {
-  return /^ */u.exec(line)?.[0].length ?? 0;
+  let count = 0;
+  while (line[count] === " ") {
+    count += 1;
+  }
+  return count;
 }
 
 function isYamlBlockScalarHeader(value: string): boolean {
-  const header = value.replace(/\s+#.*$/u, "").trim();
-  return /^[|>](?:[+-]?\d*|\d*[+-]?)$/u.test(header);
+  const header = stripYamlComment(value).trim();
+  if (header === "|" || header === ">") {
+    return true;
+  }
+  if (header[0] !== "|" && header[0] !== ">") {
+    return false;
+  }
+  return isYamlBlockScalarModifier(header.slice(1));
+}
+
+function stripYamlComment(value: string): string {
+  const commentIndex = value.indexOf("#");
+  if (commentIndex < 0) {
+    return value;
+  }
+  return commentIndex === 0 || isScriptWhitespace(value[commentIndex - 1] ?? "") ? value.slice(0, commentIndex) : value;
+}
+
+function isYamlBlockScalarModifier(value: string): boolean {
+  if (value === "" || value === "+" || value === "-") {
+    return true;
+  }
+  const sign = value[0] === "+" || value[0] === "-" ? value[0] : undefined;
+  const lastCharacter = value.at(-1);
+  const hasTrailingSign = lastCharacter === "+" || lastCharacter === "-";
+  const digits = sign ? value.slice(1) : value.slice(0, hasTrailingSign ? -1 : undefined);
+  const trailingSign = sign ? "" : value.slice(digits.length);
+  return (trailingSign === "" || trailingSign === "+" || trailingSign === "-") && (digits === "" || allAsciiDigits(digits));
 }
 
 function unquoteYamlScalar(value: string): string {
@@ -526,6 +731,83 @@ function unquoteYamlScalar(value: string): string {
   }
   return value;
 }
+
+function ciRunLineHasValue(line: string): boolean {
+  const header = parseCiRunHeader(line);
+  return header !== undefined && header.value !== "";
+}
+
+function splitLines(value: string): string[] {
+  return value.split("\n").map((line) => line.endsWith("\r") ? line.slice(0, -1) : line);
+}
+
+function splitWhitespace(value: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (const character of value) {
+    if (isScriptWhitespace(character)) {
+      if (current !== "") {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += character;
+  }
+  if (current !== "") {
+    parts.push(current);
+  }
+  return parts;
+}
+
+function collapseWhitespace(value: string): string {
+  return splitWhitespace(value).join(" ");
+}
+
+function isScriptWhitespace(character: string): boolean {
+  return character === " " || character === "\t" || character === "\n" || character === "\r" || character === "\f" || character === "\v";
+}
+
+function isShellIdentifier(value: string): boolean {
+  if (!isShellIdentifierStart(value[0] ?? "")) {
+    return false;
+  }
+  for (let index = 1; index < value.length; index += 1) {
+    if (!isShellIdentifierPart(value[index] ?? "")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isShellIdentifierStart(character: string): boolean {
+  return character === "_" || isAsciiLetter(character);
+}
+
+function isShellIdentifierPart(character: string): boolean {
+  return isShellIdentifierStart(character) || isAsciiDigit(character);
+}
+
+function allAsciiDigits(value: string): boolean {
+  for (const character of value) {
+    if (!isAsciiDigit(character)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isAsciiLetter(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return codePoint !== undefined && ((codePoint >= 65 && codePoint <= 90) || (codePoint >= 97 && codePoint <= 122));
+}
+
+function isAsciiDigit(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return codePoint !== undefined && codePoint >= 48 && codePoint <= 57;
+}
+
+const SHELL_EXECUTABLE_NAMES = new Set(["bash", "sh", "zsh", "ksh"]);
 
 function lineIsInsideRanges(lineNumber: number, ranges: readonly { readonly start: number; readonly end: number }[]): boolean {
   return ranges.some((range) => lineNumber >= range.start && lineNumber <= range.end);

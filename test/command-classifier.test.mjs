@@ -248,6 +248,15 @@ test("credential reads are detected without reading files", () => {
   assert.equal(listedCredentialGlob.primaryAction, "list");
 });
 
+test("credential detection handles long exact path boundaries", () => {
+  const longPrefix = "a".repeat(50000);
+
+  assert.equal(classifyShellCommand(`cat ${longPrefix}.env.example`).credentialAccess, false);
+  assert.equal(classifyShellCommand(`cat ${longPrefix}/.env`).credentialAccess, true);
+  assert.equal(classifyShellCommand(`python -c "print('${longPrefix}.env.example')"`).credentialAccess, false);
+  assert.equal(classifyShellCommand(`python -c "print('${longPrefix} .env*')"`).credentialAccess, true);
+});
+
 test("common shell commands map to read list write edit move and rename actions", () => {
   assert.equal(classifyShellCommand("ls src").primaryAction, "list");
   assert.equal(classifyShellCommand("find -name '*.ts'").targetPaths[0], ".");

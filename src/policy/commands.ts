@@ -164,6 +164,9 @@ const COPY_COMMANDS = new Set(["cp", "install"]);
 const ARCHIVE_COMMANDS = new Set(["7z", "bunzip2", "bzip2", "gunzip", "gzip", "tar", "unxz", "xz", "zip"]);
 const WRITE_COMMANDS = new Set(["mkdir", "touch"]);
 const METADATA_EDIT_COMMANDS = new Set(["chgrp", "chmod", "chown"]);
+const PATH_MUTATION_COMMANDS = new Set(["rm", "rmdir", "mv", "rename", "rsync"]);
+const FIND_EXEC_OPTIONS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+const DISKUTIL_HARD_DENIED_SUBCOMMANDS = new Set(["erasedisk", "partitiondisk", "zerodisk"]);
 const TEST_COMMANDS = new Set(["test", "[", "[["]);
 const SHELL_WRAPPERS = new Set(["sh", "bash", "zsh"]);
 const PREFIX_WRAPPERS = new Set(["command", "builtin", "noglob", "sudo", "doas"]);
@@ -202,8 +205,9 @@ const ANSI_C_SIMPLE_ESCAPES: Readonly<Record<string, string>> = {
   '"': '"',
   "?": "?",
 };
-const DYNAMIC_EXECUTABLE_NAME_PATTERN = /[$`*?[\]{}]/u;
-const CLOUD_CLI_LITERAL_PATTERN = /(?:^|[^a-z0-9_-])(?:aws|az|gcloud)(?:$|[^a-z0-9_-])/iu;
+const DYNAMIC_EXECUTABLE_NAME_CHARS = new Set(["$", "`", "*", "?", "[", "]", "{", "}"]);
+const LOCAL_SCRIPT_EXTENSIONS = new Set([".sh", ".bash", ".zsh", ".command", ".ksh"]);
+const PRIVATE_KEY_FILE_NAMES = new Set(["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"]);
 const CREDENTIAL_LITERAL_MARKERS = [
   ".npmrc",
   ".pypirc",
@@ -653,7 +657,7 @@ function readAnsiCEscape(command: string, backslashIndex: number): { readonly va
   if (escape === "U") {
     return readHexEscape(command, escapeIndex, 8);
   }
-  if (/[0-7]/u.test(escape)) {
+  if (isAsciiOctalDigit(escape)) {
     return readOctalEscape(command, escapeIndex);
   }
   if (escape === "c" && command[escapeIndex + 1]) {
@@ -666,7 +670,7 @@ function readAnsiCEscape(command: string, backslashIndex: number): { readonly va
 function readHexEscape(command: string, markerIndex: number, maxDigits: number): { readonly value: string; readonly endIndex: number } {
   let digits = "";
   let index = markerIndex + 1;
-  while (digits.length < maxDigits && /[0-9a-f]/iu.test(command[index] ?? "")) {
+  while (digits.length < maxDigits && isAsciiHexDigit(command[index] ?? "")) {
     digits += command[index];
     index += 1;
   }
@@ -679,7 +683,7 @@ function readHexEscape(command: string, markerIndex: number, maxDigits: number):
 function readOctalEscape(command: string, firstDigitIndex: number): { readonly value: string; readonly endIndex: number } {
   let digits = "";
   let index = firstDigitIndex;
-  while (digits.length < 3 && /[0-7]/u.test(command[index] ?? "")) {
+  while (digits.length < 3 && isAsciiOctalDigit(command[index] ?? "")) {
     digits += command[index];
     index += 1;
   }
@@ -1272,13 +1276,43 @@ function firstExecutableTokenIndex(tokens: readonly string[]): number | undefine
 }
 
 function normalizeCommandText(command: string): string {
-  return command.trim().replace(/\s+/g, " ");
+  return collapseWhitespace(command.trim());
 }
 
 function joinTokensAsRuleCommand(tokens: readonly string[]): string | undefined {
   return tokens.length > 0
-    ? tokens.map((token) => /[\s;&|<>$()`]/u.test(token) ? JSON.stringify(token) : token).join(" ")
+    ? tokens.map((token) => tokenNeedsShellQuoting(token) ? JSON.stringify(token) : token).join(" ")
     : undefined;
+}
+
+function tokenNeedsShellQuoting(token: string): boolean {
+  for (const character of token) {
+    if (isShellWhitespace(character) || SHELL_QUOTED_TOKEN_CHARS.has(character)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const SHELL_QUOTED_TOKEN_CHARS = new Set([";", "&", "|", "<", ">", "$", "(", ")", "`"]);
+
+function collapseWhitespace(value: string): string {
+  const parts: string[] = [];
+  let current = "";
+  for (const character of value) {
+    if (isShellWhitespace(character)) {
+      if (current !== "") {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += character;
+  }
+  if (current !== "") {
+    parts.push(current);
+  }
+  return parts.join(" ");
 }
 
 function withPriority(classified: CommandClassification): SegmentClassification {
@@ -1672,10 +1706,12 @@ function isLocalScriptExecutableToken(token: string): boolean {
   if (token.startsWith("./") || token.startsWith("../")) {
     return true;
   }
-  if (token.startsWith("/") || token.startsWith("~/")) {
-    return /\.(?:sh|bash|zsh|command|ksh)$/iu.test(token);
-  }
-  return /\.(?:sh|bash|zsh|command|ksh)$/iu.test(token);
+  return LOCAL_SCRIPT_EXTENSIONS.has(scriptExtension(token));
+}
+
+function scriptExtension(token: string): string {
+  const dotIndex = token.lastIndexOf(".");
+  return dotIndex < 0 ? "" : token.slice(dotIndex).toLowerCase();
 }
 
 function uniqueLocalScriptExecutions(executions: readonly LocalScriptExecution[]): readonly LocalScriptExecution[] {
@@ -1980,7 +2016,7 @@ function skipPrefixWrapper(commandName: string, tokens: readonly string[], start
 function findExecCommandText(args: readonly string[]): string | undefined {
   const commands: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    if (!["-exec", "-execdir", "-ok", "-okdir"].includes(args[index] ?? "")) {
+    if (!FIND_EXEC_OPTIONS.has(args[index] ?? "")) {
       continue;
     }
 
@@ -2128,7 +2164,7 @@ function firstNonOptionIndex(args: readonly string[], optionsWithValues: Readonl
 function joinTokensAsCommand(tokens: readonly string[]): string | undefined {
   const meaningfulTokens = tokens.filter((token) => token !== "{}" && token !== "{}+");
   return meaningfulTokens.length > 0
-    ? meaningfulTokens.map((token) => /[\s;&|<>$()`]/u.test(token) ? JSON.stringify(token) : token).join(" ")
+    ? meaningfulTokens.map((token) => tokenNeedsShellQuoting(token) ? JSON.stringify(token) : token).join(" ")
     : undefined;
 }
 
@@ -2161,7 +2197,7 @@ function inlineCodeSnippets(commandName: string | undefined, args: readonly stri
 }
 
 function hardDeniedDiskReason(commandName: string, args: readonly string[]): string | undefined {
-  if (commandName === "diskutil" && args.some((arg) => ["erasedisk", "partitiondisk", "zerodisk"].includes(arg.toLowerCase()))) {
+  if (commandName === "diskutil" && args.some((arg) => DISKUTIL_HARD_DENIED_SUBCOMMANDS.has(arg.toLowerCase()))) {
     return "Disk formatting/raw disk operation is denied.";
   }
   if (commandName.startsWith("mkfs") || commandName === "fdisk") {
@@ -2204,7 +2240,7 @@ function extractLikelyPathOperands(commandName: string | undefined, args: readon
     ARCHIVE_COMMANDS.has(commandName) ||
     WRITE_COMMANDS.has(commandName) ||
     METADATA_EDIT_COMMANDS.has(commandName) ||
-    ["rm", "rmdir", "mv", "rename", "rsync"].includes(commandName)
+    PATH_MUTATION_COMMANDS.has(commandName)
   ) {
     return argsWithoutRedirections.filter((arg) => !arg.startsWith("-") && !isShellControlToken(arg) && !arg.includes("="));
   }
@@ -2338,11 +2374,22 @@ function isReadLikeCommand(commandName: string): boolean {
 }
 
 function isDynamicExecutableName(commandName: string): boolean {
-  return DYNAMIC_EXECUTABLE_NAME_PATTERN.test(commandName);
+  for (const character of commandName) {
+    if (DYNAMIC_EXECUTABLE_NAME_CHARS.has(character)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function containsCloudCliLiteral(value: string): boolean {
-  return CLOUD_CLI_LITERAL_PATTERN.test(value);
+  const lower = value.toLowerCase();
+  for (const command of CLOUD_CLI_COMMANDS) {
+    if (containsDelimitedLiteral(lower, command)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function containsCredentialLikeLiteral(value: string): boolean {
@@ -2369,7 +2416,7 @@ function isCredentialLikePath(pathValue: string): boolean {
     lower.startsWith(".1password") ||
     lower.includes("~/.1password") ||
     lower.includes("/.1password") ||
-    /(^|\/)id_(rsa|dsa|ecdsa|ed25519)$/.test(lower) ||
+    isPrivateKeyFilePath(lower) ||
     lower.startsWith(".aws") ||
     lower.includes("~/.aws") ||
     lower.includes("/.aws") ||
@@ -2399,7 +2446,16 @@ function hasEnvGlobWildcard(segment: string): boolean {
 }
 
 function containsProtectedEnvPathReference(value: string): boolean {
-  return /(?:^|[\s'"`(<>=:,/])(?:\.\/)?\.env(?:$|[\s'"`)>:,/]|[*?[\]])/u.test(value.replaceAll("\\", "/"));
+  const normalized = value.replaceAll("\\", "/");
+  for (let index = 0; index < normalized.length; index += 1) {
+    if (!envReferenceStartsAt(normalized, index)) {
+      continue;
+    }
+    if (envReferenceHasLeftBoundary(normalized, index) && envReferenceHasRightBoundary(normalized, index + envReferenceLength(normalized, index))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isGitPath(pathValue: string): boolean {
@@ -2449,8 +2505,69 @@ function looksLikeSedExpression(value: string): boolean {
 }
 
 function isEnvAssignment(value: string): boolean {
-  return /^[A-Za-z_]\w*=.*/u.test(value);
+  const equalsIndex = value.indexOf("=");
+  return equalsIndex > 0 && isShellIdentifier(value.slice(0, equalsIndex));
 }
+
+function isShellIdentifier(value: string): boolean {
+  if (!isShellIdentifierStart(value[0] ?? "")) {
+    return false;
+  }
+  for (let index = 1; index < value.length; index += 1) {
+    if (!isShellIdentifierPart(value[index] ?? "")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isShellIdentifierStart(character: string): boolean {
+  return character === "_" || isAsciiLetter(character);
+}
+
+function isShellIdentifierPart(character: string): boolean {
+  return isShellIdentifierStart(character) || isAsciiDigit(character);
+}
+
+function containsDelimitedLiteral(value: string, literal: string): boolean {
+  let index = value.indexOf(literal);
+  while (index >= 0) {
+    if (isLiteralBoundary(value[index - 1]) && isLiteralBoundary(value[index + literal.length])) {
+      return true;
+    }
+    index = value.indexOf(literal, index + 1);
+  }
+  return false;
+}
+
+function isLiteralBoundary(character: string | undefined): boolean {
+  return character === undefined || (!isAsciiLetter(character) && !isAsciiDigit(character) && character !== "_" && character !== "-");
+}
+
+function isPrivateKeyFilePath(pathValue: string): boolean {
+  const segments = trimTrailingSlashes(pathValue).split("/").filter(Boolean);
+  const fileName = segments.at(-1) ?? "";
+  return PRIVATE_KEY_FILE_NAMES.has(fileName);
+}
+
+function envReferenceStartsAt(value: string, index: number): boolean {
+  return value.startsWith(".env", index) || value.startsWith("./.env", index);
+}
+
+function envReferenceLength(value: string, index: number): number {
+  return value.startsWith("./.env", index) ? 6 : 4;
+}
+
+function envReferenceHasLeftBoundary(value: string, index: number): boolean {
+  return index === 0 || ENV_REFERENCE_LEFT_BOUNDARY_CHARS.has(value[index - 1] ?? "") || isShellWhitespace(value[index - 1] ?? "");
+}
+
+function envReferenceHasRightBoundary(value: string, index: number): boolean {
+  return index >= value.length || ENV_REFERENCE_RIGHT_BOUNDARY_CHARS.has(value[index] ?? "") || isShellWhitespace(value[index] ?? "");
+}
+
+const ENV_REFERENCE_LEFT_BOUNDARY_CHARS = new Set(["'", "\"", "`", "(", "<", ">", "=", ":", ",", "/"]);
+const ENV_REFERENCE_RIGHT_BOUNDARY_CHARS = new Set(["'", "\"", "`", ")", ">", ":", ",", "/", "*", "?", "[", "]"]);
 
 function hasInlineLongOptionValue(arg: string, optionsWithValues: ReadonlySet<string>): boolean {
   for (const option of optionsWithValues) {
@@ -2477,6 +2594,16 @@ function isAsciiLetter(character: string): boolean {
 function isAsciiDigit(character: string): boolean {
   const codePoint = character.codePointAt(0);
   return codePoint !== undefined && codePoint >= 48 && codePoint <= 57;
+}
+
+function isAsciiOctalDigit(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return codePoint !== undefined && codePoint >= 48 && codePoint <= 55;
+}
+
+function isAsciiHexDigit(character: string): boolean {
+  const codePoint = character.codePointAt(0);
+  return codePoint !== undefined && ((codePoint >= 48 && codePoint <= 57) || (codePoint >= 65 && codePoint <= 70) || (codePoint >= 97 && codePoint <= 102));
 }
 
 function isShellLineSeparator(character: string): boolean {

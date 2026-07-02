@@ -57,6 +57,16 @@ test("redacted command previews remove terminal control sequences", () => {
   assert.equal(redactedCommandPreview(`printf ${csi}31mred${csi}0m`), "printf red");
 });
 
+test("script content parsing handles long assignment and heredoc inputs", () => {
+  const result = extractScriptCommandsFromContent({
+    path: "scripts/long.sh",
+    content: `#!/bin/sh\nTOKEN=${"a".repeat(50000)}\nhelper() {\n}\nbash <<'EOF'\necho heredoc\nEOF\n`,
+  });
+
+  assert.deepEqual(result.commands.map((command) => command.command), ["echo heredoc"]);
+  assert.deepEqual(result.commands.map((command) => command.context), ["heredoc-shell"]);
+});
+
 test("script content extraction reports uninspectable command-bearing content", () => {
   const binary = extractScriptCommandsFromContent({ path: "script.sh", content: "#!/bin/sh\n\0" });
   const unknownExecutable = extractScriptCommandsFromContent({ path: "bin/helper", content: "plain text", forceCommandBearing: true });
