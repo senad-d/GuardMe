@@ -365,87 +365,132 @@ export function validateGuardMeConfig(input: unknown, source: RuleSource): Confi
 }
 
 export function parsePolicyYaml(text: string, source: RuleSource): ParsePolicyYamlResult {
-  const diagnostics: PolicyDiagnostic[] = [];
-  const data: Record<string, unknown> = {};
-  let currentSection: PolicyConfigSection | undefined;
-  let currentItem: Record<string, unknown> | undefined;
+  const state: PolicyYamlParseState = {
+    data: {},
+    diagnostics: [],
+    source,
+  };
 
   for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
-    const lineNumber = index + 1;
-    const withoutComment = stripYamlComment(rawLine);
-    if (withoutComment.trim() === "") {
+    const line = parseYamlLine(rawLine, index);
+    if (!line) {
       continue;
     }
-
-    const indent = countLeadingSpaces(withoutComment);
-    if (indent === 0) {
-      currentSection = undefined;
-      currentItem = undefined;
-      const parsed = parseKeyValue(withoutComment.trim());
-      if (!parsed) {
-        diagnostics.push(lineDiagnostic("error", "yaml.expectedKeyValue", "Expected a top-level key/value pair.", source, lineNumber));
-        continue;
-      }
-
-      const [key, valueText] = parsed;
-      if (key === "version") {
-        data.version = parseScalar(valueText);
-        continue;
-      }
-
-      if (!(POLICY_CONFIG_SECTIONS as readonly string[]).includes(key)) {
-        data[key] = parseScalar(valueText);
-        continue;
-      }
-
-      if (valueText.trim() !== "") {
-        diagnostics.push(
-          lineDiagnostic("error", "yaml.sectionMustBeList", `Section '${key}' must be written as a YAML list.`, source, lineNumber),
-        );
-        data[key] = parseScalar(valueText);
-        continue;
-      }
-
-      currentSection = key as PolicyConfigSection;
-      data[currentSection] = [];
-      continue;
-    }
-
-    if (!currentSection) {
-      diagnostics.push(lineDiagnostic("error", "yaml.unexpectedIndent", "Unexpected indented line outside a section.", source, lineNumber));
-      continue;
-    }
-
-    const trimmed = withoutComment.trim();
-    if (indent === 2 && trimmed.startsWith("-")) {
-      currentItem = {};
-      (data[currentSection] as Record<string, unknown>[]).push(currentItem);
-      const itemText = trimmed.slice(1).trim();
-      if (itemText !== "") {
-        const parsedItem = parseKeyValue(itemText);
-        if (parsedItem) {
-          currentItem[parsedItem[0]] = parseScalar(parsedItem[1]);
-        } else {
-          currentItem.pattern = parseScalar(itemText);
-        }
-      }
-      continue;
-    }
-
-    if (indent >= 4 && currentItem) {
-      const parsed = parseKeyValue(trimmed);
-      if (!parsed) {
-        diagnostics.push(lineDiagnostic("error", "yaml.expectedRuleProperty", "Expected a rule property key/value pair.", source, lineNumber));
-        continue;
-      }
-      currentItem[parsed[0]] = parseScalar(parsed[1]);
-      continue;
-    }
-
-    diagnostics.push(lineDiagnostic("error", "yaml.invalidIndent", "Invalid indentation for GuardMe policy YAML.", source, lineNumber));
+    parsePolicyYamlLine(line, state);
   }
 
-  return { data, diagnostics };
+  return { data: state.data, diagnostics: state.diagnostics };
+}
+
+interface ParsedYamlLine {
+  readonly lineNumber: number;
+  readonly withoutComment: string;
+  readonly indent: number;
+  readonly trimmed: string;
+}
+
+interface PolicyYamlParseState {
+  readonly data: Record<string, unknown>;
+  readonly diagnostics: PolicyDiagnostic[];
+  readonly source: RuleSource;
+  currentSection?: PolicyConfigSection;
+  currentItem?: Record<string, unknown>;
+}
+
+function parseYamlLine(rawLine: string, index: number): ParsedYamlLine | undefined {
+  const withoutComment = stripYamlComment(rawLine);
+  const trimmed = withoutComment.trim();
+  if (trimmed === "") {
+    return undefined;
+  }
+  return {
+    lineNumber: index + 1,
+    withoutComment,
+    indent: countLeadingSpaces(withoutComment),
+    trimmed,
+  };
+}
+
+function parsePolicyYamlLine(line: ParsedYamlLine, state: PolicyYamlParseState): void {
+  if (line.indent === 0) {
+    parsePolicyYamlTopLevelLine(line, state);
+    return;
+  }
+  parsePolicyYamlNestedLine(line, state);
+}
+
+function parsePolicyYamlTopLevelLine(line: ParsedYamlLine, state: PolicyYamlParseState): void {
+  state.currentSection = undefined;
+  state.currentItem = undefined;
+  const parsed = parseKeyValue(line.trimmed);
+  if (!parsed) {
+    state.diagnostics.push(lineDiagnostic("error", "yaml.expectedKeyValue", "Expected a top-level key/value pair.", state.source, line.lineNumber));
+    return;
+  }
+
+  const [key, valueText] = parsed;
+  if (key === "version") {
+    state.data.version = parseScalar(valueText);
+    return;
+  }
+  if (!isPolicyConfigSection(key)) {
+    state.data[key] = parseScalar(valueText);
+    return;
+  }
+  if (valueText.trim() !== "") {
+    state.diagnostics.push(
+      lineDiagnostic("error", "yaml.sectionMustBeList", `Section '${key}' must be written as a YAML list.`, state.source, line.lineNumber),
+    );
+    state.data[key] = parseScalar(valueText);
+    return;
+  }
+  state.currentSection = key;
+  state.data[key] = [];
+}
+
+function parsePolicyYamlNestedLine(line: ParsedYamlLine, state: PolicyYamlParseState): void {
+  if (!state.currentSection) {
+    state.diagnostics.push(lineDiagnostic("error", "yaml.unexpectedIndent", "Unexpected indented line outside a section.", state.source, line.lineNumber));
+    return;
+  }
+  if (line.indent === 2 && line.trimmed.startsWith("-")) {
+    parsePolicyYamlListItem(line, state, state.currentSection);
+    return;
+  }
+  if (line.indent >= 4 && state.currentItem) {
+    parsePolicyYamlRuleProperty(line, state);
+    return;
+  }
+  state.diagnostics.push(lineDiagnostic("error", "yaml.invalidIndent", "Invalid indentation for GuardMe policy YAML.", state.source, line.lineNumber));
+}
+
+function parsePolicyYamlListItem(line: ParsedYamlLine, state: PolicyYamlParseState, section: PolicyConfigSection): void {
+  const currentItem: Record<string, unknown> = {};
+  state.currentItem = currentItem;
+  (state.data[section] as Record<string, unknown>[]).push(currentItem);
+  const itemText = line.trimmed.slice(1).trim();
+  if (itemText === "") {
+    return;
+  }
+  const parsedItem = parseKeyValue(itemText);
+  if (parsedItem) {
+    currentItem[parsedItem[0]] = parseScalar(parsedItem[1]);
+    return;
+  }
+  currentItem.pattern = parseScalar(itemText);
+}
+
+function parsePolicyYamlRuleProperty(line: ParsedYamlLine, state: PolicyYamlParseState): void {
+  const parsed = parseKeyValue(line.trimmed);
+  if (!parsed) {
+    state.diagnostics.push(lineDiagnostic("error", "yaml.expectedRuleProperty", "Expected a rule property key/value pair.", state.source, line.lineNumber));
+    return;
+  }
+  state.currentItem![parsed[0]] = parseScalar(parsed[1]);
+}
+
+function isPolicyConfigSection(value: string): value is PolicyConfigSection {
+  return (POLICY_CONFIG_SECTIONS as readonly string[]).includes(value);
 }
 
 function validateRuleSection(
@@ -592,7 +637,7 @@ function parseScalar(text: string): unknown {
     }
   }
   if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
-    return trimmed.slice(1, -1).replace(/''/g, "'");
+    return trimmed.slice(1, -1).replaceAll("''", "'");
   }
   if (/^-?\d+$/.test(trimmed)) {
     return Number.parseInt(trimmed, 10);
@@ -601,34 +646,61 @@ function parseScalar(text: string): unknown {
 }
 
 function stripYamlComment(line: string): string {
-  let quote: '"' | "'" | undefined;
+  const commentIndex = findYamlCommentIndex(line);
+  return commentIndex < 0 ? line : line.slice(0, commentIndex);
+}
+
+type YamlQuote = '"' | "'";
+
+interface YamlQuoteScanResult {
+  readonly quote: YamlQuote | undefined;
+  readonly skipNext: boolean;
+  readonly handled: boolean;
+}
+
+function findYamlCommentIndex(line: string): number {
+  let quote: YamlQuote | undefined;
   for (let index = 0; index < line.length; index += 1) {
-    const character = line[index];
-    if (quote === "'") {
-      if (character === "'" && line[index + 1] === "'") {
+    const quoted = scanQuotedYamlCharacter(line, index, quote);
+    if (quoted.handled) {
+      quote = quoted.quote;
+      if (quoted.skipNext) {
         index += 1;
-        continue;
-      }
-      if (character === "'") {
-        quote = undefined;
       }
       continue;
     }
-    if (quote === '"') {
-      if (character === '"' && !isEscapedDoubleQuote(line, index)) {
-        quote = undefined;
-      }
-      continue;
-    }
+
+    const character = line[index];
     if (character === "'" || character === '"') {
       quote = character;
       continue;
     }
-    if (character === "#" && (index === 0 || /\s/u.test(line[index - 1] ?? ""))) {
-      return line.slice(0, index);
+    if (isYamlCommentStart(line, index)) {
+      return index;
     }
   }
-  return line;
+  return -1;
+}
+
+function scanQuotedYamlCharacter(line: string, index: number, quote: YamlQuote | undefined): YamlQuoteScanResult {
+  if (!quote) {
+    return { quote, skipNext: false, handled: false };
+  }
+  const character = line[index];
+  if (quote === "'" && character === "'" && line[index + 1] === "'") {
+    return { quote, skipNext: true, handled: true };
+  }
+  if (character === quote && quote === "'") {
+    return { quote: undefined, skipNext: false, handled: true };
+  }
+  if (character === '"' && quote === '"' && !isEscapedDoubleQuote(line, index)) {
+    return { quote: undefined, skipNext: false, handled: true };
+  }
+  return { quote, skipNext: false, handled: true };
+}
+
+function isYamlCommentStart(line: string, index: number): boolean {
+  return line[index] === "#" && (index === 0 || /\s/u.test(line[index - 1] ?? ""));
 }
 
 function isEscapedDoubleQuote(line: string, quoteIndex: number): boolean {
@@ -640,7 +712,7 @@ function isEscapedDoubleQuote(line: string, quoteIndex: number): boolean {
 }
 
 function countLeadingSpaces(line: string): number {
-  const match = line.match(/^ */);
+  const match = /^ */u.exec(line);
   return match?.[0].length ?? 0;
 }
 

@@ -73,7 +73,7 @@ export function isCommandBearingPath(pathValue: string | undefined): boolean {
   if (!pathValue) {
     return false;
   }
-  const normalized = pathValue.replace(/\\/g, "/");
+  const normalized = pathValue.replaceAll("\\", "/");
   const name = basename(normalized).toLowerCase();
   const extension = extname(name);
   return (
@@ -88,70 +88,96 @@ export function isCommandBearingPath(pathValue: string | undefined): boolean {
 }
 
 export function extractScriptCommandsFromContent(options: ExtractScriptContentOptions): ScriptContentExtractionResult {
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_SCRIPT_BYTES;
   const sourcePath = options.path;
-  const byteLength = Buffer.byteLength(options.content, "utf8");
-  const pathCommandBearing = isCommandBearingPath(sourcePath);
-  const shebangShell = hasShellShebang(options.content);
-  const commandBearing = options.forceCommandBearing || options.shellHint || pathCommandBearing || shebangShell || contentHasObviousCommandContext(options.content);
-
-  if (!commandBearing) {
+  const detection = detectScriptContent(options);
+  if (!detection.commandBearing) {
     return { commandBearing: false, commands: [] };
   }
 
-  if (byteLength > maxBytes) {
-    return {
-      commandBearing: true,
-      commands: [],
-      uninspectable: {
-        reason: `Command-bearing content is too large to inspect safely (${byteLength} bytes).`,
-        context: "unknown-command-content",
-        ...(sourcePath ? { sourcePath } : {}),
-      },
-    };
+  const uninspectable = uninspectableScriptContent(options.content, options.maxBytes ?? DEFAULT_MAX_SCRIPT_BYTES, sourcePath);
+  if (uninspectable) {
+    return { commandBearing: true, commands: [], uninspectable };
   }
 
-  if (options.content.includes("\0")) {
-    return {
-      commandBearing: true,
-      commands: [],
-      uninspectable: {
-        reason: "Command-bearing content appears to be binary and cannot be inspected safely.",
-        context: "unknown-command-content",
-        ...(sourcePath ? { sourcePath } : {}),
-      },
-    };
-  }
-
-  const lowerName = basename(sourcePath ?? "").toLowerCase();
-  if (lowerName === "package.json") {
+  if (basename(sourcePath ?? "").toLowerCase() === "package.json") {
     return extractPackageJsonScripts(options.content, sourcePath);
   }
 
-  const commands: ExtractedScriptCommand[] = [];
-  if (isMakefilePath(sourcePath)) {
-    commands.push(...extractMakefileRecipes(options.content, sourcePath));
-  } else if (isDockerfilePath(sourcePath)) {
-    commands.push(...extractDockerfileRuns(options.content, sourcePath));
-  } else if (isCiWorkflowPath(sourcePath) || contentHasCiRunBlock(options.content)) {
-    commands.push(...extractCiRunCommands(options.content, sourcePath));
-  } else if (options.shellHint || shebangShell || isShellPath(sourcePath)) {
-    commands.push(...extractShellScriptCommands(options.content, sourcePath));
-  }
-
-  if (commands.length === 0 && options.forceCommandBearing && !shebangShell && !isShellPath(sourcePath) && !options.shellHint) {
+  const commands = extractRecognizedScriptCommands(options, detection.shebangShell);
+  if (contentRequiresConfidentInspection(options, sourcePath, detection.shebangShell, commands)) {
     return {
       commandBearing: true,
       commands: [],
-      uninspectable: {
-        reason: "Local executable content is not a recognized text script and cannot be inspected confidently.",
-        context: "unknown-command-content",
-        ...(sourcePath ? { sourcePath } : {}),
-      },
+      uninspectable: unknownCommandContent("Local executable content is not a recognized text script and cannot be inspected confidently.", sourcePath),
     };
   }
 
   return { commandBearing: true, commands };
+}
+
+interface ScriptContentDetection {
+  readonly commandBearing: boolean;
+  readonly shebangShell: boolean;
+}
+
+function detectScriptContent(options: ExtractScriptContentOptions): ScriptContentDetection {
+  const sourcePath = options.path;
+  const shebangShell = hasShellShebang(options.content);
+  return {
+    shebangShell,
+    commandBearing: Boolean(
+      options.forceCommandBearing ||
+        options.shellHint ||
+        isCommandBearingPath(sourcePath) ||
+        shebangShell ||
+        contentHasObviousCommandContext(options.content),
+    ),
+  };
+}
+
+function uninspectableScriptContent(content: string, maxBytes: number, sourcePath: string | undefined): UninspectableScriptContent | undefined {
+  const byteLength = Buffer.byteLength(content, "utf8");
+  if (byteLength > maxBytes) {
+    return unknownCommandContent(`Command-bearing content is too large to inspect safely (${byteLength} bytes).`, sourcePath);
+  }
+  if (content.includes("\0")) {
+    return unknownCommandContent("Command-bearing content appears to be binary and cannot be inspected safely.", sourcePath);
+  }
+  return undefined;
+}
+
+function unknownCommandContent(reason: string, sourcePath: string | undefined): UninspectableScriptContent {
+  return {
+    reason,
+    context: "unknown-command-content",
+    ...(sourcePath ? { sourcePath } : {}),
+  };
+}
+
+function extractRecognizedScriptCommands(options: ExtractScriptContentOptions, shebangShell: boolean): readonly ExtractedScriptCommand[] {
+  const sourcePath = options.path;
+  if (isMakefilePath(sourcePath)) {
+    return extractMakefileRecipes(options.content, sourcePath);
+  }
+  if (isDockerfilePath(sourcePath)) {
+    return extractDockerfileRuns(options.content, sourcePath);
+  }
+  if (isCiWorkflowPath(sourcePath) || contentHasCiRunBlock(options.content)) {
+    return extractCiRunCommands(options.content, sourcePath);
+  }
+  if (options.shellHint || shebangShell || isShellPath(sourcePath)) {
+    return extractShellScriptCommands(options.content, sourcePath);
+  }
+  return [];
+}
+
+function contentRequiresConfidentInspection(
+  options: ExtractScriptContentOptions,
+  sourcePath: string | undefined,
+  shebangShell: boolean,
+  commands: readonly ExtractedScriptCommand[],
+): boolean {
+  return commands.length === 0 && Boolean(options.forceCommandBearing) && !shebangShell && !isShellPath(sourcePath) && !options.shellHint;
 }
 
 export function redactedCommandPreview(command: string, maxLength = 160): string {
@@ -190,7 +216,7 @@ function extractPackageJsonScripts(content: string, sourcePath: string | undefin
 
 function extractMakefileRecipes(content: string, sourcePath: string | undefined): readonly ExtractedScriptCommand[] {
   return content.split(/\r?\n/).flatMap((line, index) => {
-    if (!/^\t/.test(line)) {
+    if (!line.startsWith("\t")) {
       return [];
     }
     const command = line.replace(/^\t[@+-]*/u, "").trim();
@@ -211,38 +237,62 @@ function extractDockerfileRuns(content: string, sourcePath: string | undefined):
 function extractCiRunCommands(content: string, sourcePath: string | undefined): readonly ExtractedScriptCommand[] {
   const lines = content.split(/\r?\n/);
   const commands: ExtractedScriptCommand[] = [];
+  let index = 0;
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const match = /^(\s*)(?:-\s*)?run:\s*(.*)$/u.exec(line);
-    if (!match) {
-      continue;
-    }
-
-    const indent = match[1]?.length ?? 0;
-    const value = (match[2] ?? "").trim();
-    if (isYamlBlockScalarHeader(value)) {
-      const block: string[] = [];
-      let endIndex = index;
-      for (let blockIndex = index + 1; blockIndex < lines.length; blockIndex += 1) {
-        const blockLine = lines[blockIndex] ?? "";
-        if (blockLine.trim() !== "" && countLeadingSpaces(blockLine) <= indent) {
-          break;
-        }
-        block.push(blockLine.slice(Math.min(blockLine.length, indent + 2)));
-        endIndex = blockIndex;
-      }
-      commands.push(...extractShellScriptCommands(block.join("\n"), sourcePath, index + 2, "ci-run", "CI run block"));
-      index = endIndex;
-      continue;
-    }
-
-    if (value !== "") {
-      commands.push(commandRecord(unquoteYamlScalar(value), index + 1, "ci-run", "CI run", sourcePath));
-    }
+  while (index < lines.length) {
+    const result = extractCiRunCommandAtLine(lines, index, sourcePath);
+    commands.push(...result.commands);
+    index = result.nextIndex;
   }
 
   return commands;
+}
+
+function extractCiRunCommandAtLine(
+  lines: readonly string[],
+  index: number,
+  sourcePath: string | undefined,
+): { readonly commands: readonly ExtractedScriptCommand[]; readonly nextIndex: number } {
+  const line = lines[index] ?? "";
+  const match = /^(\s*)(?:-\s*)?run:\s*(.*)$/u.exec(line);
+  if (!match) {
+    return { commands: [], nextIndex: index + 1 };
+  }
+
+  const indent = match[1]?.length ?? 0;
+  const value = (match[2] ?? "").trim();
+  if (isYamlBlockScalarHeader(value)) {
+    return extractCiRunBlock(lines, index, indent, sourcePath);
+  }
+  if (value === "") {
+    return { commands: [], nextIndex: index + 1 };
+  }
+  return {
+    commands: [commandRecord(unquoteYamlScalar(value), index + 1, "ci-run", "CI run", sourcePath)],
+    nextIndex: index + 1,
+  };
+}
+
+function extractCiRunBlock(
+  lines: readonly string[],
+  index: number,
+  indent: number,
+  sourcePath: string | undefined,
+): { readonly commands: readonly ExtractedScriptCommand[]; readonly nextIndex: number } {
+  const block: string[] = [];
+  let blockIndex = index + 1;
+  while (blockIndex < lines.length) {
+    const blockLine = lines[blockIndex] ?? "";
+    if (blockLine.trim() !== "" && countLeadingSpaces(blockLine) <= indent) {
+      break;
+    }
+    block.push(blockLine.slice(Math.min(blockLine.length, indent + 2)));
+    blockIndex += 1;
+  }
+  return {
+    commands: extractShellScriptCommands(block.join("\n"), sourcePath, index + 2, "ci-run", "CI run block"),
+    nextIndex: blockIndex,
+  };
 }
 
 function extractShellScriptCommands(
@@ -443,7 +493,7 @@ function isCiWorkflowPath(pathValue: string | undefined): boolean {
   if (!pathValue) {
     return false;
   }
-  const normalized = pathValue.replace(/\\/g, "/").toLowerCase();
+  const normalized = pathValue.replaceAll("\\", "/").toLowerCase();
   return CI_EXTENSIONS.has(extname(normalized)) && (normalized.includes(".github/workflows/") || normalized.includes("/workflows/"));
 }
 

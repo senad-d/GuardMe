@@ -248,6 +248,50 @@ function nextActionAfterSetupFlow(result: SetupPolicyFlowResult): ConfigAction |
   return result.next;
 }
 
+async function handleConfigAction(
+  ctx: GuardMeCommandContext,
+  action: ConfigAction,
+  sensibleDefaults: GuardMePolicyConfig,
+  successOptions: PolicyWriteSuccessOptions,
+): Promise<ConfigAction | "continue" | undefined> {
+  if (action.kind === "closed") {
+    return undefined;
+  }
+  if (action.kind === "custom") {
+    return nextActionAfterSetupFlow(await runCustomSetupFromConfig(ctx, action.mode, sensibleDefaults, successOptions));
+  }
+  if (action.kind === "append-rules") {
+    return nextActionAfterSetupFlow(await runAppendRulesFromConfig(ctx, action.scope, successOptions));
+  }
+  if (action.kind === "set-guardme-enabled") {
+    return (await setGuardMeEnabled(ctx, action.enabled)) ? "continue" : undefined;
+  }
+  if (action.kind === "set-insecure-edits") {
+    return (await setInsecureEdits(ctx, action.enabled)) ? "continue" : undefined;
+  }
+  if (action.kind === "set-project-trusted") {
+    return (await setProjectTrusted(ctx, action.trusted)) ? "continue" : undefined;
+  }
+  return handleConfigPolicyWriteAction(ctx, action, successOptions);
+}
+
+async function handleConfigPolicyWriteAction(
+  ctx: GuardMeCommandContext,
+  action: Extract<ConfigAction, { readonly kind: "write" }>,
+  successOptions: PolicyWriteSuccessOptions,
+): Promise<ConfigAction | "continue" | undefined> {
+  const written = await writeConfirmedSetupPolicy(ctx, action.setupConfig, action.plan);
+  if (!written) {
+    return undefined;
+  }
+  const snapshot = createConfigSnapshot(ctx);
+  const next = await showPolicyWriteSuccess(toConfigTuiContext(ctx), snapshot, action.plan, successOptions);
+  if (next.kind === "continue") {
+    return "continue";
+  }
+  return next.kind === "closed" ? undefined : next;
+}
+
 async function runCustomSetupFromConfig(
   ctx: GuardMeCommandContext,
   mode: SetupPolicyMode,
@@ -365,6 +409,39 @@ async function confirmPolicyWrite(
   }
 
   return "cancel";
+}
+
+function policyWriteAction(setupConfig: SetupWizardConfig, plan: SetupWritePlan): PolicyWriteAction {
+  if (setupConfig.writeMode === "append") {
+    return plan.existing ? "update" : "create";
+  }
+  if (plan.existing) {
+    return "overwrite";
+  }
+  return "create";
+}
+
+function policyWriteConfirmationMessage(setupConfig: SetupWizardConfig, plan: SetupWritePlan): string {
+  const scopeLabel = setupScopeLabel(plan.scope);
+  if (setupConfig.writeMode === "append") {
+    return plan.existing
+      ? `This will append ${setupConfig.summary} to the existing ${scopeLabel} file at ${plan.displayPath}.`
+      : `This will create ${scopeLabel} at ${plan.displayPath} with ${setupConfig.summary}.`;
+  }
+  if (plan.existing) {
+    return `This will overwrite the existing ${scopeLabel} file at ${plan.displayPath} with ${setupConfig.summary}.`;
+  }
+  return `This will create ${scopeLabel} at ${plan.displayPath} with ${setupConfig.summary}.`;
+}
+
+function setupPolicyKind(setupConfig: SetupWizardConfig): SetupWritePlan["policyKind"] {
+  if (setupConfig.writeMode === "append") {
+    return "append";
+  }
+  if (setupConfig.summary.includes("custom")) {
+    return "custom";
+  }
+  return "default";
 }
 
 async function createSetupWritePlan(ctx: GuardMeCommandContext, setupConfig: SetupWizardConfig): Promise<SetupWritePlanResult> {
@@ -526,6 +603,19 @@ async function reloadSessionState(ctx: GuardMeCommandContext, projectTrustedOver
   );
 }
 
+function snapshotGuardMeStatus(state: NonNullable<ReturnType<typeof getGuardMeSessionState>> | undefined): ConfigSnapshot["guardMe"] {
+  if (!state) {
+    return "inactive";
+  }
+  if (!state.enabled) {
+    return "off";
+  }
+  if (state.degraded) {
+    return "degraded";
+  }
+  return "active";
+}
+
 function createConfigSnapshot(ctx: Pick<GuardMeCommandContext, "cwd" | "homeDir" | "isProjectTrusted">): ConfigSnapshot {
   const currentState = getGuardMeSessionState();
   const state = currentState && resolve(currentState.cwd) === resolve(ctx.cwd) ? currentState : undefined;
@@ -573,14 +663,18 @@ function renderLegacyStatusSummary(snapshot: ConfigSnapshot): string {
     `Warned fingerprints: ${snapshot.warnedFingerprints}`,
     `Settings: ${snapshot.settingsPath}`,
     renderLegacyPathsSummary(snapshot),
-    snapshot.diagnostics.length === 0
-      ? "Diagnostics: none"
-      : [
-          `Diagnostics: ${snapshot.diagnostics.length}`,
-          ...snapshot.diagnostics.slice(0, 8).map((diagnostic) => `- ${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}`),
-          ...(snapshot.diagnostics.length > 8 ? [`- … ${snapshot.diagnostics.length - 8} more`] : []),
-        ].join("\n"),
+    renderLegacyDiagnosticsSummary(snapshot),
   ].join("\n");
+}
+
+function renderLegacyDiagnosticsSummary(snapshot: ConfigSnapshot): string {
+  if (snapshot.diagnostics.length === 0) {
+    return "Diagnostics: none";
+  }
+  const visibleDiagnostics = snapshot.diagnostics.slice(0, 8).map((diagnostic) => `- ${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}`);
+  const hiddenDiagnosticCount = snapshot.diagnostics.length - visibleDiagnostics.length;
+  const overflow = hiddenDiagnosticCount > 0 ? [`- … ${hiddenDiagnosticCount} more`] : [];
+  return [`Diagnostics: ${snapshot.diagnostics.length}`, ...visibleDiagnostics, ...overflow].join("\n");
 }
 
 function renderLegacyPathsSummary(snapshot: ConfigSnapshot): string {

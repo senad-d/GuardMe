@@ -57,58 +57,89 @@ const PATH_SECTIONS: readonly PathRuleSection[] = [
 
 const COMMAND_SECTIONS: readonly CommandRuleSection[] = ["allowCommands", "denyCommands", "dangerousCommands"];
 
-const PROTECTION_PATH_SECTIONS: readonly PathRuleSection[] = [
+const PROTECTION_PATH_SECTIONS: ReadonlySet<PathRuleSection> = new Set([
   "denyPaths",
   "zeroAccessPaths",
   "readOnlyPaths",
   "noDeletePaths",
   "protectedCredentialPaths",
-];
+]);
 
 const DELETE_LIKE_ACTIONS = new Set(["delete", "move", "rename"]);
 const MUTATION_ACTIONS = new Set(["write", "edit", "delete", "move", "rename"]);
 const POLICY_ACTION_ORDER = new Map<PolicyAction, number>(POLICY_ACTIONS.map((action, index) => [action, index]));
 
 export function mergePolicyConfigs(sources: readonly PolicyConfigSource[]): MergePolicyResult {
-  const mutable = createMutableMergedConfig();
-  const diagnostics: PolicyDiagnostic[] = [];
-  const seenBySection = new Map<PolicyConfigSection, Set<string>>();
-  const existingProtections: SourcedGuardMePathRule[] = [];
+  const context: MergePolicyContext = {
+    mutable: createMutableMergedConfig(),
+    diagnostics: [],
+    seenBySection: new Map(),
+    existingProtections: [],
+  };
 
   for (const source of sources) {
-    for (const section of PATH_SECTIONS) {
-      const rules = source.config[section];
-      for (const [index, rule] of rules.entries()) {
-        const sourcedRule = sourcePathRule(section, rule, source, index);
-        if (source.kind === "local" && section === "allowPaths") {
-          const conflicts = existingProtections.filter((protection) => localAllowConflictsWithProtection(sourcedRule, protection));
-          for (const conflict of conflicts) {
-            diagnostics.push({
-              severity: "warning",
-              code: "merge.localAllowCannotOverrideProtection",
-              message: `Local allow rule '${sourcedRule.pattern}' cannot override ${conflict.source.kind} ${conflict.section} rule '${conflict.pattern}'. Deny/protection still wins.`,
-              source: sourcedRule.source,
-            });
-          }
-        }
-
-        if (appendUnique(mutable[section], sourcedRule, section, seenBySection)) {
-          if (PROTECTION_PATH_SECTIONS.includes(section)) {
-            existingProtections.push(sourcedRule);
-          }
-        }
-      }
-    }
-
-    for (const section of COMMAND_SECTIONS) {
-      const rules = source.config[section];
-      for (const [index, rule] of rules.entries()) {
-        appendUnique(mutable[section], sourceCommandRule(section, rule, source, index), section, seenBySection);
-      }
-    }
+    mergePathSectionsFromSource(source, context);
+    mergeCommandSectionsFromSource(source, context);
   }
 
-  return { config: mutable, diagnostics };
+  return { config: context.mutable, diagnostics: context.diagnostics };
+}
+
+interface MergePolicyContext {
+  readonly mutable: MutableMergedGuardMePolicyConfig;
+  readonly diagnostics: PolicyDiagnostic[];
+  readonly seenBySection: Map<PolicyConfigSection, Set<string>>;
+  readonly existingProtections: SourcedGuardMePathRule[];
+}
+
+function mergePathSectionsFromSource(source: PolicyConfigSource, context: MergePolicyContext): void {
+  for (const section of PATH_SECTIONS) {
+    for (const [index, rule] of source.config[section].entries()) {
+      mergePathRule(source, section, rule, index, context);
+    }
+  }
+}
+
+function mergePathRule(
+  source: PolicyConfigSource,
+  section: PathRuleSection,
+  rule: GuardMePathRule,
+  index: number,
+  context: MergePolicyContext,
+): void {
+  const sourcedRule: SourcedGuardMePathRule = sourceRule(section, rule, source, index);
+  reportLocalAllowProtectionConflicts(source, section, sourcedRule, context);
+  if (appendUnique(context.mutable[section], sourcedRule, section, context.seenBySection) && PROTECTION_PATH_SECTIONS.has(section)) {
+    context.existingProtections.push(sourcedRule);
+  }
+}
+
+function reportLocalAllowProtectionConflicts(
+  source: PolicyConfigSource,
+  section: PathRuleSection,
+  sourcedRule: SourcedGuardMePathRule,
+  context: MergePolicyContext,
+): void {
+  if (source.kind !== "local" || section !== "allowPaths") {
+    return;
+  }
+  for (const conflict of context.existingProtections.filter((protection) => localAllowConflictsWithProtection(sourcedRule, protection))) {
+    context.diagnostics.push({
+      severity: "warning",
+      code: "merge.localAllowCannotOverrideProtection",
+      message: `Local allow rule '${sourcedRule.pattern}' cannot override ${conflict.source.kind} ${conflict.section} rule '${conflict.pattern}'. Deny/protection still wins.`,
+      source: sourcedRule.source,
+    });
+  }
+}
+
+function mergeCommandSectionsFromSource(source: PolicyConfigSource, context: MergePolicyContext): void {
+  for (const section of COMMAND_SECTIONS) {
+    for (const [index, rule] of source.config[section].entries()) {
+      const sourcedRule: SourcedGuardMeRule = sourceRule(section, rule, source, index);
+      appendUnique(context.mutable[section], sourcedRule, section, context.seenBySection);
+    }
+  }
 }
 
 export function sourcePolicyConfig(kind: PolicyConfigSourceKind, config: GuardMePolicyConfig, path?: string): PolicyConfigSource {
@@ -142,25 +173,12 @@ interface MutableMergedGuardMePolicyConfig extends MergedGuardMePolicyConfig {
   readonly protectedCredentialPaths: SourcedGuardMePathRule[];
 }
 
-function sourcePathRule(
-  section: PathRuleSection,
-  rule: GuardMePathRule,
+function sourceRule<T extends GuardMeRule, TSection extends PolicyConfigSection>(
+  section: TSection,
+  rule: T,
   source: PolicyConfigSource,
   index: number,
-): SourcedGuardMePathRule {
-  return {
-    ...rule,
-    section,
-    source: ruleSource(source, index),
-  };
-}
-
-function sourceCommandRule(
-  section: CommandRuleSection,
-  rule: GuardMeRule,
-  source: PolicyConfigSource,
-  index: number,
-): SourcedGuardMeRule {
+): T & { readonly section: TSection; readonly source: RuleSource } {
   return {
     ...rule,
     section,

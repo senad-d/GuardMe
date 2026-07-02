@@ -295,23 +295,33 @@ async function existingSymlinkInPath(targetPath: string, scopeRoot: string, incl
       break;
     }
 
-    try {
-      const stats = await lstat(current);
-      if (stats.isSymbolicLink()) {
-        return current;
-      }
-      if (!stats.isDirectory() && !isTarget) {
-        return undefined;
-      }
-    } catch (error) {
-      if (isNodeError(error) && error.code === "ENOENT") {
-        return undefined;
-      }
-      throw error;
+    const inspection = await inspectSymlinkPathSegment(current, isTarget);
+    if (inspection === "symlink") {
+      return current;
+    }
+    if (inspection === "stop") {
+      return undefined;
     }
   }
 
   return undefined;
+}
+
+type SymlinkPathSegmentInspection = "safe" | "stop" | "symlink";
+
+async function inspectSymlinkPathSegment(path: string, isTarget: boolean): Promise<SymlinkPathSegmentInspection> {
+  try {
+    const stats = await lstat(path);
+    if (stats.isSymbolicLink()) {
+      return "symlink";
+    }
+    return !stats.isDirectory() && !isTarget ? "stop" : "safe";
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return "stop";
+    }
+    throw error;
+  }
 }
 
 function isPathInsideRoot(rootPath: string, childPath: string): boolean {

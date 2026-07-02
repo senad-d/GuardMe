@@ -125,61 +125,141 @@ function evaluateCommandSegments(
     return allowDecision(request, "No executable shell segment was found.", []);
   }
 
+  const result = collectCommandSegmentEvaluations(policy, request, command, segments);
+  if (result.failures.length === 0) {
+    return allowDecision(request, commandSegmentsAllowedReason(segments, commandText), dedupeMatchedRules(result.matchedAllows));
+  }
+
+  return commandSegmentFailureDecision(request, result.failures, warnedFingerprints);
+}
+
+interface CommandSegmentEvaluationResult {
+  readonly failures: readonly CommandSegmentFailure[];
+  readonly matchedAllows: readonly MatchedRule[];
+}
+
+interface CommandSegmentEvaluation {
+  readonly failure?: CommandSegmentFailure;
+  readonly matchedAllow?: MatchedRule;
+  readonly allowedSegment?: string;
+}
+
+function collectCommandSegmentEvaluations(
+  policy: MergedGuardMePolicyConfig,
+  request: PolicyRequest,
+  command: CommandClassification | undefined,
+  segments: readonly ExecutableCommandSegment[],
+): CommandSegmentEvaluationResult {
   const failures: CommandSegmentFailure[] = [];
   const matchedAllows: MatchedRule[] = [];
   const allowedSegments: string[] = [];
-
   for (const segment of segments) {
-    const exactAllow = firstMatchingExactSegmentCommandRule(policy.allowCommands, segment);
-    const wildcardOrExactAllow = firstMatchingSegmentCommandRule(policy.allowCommands, segment);
-    const dangerousRule = firstMatchingSegmentCommandRule(policy.dangerousCommands, segment);
-    const segmentRequiresExact = commandSegmentRequiresExactAllow(segment, Boolean(request.requiresExactCommandAllow));
-    const segmentRequest = commandSegmentPolicyRequest(request, segment);
-
-    if ((segment.dangerous || dangerousRule || segmentRequiresExact) && !exactAllow) {
-      const matchedRules = [
-        ...(dangerousRule ? [matchedRule(dangerousRule)] : []),
-        ...(segment.dangerous ? [hardDenyMatchedRule(segment.classification, "dangerousCommands")] : []),
-        ...(segmentRequiresExact && !segment.dangerous && !dangerousRule ? [commandSegmentExactAllowRequiredRule(segment)] : []),
-      ];
-      failures.push({
-        kind: "dangerous",
-        segment,
-        request: segmentRequest,
-        reason: commandSegmentDangerousReason(segment, dangerousRule, command, failures.length),
-        matchedRules,
-        risk: "dangerous",
-      });
+    const evaluation = evaluateCommandSegment(policy, request, command, segment, allowedSegments, failures.length);
+    if (evaluation.failure) {
+      failures.push(evaluation.failure);
       continue;
     }
-
-    const compatibleAllow = request.requiresExactCommandAllow ? exactAllow : wildcardOrExactAllow;
-    if (compatibleAllow) {
-      matchedAllows.push(matchedRule(compatibleAllow));
-      allowedSegments.push(segment.normalizedText);
-      continue;
+    if (evaluation.matchedAllow) {
+      matchedAllows.push(evaluation.matchedAllow);
     }
+    if (evaluation.allowedSegment) {
+      allowedSegments.push(evaluation.allowedSegment);
+    }
+  }
+  return { failures, matchedAllows };
+}
 
-    failures.push({
-      kind: "policy-missing",
-      segment,
-      request: segmentRequest,
-      reason: commandSegmentPolicyMissingReason(segment, allowedSegments),
-      matchedRules: [commandDefaultDenyRule(segment)],
-      risk: segment.risk === "dangerous" ? "dangerous" : "medium",
-    });
+function evaluateCommandSegment(
+  policy: MergedGuardMePolicyConfig,
+  request: PolicyRequest,
+  command: CommandClassification | undefined,
+  segment: ExecutableCommandSegment,
+  allowedSegments: readonly string[],
+  failureIndex: number,
+): CommandSegmentEvaluation {
+  const exactAllow = firstMatchingExactSegmentCommandRule(policy.allowCommands, segment);
+  const wildcardOrExactAllow = firstMatchingSegmentCommandRule(policy.allowCommands, segment);
+  const dangerousRule = firstMatchingSegmentCommandRule(policy.dangerousCommands, segment);
+  const segmentRequiresExact = commandSegmentRequiresExactAllow(segment, Boolean(request.requiresExactCommandAllow));
+
+  if (segmentRequiresApproval(segment, dangerousRule, segmentRequiresExact, exactAllow)) {
+    return { failure: dangerousSegmentFailure(request, segment, dangerousRule, command, segmentRequiresExact, failureIndex) };
   }
 
-  if (failures.length === 0) {
-    return allowDecision(
-      request,
-      segments.length === 1
-        ? `Shell segment '${redactSensitiveText(segments[0]?.normalizedText ?? commandText)}' is allowed by GuardMe command policy.`
-        : `All ${segments.length} shell command segments are allowed by GuardMe command policy.`,
-      dedupeMatchedRules(matchedAllows),
-    );
+  const compatibleAllow = request.requiresExactCommandAllow ? exactAllow : wildcardOrExactAllow;
+  if (compatibleAllow) {
+    return { matchedAllow: matchedRule(compatibleAllow), allowedSegment: segment.normalizedText };
   }
 
+  return { failure: policyMissingSegmentFailure(request, segment, allowedSegments) };
+}
+
+function segmentRequiresApproval(
+  segment: ExecutableCommandSegment,
+  dangerousRule: SourcedGuardMeRule | undefined,
+  segmentRequiresExact: boolean,
+  exactAllow: SourcedGuardMeRule | undefined,
+): boolean {
+  return !exactAllow && (segment.dangerous || Boolean(dangerousRule) || segmentRequiresExact);
+}
+
+function dangerousSegmentFailure(
+  request: PolicyRequest,
+  segment: ExecutableCommandSegment,
+  dangerousRule: SourcedGuardMeRule | undefined,
+  command: CommandClassification | undefined,
+  segmentRequiresExact: boolean,
+  failureIndex: number,
+): CommandSegmentFailure {
+  return {
+    kind: "dangerous",
+    segment,
+    request: commandSegmentPolicyRequest(request, segment),
+    reason: commandSegmentDangerousReason(segment, dangerousRule, command, failureIndex),
+    matchedRules: dangerousSegmentMatchedRules(segment, dangerousRule, segmentRequiresExact),
+    risk: "dangerous",
+  };
+}
+
+function dangerousSegmentMatchedRules(
+  segment: ExecutableCommandSegment,
+  dangerousRule: SourcedGuardMeRule | undefined,
+  segmentRequiresExact: boolean,
+): readonly MatchedRule[] {
+  return [
+    ...(dangerousRule ? [matchedRule(dangerousRule)] : []),
+    ...(segment.dangerous ? [hardDenyMatchedRule(segment.classification, "dangerousCommands")] : []),
+    ...(segmentRequiresExact && !segment.dangerous && !dangerousRule ? [commandSegmentExactAllowRequiredRule(segment)] : []),
+  ];
+}
+
+function policyMissingSegmentFailure(
+  request: PolicyRequest,
+  segment: ExecutableCommandSegment,
+  allowedSegments: readonly string[],
+): CommandSegmentFailure {
+  return {
+    kind: "policy-missing",
+    segment,
+    request: commandSegmentPolicyRequest(request, segment),
+    reason: commandSegmentPolicyMissingReason(segment, allowedSegments),
+    matchedRules: [commandDefaultDenyRule(segment)],
+    risk: segment.risk === "dangerous" ? "dangerous" : "medium",
+  };
+}
+
+function commandSegmentsAllowedReason(segments: readonly ExecutableCommandSegment[], commandText: string): string {
+  if (segments.length === 1) {
+    return `Shell segment '${redactSensitiveText(segments[0]?.normalizedText ?? commandText)}' is allowed by GuardMe command policy.`;
+  }
+  return `All ${segments.length} shell command segments are allowed by GuardMe command policy.`;
+}
+
+function commandSegmentFailureDecision(
+  request: PolicyRequest,
+  failures: readonly CommandSegmentFailure[],
+  warnedFingerprints: ReadonlySet<string> | undefined,
+): PolicyDecision {
   const selectedFailure = selectHighestRiskSegmentFailure(failures);
   const reason = appendAdditionalFailureSummary(selectedFailure.reason, selectedFailure, failures);
   if (selectedFailure.kind === "dangerous") {
@@ -191,7 +271,6 @@ function evaluateCommandSegments(
       request.reasonCode ?? "dangerous-command",
     );
   }
-
   return policyMissingCommandDecision(
     { ...selectedFailure.request, policyMissingReason: reason },
     selectedFailure.segment.classification,
@@ -316,7 +395,8 @@ function firstCredentialLikePathDenial(
 }
 
 function formatProtectedRuleReason(rule: MatchedRule, reason: string): string {
-  return `Protected by GuardMe: ${rule.category}${rule.pattern ? ` ${rule.pattern}` : ""} -> ${reason}\nNote: Try using the tool when one is available that matches the command intent.`;
+  const patternLabel = rule.pattern ? ` ${rule.pattern}` : "";
+  return `Protected by GuardMe: ${rule.category}${patternLabel} -> ${reason}\nNote: Try using the tool when one is available that matches the command intent.`;
 }
 
 function firstHardPathDenial(
@@ -475,10 +555,15 @@ function commandSegmentDangerousReason(
 
 function commandSegmentPolicyMissingReason(segment: ExecutableCommandSegment, allowedSegments: readonly string[]): string {
   const segmentLabel = redactSensitiveText(segment.normalizedText);
-  const allowedSummary = allowedSegments.length > 0
-    ? ` Previously allowed segment${allowedSegments.length === 1 ? "" : "s"}: ${allowedSegments.map(redactSensitiveText).join(", ")}.`
-    : "";
-  return `No allowCommands rule matches shell segment '${segmentLabel}'. GuardMe blocks unclassified shell command segments by default.${allowedSummary}`;
+  return `No allowCommands rule matches shell segment '${segmentLabel}'. GuardMe blocks unclassified shell command segments by default.${allowedSegmentsSummary(allowedSegments)}`;
+}
+
+function allowedSegmentsSummary(allowedSegments: readonly string[]): string {
+  if (allowedSegments.length === 0) {
+    return "";
+  }
+  const suffix = allowedSegments.length === 1 ? "" : "s";
+  return ` Previously allowed segment${suffix}: ${allowedSegments.map(redactSensitiveText).join(", ")}.`;
 }
 
 function commandDefaultDenyRule(segment: ExecutableCommandSegment): MatchedRule {
@@ -571,7 +656,7 @@ export function commandGlobToRegExp(pattern: string): RegExp {
     source += escapeRegExp(character);
   }
   if (optionalTrailingArguments) {
-    source += "(?:\\s+.*)?";
+    source += String.raw`(?:\s+.*)?`;
   }
   return new RegExp(`^${source}$`);
 }
@@ -701,39 +786,50 @@ function coachableDecision(options: {
 
 function credentialLikePathPattern(path: NormalizedPolicyPath): string | undefined {
   for (const candidate of credentialPathCandidates(path)) {
-    const basename = candidate.split("/").pop() ?? candidate;
-    if (isProtectedEnvPathCandidate(candidate)) {
-      return basename === ".env" ? ".env" : ".env glob";
-    }
-    if (basename.startsWith(".npmrc") || basename.startsWith(".pypirc") || basename.startsWith(".netrc")) {
-      return basename;
-    }
-    if (hasPathSegmentPrefix(candidate, ".ssh")) {
-      return ".ssh";
-    }
-    if (hasPathSegmentPrefix(candidate, ".gnupg")) {
-      return ".gnupg";
-    }
-    if (hasPathSegmentPrefix(candidate, ".1password")) {
-      return ".1password";
-    }
-    if (hasPathSegmentPrefix(candidate, ".aws")) {
-      return ".aws";
-    }
-    if (hasPathSegmentPrefix(candidate, ".azure")) {
-      return ".azure";
-    }
-    if (candidate.includes("/.config/gcloud") || candidate.startsWith(".config/gcloud")) {
-      return ".config/gcloud";
-    }
-    if (candidate.endsWith("/.docker/config.json") || candidate === ".docker/config.json") {
-      return ".docker/config.json";
-    }
-    if (/(credential|secret|token)/u.test(basename)) {
-      return "credential-like filename";
+    const pattern = credentialCandidatePattern(candidate);
+    if (pattern) {
+      return pattern;
     }
   }
   return undefined;
+}
+
+const CREDENTIAL_BASENAME_PREFIXES = [".npmrc", ".pypirc", ".netrc"] as const;
+const CREDENTIAL_SEGMENT_PREFIXES = [".ssh", ".gnupg", ".1password", ".aws", ".azure"] as const;
+
+function credentialCandidatePattern(candidate: string): string | undefined {
+  const basename = candidate.split("/").pop() ?? candidate;
+  return envCredentialPattern(candidate, basename)
+    ?? basenameCredentialPattern(basename)
+    ?? segmentCredentialPattern(candidate)
+    ?? cloudConfigCredentialPattern(candidate)
+    ?? keywordCredentialPattern(basename);
+}
+
+function envCredentialPattern(candidate: string, basename: string): string | undefined {
+  if (!isProtectedEnvPathCandidate(candidate)) {
+    return undefined;
+  }
+  return basename === ".env" ? ".env" : ".env glob";
+}
+
+function basenameCredentialPattern(basename: string): string | undefined {
+  return CREDENTIAL_BASENAME_PREFIXES.find((prefix) => basename.startsWith(prefix)) ? basename : undefined;
+}
+
+function segmentCredentialPattern(candidate: string): string | undefined {
+  return CREDENTIAL_SEGMENT_PREFIXES.find((prefix) => hasPathSegmentPrefix(candidate, prefix));
+}
+
+function cloudConfigCredentialPattern(candidate: string): string | undefined {
+  if (candidate.includes("/.config/gcloud") || candidate.startsWith(".config/gcloud")) {
+    return ".config/gcloud";
+  }
+  return candidate.endsWith("/.docker/config.json") || candidate === ".docker/config.json" ? ".docker/config.json" : undefined;
+}
+
+function keywordCredentialPattern(basename: string): string | undefined {
+  return /(credential|secret|token)/u.test(basename) ? "credential-like filename" : undefined;
 }
 
 function credentialPathCandidates(path: NormalizedPolicyPath): readonly string[] {

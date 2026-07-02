@@ -75,5 +75,9 @@ export function formatGuardMeStatus(state: GuardMeSessionState): string | undefi
     return `🛡️ degraded (${diagnosticCount} diagnostic${diagnosticCount === 1 ? "" : "s"})`;
   }
   const prefix = state.insecureEdits ? "🛡️ insecure edits" : "🛡️";
-  return warningCount > 0 ? `${prefix} (${warningCount} warning${warningCount === 1 ? "" : "s"})` : prefix;
+  if (warningCount === 0) {
+    return prefix;
+  }
+  const suffix = warningCount === 1 ? "" : "s";
+  return `${prefix} (${warningCount} warning${suffix})`;
 }

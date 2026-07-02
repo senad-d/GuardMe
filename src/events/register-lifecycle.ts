@@ -7,7 +7,6 @@ import { loadWarningState } from "../state/warnings.ts";
 import {
   clearGuardMeSessionState,
   formatGuardMeStatus,
-  getGuardMeSessionState,
   setGuardMeSessionState,
   type GuardMeSessionState,
 } from "./session-store.ts";
@@ -77,4 +76,4 @@ export function stopGuardMeSession(ctx: Pick<GuardMeLifecycleContext, "ui">): vo
   ctx.ui.setStatus(EXTENSION_STATUS_KEY, undefined);
 }
 
-export { getGuardMeSessionState };
+export { getGuardMeSessionState } from "./session-store.ts";

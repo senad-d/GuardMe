@@ -48,6 +48,19 @@ export interface ToolCallBlockResult {
   readonly reason: string;
 }
 
+type ScriptInspectionSourceKind = "script-content" | "local-script";
+
+interface ScriptInspectionSource {
+  readonly sourceKind: ScriptInspectionSourceKind;
+  readonly sourcePath: string | undefined;
+  readonly snippetLabel: string;
+}
+
+interface ScriptContentInspectionOptions extends ScriptInspectionSource {
+  readonly shellHint?: boolean;
+  readonly allowCommandDefaultDeny?: boolean;
+}
+
 /** Register GuardMe tool-call enforcement handlers. */
 export function registerGuard(pi: ExtensionAPI): void {
   pi.on("tool_call", async (event, ctx) => evaluateGuardedToolCall(event, ctx));
@@ -297,13 +310,7 @@ async function evaluateScriptContentInspection(
   ctx: GuardedToolCallContext,
   parentRequest: PolicyRequest,
   inspection: ScriptContentExtractionResult,
-  source: {
-    readonly sourceKind: "script-content" | "local-script";
-    readonly sourcePath: string | undefined;
-    readonly snippetLabel: string;
-    readonly shellHint?: boolean;
-    readonly allowCommandDefaultDeny?: boolean;
-  },
+  source: ScriptContentInspectionOptions,
 ): Promise<ToolCallBlockResult | undefined> {
   if (!inspection.commandBearing) {
     return undefined;
@@ -427,14 +434,29 @@ async function reconstructedEditContent(input: Record<string, unknown>, request:
     if (oldText === undefined) {
       continue;
     }
-    const firstIndex = content.indexOf(oldText);
-    if (firstIndex < 0 || content.indexOf(oldText, firstIndex + oldText.length) >= 0) {
+    const editedContent = applyUniqueTextEdit(content, oldText, newText);
+    if (editedContent === undefined) {
       return undefined;
     }
-    content = `${content.slice(0, firstIndex)}${newText}${content.slice(firstIndex + oldText.length)}`;
+    content = editedContent;
   }
 
   return content;
+}
+
+function applyUniqueTextEdit(content: string, oldText: string, newText: string): string | undefined {
+  if (oldText === "") {
+    return undefined;
+  }
+  const firstIndex = content.indexOf(oldText);
+  if (firstIndex < 0) {
+    return undefined;
+  }
+  const searchStart = firstIndex + oldText.length;
+  if (content.slice(searchStart).includes(oldText)) {
+    return undefined;
+  }
+  return `${content.slice(0, firstIndex)}${newText}${content.slice(searchStart)}`;
 }
 
 const MAX_INSPECTABLE_SCRIPT_BYTES = 256 * 1024;
@@ -620,7 +642,7 @@ function packageJsonScriptName(command: ExtractedScriptCommand): string | undefi
 async function scriptCommandPolicyRequest(
   parentRequest: PolicyRequest,
   command: ExtractedScriptCommand,
-  source: { readonly sourceKind: "script-content" | "local-script"; readonly sourcePath: string | undefined; readonly snippetLabel: string },
+  source: ScriptInspectionSource,
   homeDir: string | undefined,
 ): Promise<
   | { readonly request: PolicyRequest; readonly commandClassification: ReturnType<typeof classifyShellCommand> }
@@ -659,7 +681,7 @@ async function scriptCommandPolicyRequest(
 
 function uninspectableContentRequest(
   parentRequest: PolicyRequest,
-  source: { readonly sourceKind: "script-content" | "local-script"; readonly sourcePath: string | undefined; readonly snippetLabel: string },
+  source: ScriptInspectionSource,
   reason: string,
 ): PolicyRequest {
   return {
@@ -728,7 +750,7 @@ function isCommandDefaultDenyDecision(decision: PolicyDecision): boolean {
 }
 
 function formatScriptContentBlockReason(
-  sourceKind: "script-content" | "local-script",
+  sourceKind: ScriptInspectionSourceKind,
   sourcePath: string | undefined,
   command: ExtractedScriptCommand,
   reason: string,
@@ -1158,32 +1180,51 @@ const MAX_PROTECTED_MUTATION_SCAN_DEPTH = 8;
 const MAX_PROTECTED_MUTATION_SCAN_ENTRIES = 4096;
 
 async function protectedMutationDescendantPaths(directoryPath: string): Promise<readonly string[]> {
-  const protectedPaths: string[] = [];
-  const queue: { readonly path: string; readonly depth: number }[] = [{ path: directoryPath, depth: 0 }];
-  let scannedEntries = 0;
+  const scan: ProtectedMutationScan = {
+    protectedPaths: [],
+    queue: [{ path: directoryPath, depth: 0 }],
+    scannedEntries: 0,
+  };
 
-  for (let index = 0; index < queue.length && scannedEntries < MAX_PROTECTED_MUTATION_SCAN_ENTRIES; index += 1) {
-    const current = queue[index];
-    if (!current) {
-      continue;
-    }
-    for (const entry of await readDirectoryDirents(current.path)) {
-      if (scannedEntries >= MAX_PROTECTED_MUTATION_SCAN_ENTRIES) {
-        break;
-      }
-      scannedEntries += 1;
-      const childPath = join(current.path, entry.name);
-      if (isProtectedMutationEntry(entry.name)) {
-        protectedPaths.push(childPath);
-        continue;
-      }
-      if (entry.isDirectory() && current.depth < MAX_PROTECTED_MUTATION_SCAN_DEPTH) {
-        queue.push({ path: childPath, depth: current.depth + 1 });
-      }
-    }
+  for (let index = 0; index < scan.queue.length && scan.scannedEntries < MAX_PROTECTED_MUTATION_SCAN_ENTRIES; index += 1) {
+    await scanProtectedMutationDirectory(scan.queue[index]!, scan);
   }
 
-  return [...new Set(protectedPaths)];
+  return [...new Set(scan.protectedPaths)];
+}
+
+interface ProtectedMutationScan {
+  readonly protectedPaths: string[];
+  readonly queue: { readonly path: string; readonly depth: number }[];
+  scannedEntries: number;
+}
+
+async function scanProtectedMutationDirectory(
+  current: { readonly path: string; readonly depth: number },
+  scan: ProtectedMutationScan,
+): Promise<void> {
+  for (const entry of await readDirectoryDirents(current.path)) {
+    if (scan.scannedEntries >= MAX_PROTECTED_MUTATION_SCAN_ENTRIES) {
+      break;
+    }
+    scan.scannedEntries += 1;
+    recordProtectedMutationEntry(current, entry, scan);
+  }
+}
+
+function recordProtectedMutationEntry(
+  current: { readonly path: string; readonly depth: number },
+  entry: Dirent<string>,
+  scan: ProtectedMutationScan,
+): void {
+  const childPath = join(current.path, entry.name);
+  if (isProtectedMutationEntry(entry.name)) {
+    scan.protectedPaths.push(childPath);
+    return;
+  }
+  if (entry.isDirectory() && current.depth < MAX_PROTECTED_MUTATION_SCAN_DEPTH) {
+    scan.queue.push({ path: childPath, depth: current.depth + 1 });
+  }
 }
 
 async function readDirectoryDirents(directoryPath: string): Promise<Dirent<string>[]> {
@@ -1276,7 +1317,7 @@ function isCredentialLikeDiscoveryPattern(pattern: string): boolean {
 
 function isProtectedEnvDiscoveryPattern(pattern: string): boolean {
   return pattern
-    .replace(/\\/g, "/")
+    .replaceAll("\\", "/")
     .split("/")
     .filter(Boolean)
     .some((segment) => segment === ".env" || (segment.startsWith(".env") && /[*?[\]]/u.test(segment)));

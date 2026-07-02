@@ -199,8 +199,49 @@ export async function appendPolicyConfigRules(
     };
   }
 
+  const preparedRules = prepareAppendRules(options.rules, source, loaded.diagnostics, path, !loaded.found);
+  if (!preparedRules.ok) {
+    return preparedRules.result;
+  }
+
+  const appendResult = appendRulesToConfig(
+    loaded.found ? loaded.config : createEmptyPolicyConfig(POLICY_VERSION),
+    preparedRules.rules,
+    options.rules.length - preparedRules.rules.length,
+  );
+  if (appendResult.addedRules.length === 0) {
+    return noAppendRulesResult(path, loaded.diagnostics, appendResult.skipped, !loaded.found);
+  }
+
+  const text = loaded.found ? await readFile(path, "utf8") : "";
+  const nextText = loaded.found && text.trim().length > 0
+    ? appendRulesToPolicyYamlText(text, appendResult.addedRules)
+    : renderPolicyConfigYaml(appendResult.config);
+  await writePolicyTextAtomically(path, nextText, { cwd: options.cwd, homeDir: options.homeDir, scope: options.scope });
+
+  return {
+    saved: true,
+    path,
+    diagnostics: loaded.diagnostics,
+    added: appendResult.addedRules.length,
+    skipped: appendResult.skipped,
+    created: !loaded.found,
+  };
+}
+
+type PreparedAppendRulesResult =
+  | { readonly ok: true; readonly rules: readonly AppendPolicyConfigRule[] }
+  | { readonly ok: false; readonly result: AppendPolicyConfigRulesResult };
+
+function prepareAppendRules(
+  rules: readonly AppendPolicyConfigRule[],
+  source: { readonly kind: "global" | "local"; readonly path: string },
+  diagnostics: readonly PolicyDiagnostic[],
+  path: string,
+  created: boolean,
+): PreparedAppendRulesResult {
   const normalizedRules: AppendPolicyConfigRule[] = [];
-  for (const entry of options.rules) {
+  for (const entry of rules) {
     const normalizedRule = normalizeAppendRule(entry.section, entry.rule);
     if (!normalizedRule) {
       continue;
@@ -208,21 +249,37 @@ export async function appendPolicyConfigRules(
     const secretDiagnostic = secretCommandRuleDiagnostic(entry.section, normalizedRule, source);
     if (secretDiagnostic) {
       return {
-        saved: false,
-        path,
-        diagnostics: [...loaded.diagnostics, secretDiagnostic],
-        added: 0,
-        skipped: 0,
-        created: !loaded.found,
-        reason: "Command contains secret-like values; add a sanitized policy rule manually.",
+        ok: false,
+        result: {
+          saved: false,
+          path,
+          diagnostics: [...diagnostics, secretDiagnostic],
+          added: 0,
+          skipped: 0,
+          created,
+          reason: "Command contains secret-like values; add a sanitized policy rule manually.",
+        },
       };
     }
     normalizedRules.push({ section: entry.section, rule: normalizedRule });
   }
+  return { ok: true, rules: normalizedRules };
+}
 
-  let config = loaded.found ? loaded.config : createEmptyPolicyConfig(POLICY_VERSION);
+interface AppendRulesToConfigResult {
+  readonly config: GuardMePolicyConfig;
+  readonly addedRules: readonly AppendPolicyConfigRule[];
+  readonly skipped: number;
+}
+
+function appendRulesToConfig(
+  initialConfig: GuardMePolicyConfig,
+  normalizedRules: readonly AppendPolicyConfigRule[],
+  initiallySkipped: number,
+): AppendRulesToConfigResult {
+  let config = initialConfig;
   const addedRules: AppendPolicyConfigRule[] = [];
-  let skipped = options.rules.length - normalizedRules.length;
+  let skipped = initiallySkipped;
   for (const entry of normalizedRules) {
     const nextConfig = appendRule(config, entry.section, entry.rule);
     if (nextConfig === config) {
@@ -232,32 +289,23 @@ export async function appendPolicyConfigRules(
     config = nextConfig;
     addedRules.push(entry);
   }
+  return { config, addedRules, skipped };
+}
 
-  if (addedRules.length === 0) {
-    return {
-      saved: false,
-      path,
-      diagnostics: loaded.diagnostics,
-      added: 0,
-      skipped,
-      created: !loaded.found,
-      reason: skipped > 0 ? "No new GuardMe rules to append; all submitted rules already exist." : "No GuardMe rules were submitted.",
-    };
-  }
-
-  const text = loaded.found ? await readFile(path, "utf8") : "";
-  const nextText = loaded.found && text.trim().length > 0
-    ? appendRulesToPolicyYamlText(text, addedRules)
-    : renderPolicyConfigYaml(config);
-  await writePolicyTextAtomically(path, nextText, { cwd: options.cwd, homeDir: options.homeDir, scope: options.scope });
-
+function noAppendRulesResult(
+  path: string,
+  diagnostics: readonly PolicyDiagnostic[],
+  skipped: number,
+  created: boolean,
+): AppendPolicyConfigRulesResult {
   return {
-    saved: true,
+    saved: false,
     path,
-    diagnostics: loaded.diagnostics,
-    added: addedRules.length,
+    diagnostics,
+    added: 0,
     skipped,
-    created: !loaded.found,
+    created,
+    reason: skipped > 0 ? "No new GuardMe rules to append; all submitted rules already exist." : "No GuardMe rules were submitted.",
   };
 }
 
@@ -361,7 +409,7 @@ function appendRulesToSectionText(
   const sectionIndex = findLastSectionIndex(lines, section);
 
   if (sectionIndex < 0) {
-    if (lines.length > 0 && lines[lines.length - 1]?.trim() !== "") {
+    if (lines.length > 0 && lines.at(-1)?.trim() !== "") {
       lines.push("");
     }
     lines.push(`${section}:`, ...renderedRules);
@@ -400,7 +448,7 @@ function renderRuleYamlLines(rule: GuardMeRule): string[] {
 
 function findLastSectionIndex(lines: readonly string[], section: PathRuleSection | CommandRuleSection): number {
   let foundIndex = -1;
-  const sectionPattern = new RegExp(`^${section}:\\s*(?:#.*)?$`);
+  const sectionPattern = new RegExp(String.raw`^${section}:\s*(?:#.*)?$`);
   for (const [index, line] of lines.entries()) {
     if (sectionPattern.test(line.trim())) {
       foundIndex = index;
@@ -584,23 +632,33 @@ async function existingSymlinkInPath(targetPath: string, scopeRoot: string, incl
       break;
     }
 
-    try {
-      const stats = await lstat(current);
-      if (stats.isSymbolicLink()) {
-        return current;
-      }
-      if (!stats.isDirectory() && !isTarget) {
-        return undefined;
-      }
-    } catch (error) {
-      if (isNodeError(error) && error.code === "ENOENT") {
-        return undefined;
-      }
-      throw error;
+    const inspection = await inspectSymlinkPathSegment(current, isTarget);
+    if (inspection === "symlink") {
+      return current;
+    }
+    if (inspection === "stop") {
+      return undefined;
     }
   }
 
   return undefined;
+}
+
+type SymlinkPathSegmentInspection = "safe" | "stop" | "symlink";
+
+async function inspectSymlinkPathSegment(path: string, isTarget: boolean): Promise<SymlinkPathSegmentInspection> {
+  try {
+    const stats = await lstat(path);
+    if (stats.isSymbolicLink()) {
+      return "symlink";
+    }
+    return !stats.isDirectory() && !isTarget ? "stop" : "safe";
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return "stop";
+    }
+    throw error;
+  }
 }
 
 function isPathInsideRoot(rootPath: string, childPath: string): boolean {
