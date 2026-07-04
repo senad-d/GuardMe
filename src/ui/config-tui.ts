@@ -4,6 +4,7 @@ import type { GuardMeStateRecord } from "../state/warnings.ts";
 import { SETUP_MODE_CHOICES, type SetupMode, type SetupScope, type SetupWizardConfig, setupConfigForMode, setupModeRows, setupScopeLabel } from "./setup-wizard.ts";
 import { fitCell, footerSegments, type ConfigFrameTheme, type FrameMainRow, type FrameSidebarItem, type FrameValue, renderGuardMeFrame } from "./config-frame.ts";
 import { formatDiagnostics, formatWarningDecisionRecords } from "./detail-formatters.ts";
+import { isBackspace, isDown, isEnter, isEscape, isPrintable, isQuit, isTab, isUp } from "./key-input.ts";
 import { visibleWidth } from "./text.ts";
 
 export type ConfigPane = "Setup" | "General" | "Policies" | "Rules";
@@ -139,6 +140,11 @@ interface SearchResult {
   readonly description?: string;
 }
 
+interface RenderCache {
+  key: string;
+  lines?: string[];
+}
+
 interface RenderPaneScreenOptions {
   readonly snapshot: ConfigSnapshot;
   readonly pane: ConfigPane;
@@ -181,6 +187,21 @@ interface ConfigPanelInputOptions {
   readonly openSetupActionForMode: (mode: SetupMode) => void;
   readonly clearFooterOnNavigation?: boolean;
   readonly handleRefresh?: () => void;
+}
+
+interface OpenSetupActionOptions {
+  readonly state: ConfigComponentState;
+  readonly rerender: () => void;
+  readonly done: (value: ConfigAction) => void;
+  readonly sensibleDefaults: GuardMePolicyConfig;
+  readonly createPlan: (setupConfig: SetupWizardConfig) => Promise<SetupWritePlanResult>;
+}
+
+interface GeneralToggleActionOptions {
+  readonly state: ConfigComponentState;
+  readonly snapshot: ConfigSnapshot;
+  readonly rerender: () => void;
+  readonly done: (value: ConfigAction) => void;
 }
 
 type ToggleConfirmAction = Extract<
@@ -380,6 +401,127 @@ function renderSimpleFrame(title: string, body: readonly string[], footer: strin
   ];
 }
 
+function createRenderCache(): RenderCache {
+  return { key: "" };
+}
+
+function invalidateRenderCache(cache: RenderCache): void {
+  cache.key = "";
+  cache.lines = undefined;
+}
+
+function requestCachedRender(cache: RenderCache, tui: { requestRender?: () => void }): void {
+  invalidateRenderCache(cache);
+  tui.requestRender?.();
+}
+
+function renderWithCache(cache: RenderCache, key: string, render: () => string[]): string[] {
+  if (cache.lines && cache.key === key) {
+    return cache.lines;
+  }
+  cache.key = key;
+  cache.lines = render();
+  return cache.lines;
+}
+
+function openSetupActionFromMode(options: OpenSetupActionOptions, mode: SetupMode): void {
+  if (mode === "cancel") {
+    options.done({ kind: "closed" });
+    return;
+  }
+  if (mode === "global-custom" || mode === "local-custom") {
+    options.done({ kind: "custom", mode });
+    return;
+  }
+  if (mode === "global-add-rule" || mode === "local-add-rule") {
+    options.done({ kind: "append-rules", scope: mode.startsWith("global") ? "global" : "local" });
+    return;
+  }
+
+  const setupConfig = setupConfigForMode(mode, options.sensibleDefaults);
+  if (!setupConfig) {
+    options.state.footerOverride = "Unable to prepare this setup option. No files were written.";
+    options.rerender();
+    return;
+  }
+
+  options.state.busy = true;
+  options.state.footerOverride = "Checking target policy file before confirmation…";
+  options.rerender();
+  void options.createPlan(setupConfig)
+    .then((result) => finishSetupPlanCheck(options, setupConfig, result))
+    .catch((error) => failSetupPlanCheck(options.state, options.rerender, error));
+}
+
+function finishSetupPlanCheck(
+  options: OpenSetupActionOptions,
+  setupConfig: SetupWizardConfig,
+  result: SetupWritePlanResult,
+): void {
+  options.state.busy = false;
+  if (!result.ok) {
+    options.state.footerOverride = result.reason;
+    options.rerender();
+    return;
+  }
+  openSetupWriteConfirm(options.state, setupConfig, result.plan);
+  options.rerender();
+}
+
+function failSetupPlanCheck(state: ConfigComponentState, rerender: () => void, error: unknown): void {
+  state.busy = false;
+  state.footerOverride = `Unable to check target policy file: ${formatConfigActionError(error)}`;
+  rerender();
+}
+
+function openSetupWriteConfirm(state: ConfigComponentState, setupConfig: SetupWizardConfig, plan: SetupWritePlan): void {
+  state.footerOverride = undefined;
+  state.confirm = { kind: "policy-write", setupConfig, plan, selectedIndex: 0 };
+  state.pane = "Setup";
+  state.sidebarIndex = SETUP_PANE_INDEX;
+  state.focus = "main";
+}
+
+function openGuardMeToggleAction(options: GeneralToggleActionOptions): void {
+  if (options.snapshot.guardMe === "off") {
+    options.done({ kind: "set-guardme-enabled", enabled: true });
+    return;
+  }
+  if (options.snapshot.guardMe === "inactive") {
+    options.state.footerOverride = "GuardMe session state is not initialized. Start a session before changing enforcement.";
+    options.rerender();
+    return;
+  }
+  openGeneralConfirm(options.state, { kind: "guardme-off", selectedIndex: 0 });
+  options.rerender();
+}
+
+function openInsecureEditsToggleAction(options: GeneralToggleActionOptions): void {
+  if (options.snapshot.guardMe === "inactive") {
+    options.state.footerOverride = "GuardMe session state is not initialized. Start a session before changing insecure edits.";
+    options.rerender();
+    return;
+  }
+  if (options.snapshot.insecureEdits) {
+    options.done({ kind: "set-insecure-edits", enabled: false });
+    return;
+  }
+  openGeneralConfirm(options.state, { kind: "insecure-edits", selectedIndex: 0 });
+  options.rerender();
+}
+
+function openProjectTrustToggleAction(options: GeneralToggleActionOptions): void {
+  openGeneralConfirm(options.state, { kind: "project-trust", trusted: !options.snapshot.projectTrusted, selectedIndex: 0 });
+  options.rerender();
+}
+
+function openGeneralConfirm(state: ConfigComponentState, confirm: Exclude<ConfirmState, PolicyWriteConfirmState>): void {
+  state.confirm = confirm;
+  state.pane = "General";
+  state.sidebarIndex = 0;
+  state.focus = "main";
+}
+
 function createConfigComponent(
   tui: { requestRender?: () => void },
   theme: ConfigTheme,
@@ -401,105 +543,15 @@ function createConfigComponent(
     searchIndex: 0,
     busy: false,
   };
-  let cachedKey = "";
-  let cachedLines: string[] | undefined;
+  const renderCache = createRenderCache();
+  const invalidate = () => invalidateRenderCache(renderCache);
+  const rerender = () => requestCachedRender(renderCache, tui);
 
-  const invalidate = () => {
-    cachedKey = "";
-    cachedLines = undefined;
-  };
-  const rerender = () => {
-    invalidate();
-    tui.requestRender?.();
-  };
-
-  const openConfirmForMode = (mode: SetupMode) => {
-    if (mode === "cancel") {
-      done({ kind: "closed" });
-      return;
-    }
-    if (mode === "global-custom" || mode === "local-custom") {
-      done({ kind: "custom", mode });
-      return;
-    }
-    if (mode === "global-add-rule" || mode === "local-add-rule") {
-      done({ kind: "append-rules", scope: mode.startsWith("global") ? "global" : "local" });
-      return;
-    }
-
-    const setupConfig = setupConfigForMode(mode, sensibleDefaults);
-    if (!setupConfig) {
-      state.footerOverride = "Unable to prepare this setup option. No files were written.";
-      rerender();
-      return;
-    }
-
-    state.busy = true;
-    state.footerOverride = "Checking target policy file before confirmation…";
-    rerender();
-    void createPlan(setupConfig)
-      .then((result) => {
-        state.busy = false;
-        if (!result.ok) {
-          state.footerOverride = result.reason;
-          rerender();
-          return;
-        }
-        state.footerOverride = undefined;
-        state.confirm = { kind: "policy-write", setupConfig, plan: result.plan, selectedIndex: 0 };
-        state.pane = "Setup";
-        state.sidebarIndex = SETUP_PANE_INDEX;
-        state.focus = "main";
-        rerender();
-      })
-      .catch((error) => {
-        state.busy = false;
-        state.footerOverride = `Unable to check target policy file: ${formatConfigActionError(error)}`;
-        rerender();
-      });
-  };
-
-  const openGuardMeToggle = () => {
-    if (snapshot.guardMe === "off") {
-      done({ kind: "set-guardme-enabled", enabled: true });
-      return;
-    }
-    if (snapshot.guardMe === "inactive") {
-      state.footerOverride = "GuardMe session state is not initialized. Start a session before changing enforcement.";
-      rerender();
-      return;
-    }
-    state.confirm = { kind: "guardme-off", selectedIndex: 0 };
-    state.pane = "General";
-    state.sidebarIndex = 0;
-    state.focus = "main";
-    rerender();
-  };
-
-  const openInsecureEditsToggle = () => {
-    if (snapshot.guardMe === "inactive") {
-      state.footerOverride = "GuardMe session state is not initialized. Start a session before changing insecure edits.";
-      rerender();
-      return;
-    }
-    if (snapshot.insecureEdits) {
-      done({ kind: "set-insecure-edits", enabled: false });
-      return;
-    }
-    state.confirm = { kind: "insecure-edits", selectedIndex: 0 };
-    state.pane = "General";
-    state.sidebarIndex = 0;
-    state.focus = "main";
-    rerender();
-  };
-
-  const openProjectTrustToggle = () => {
-    state.confirm = { kind: "project-trust", trusted: !snapshot.projectTrusted, selectedIndex: 0 };
-    state.pane = "General";
-    state.sidebarIndex = 0;
-    state.focus = "main";
-    rerender();
-  };
+  const openConfirmForMode = (mode: SetupMode) => openSetupActionFromMode({ state, rerender, done, sensibleDefaults, createPlan }, mode);
+  const toggleOptions = { state, snapshot, rerender, done };
+  const openGuardMeToggle = () => openGuardMeToggleAction(toggleOptions);
+  const openInsecureEditsToggle = () => openInsecureEditsToggleAction(toggleOptions);
+  const openProjectTrustToggle = () => openProjectTrustToggleAction(toggleOptions);
 
   const activateGeneralRow = createGeneralRowActivator(state, rerender, {
     openGuardMeToggle,
@@ -509,13 +561,7 @@ function createConfigComponent(
 
   return {
     render(width: number): string[] {
-      const key = JSON.stringify({ width, state });
-      if (cachedLines && cachedKey === key) {
-        return cachedLines;
-      }
-      cachedKey = key;
-      cachedLines = renderStateScreen({ snapshot, state, width, theme });
-      return cachedLines;
+      return renderWithCache(renderCache, JSON.stringify({ width, state }), () => renderStateScreen({ snapshot, state, width, theme }));
     },
     invalidate,
     handleInput(data: string): void {
@@ -545,25 +591,13 @@ function createStandaloneConfirmComponent(
   plan: SetupWritePlan,
 ): { render: (width: number) => string[]; invalidate: () => void; handleInput: (data: string) => void } {
   const confirm: ConfirmState = { kind: "policy-write", setupConfig, plan, selectedIndex: 0 };
-  let cachedWidth = 0;
-  let cachedLines: string[] | undefined;
-  const invalidate = () => {
-    cachedWidth = 0;
-    cachedLines = undefined;
-  };
-  const rerender = () => {
-    invalidate();
-    tui.requestRender?.();
-  };
+  const renderCache = createRenderCache();
+  const invalidate = () => invalidateRenderCache(renderCache);
+  const rerender = () => requestCachedRender(renderCache, tui);
 
   return {
     render(width: number): string[] {
-      if (cachedLines && cachedWidth === width) {
-        return cachedLines;
-      }
-      cachedWidth = width;
-      cachedLines = renderConfirmScreen(confirm, width, undefined, theme);
-      return cachedLines;
+      return renderWithCache(renderCache, String(width), () => renderConfirmScreen(confirm, width, undefined, theme));
     },
     invalidate,
     handleInput(data: string): void {
@@ -605,16 +639,9 @@ function createSuccessComponent(
     busy: false,
     footerOverride: policyWriteSuccessFooter(snapshot, plan),
   };
-  let cachedKey = "";
-  let cachedLines: string[] | undefined;
-  const invalidate = () => {
-    cachedKey = "";
-    cachedLines = undefined;
-  };
-  const rerender = () => {
-    invalidate();
-    tui.requestRender?.();
-  };
+  const renderCache = createRenderCache();
+  const invalidate = () => invalidateRenderCache(renderCache);
+  const rerender = () => requestCachedRender(renderCache, tui);
   const explainUnavailableAction = (message: string) => {
     state.footerOverride = `${message}. Press Esc/q to close this setup summary.`;
     rerender();
@@ -625,103 +652,30 @@ function createSuccessComponent(
       explainUnavailableAction("Setup changes are available from /guardme");
       return;
     }
-    if (mode === "cancel") {
-      done({ kind: "closed" });
-      return;
-    }
-    if (mode === "global-custom" || mode === "local-custom") {
-      done({ kind: "custom", mode });
-      return;
-    }
-    if (mode === "global-add-rule" || mode === "local-add-rule") {
-      done({ kind: "append-rules", scope: mode.startsWith("global") ? "global" : "local" });
-      return;
-    }
-
-    const setupConfig = setupConfigForMode(mode, options.sensibleDefaults);
-    if (!setupConfig) {
-      state.footerOverride = "Unable to prepare this setup option. No files were written.";
-      rerender();
-      return;
-    }
-
-    state.busy = true;
-    state.footerOverride = "Checking target policy file before confirmation…";
-    rerender();
-    void options.createPlan(setupConfig)
-      .then((result) => {
-        state.busy = false;
-        if (!result.ok) {
-          state.footerOverride = result.reason;
-          rerender();
-          return;
-        }
-        state.footerOverride = undefined;
-        state.confirm = { kind: "policy-write", setupConfig, plan: result.plan, selectedIndex: 0 };
-        state.pane = "Setup";
-        state.sidebarIndex = SETUP_PANE_INDEX;
-        state.focus = "main";
-        rerender();
-      })
-      .catch((error) => {
-        state.busy = false;
-        state.footerOverride = `Unable to check target policy file: ${formatConfigActionError(error)}`;
-        rerender();
-      });
+    openSetupActionFromMode({ state, rerender, done, sensibleDefaults: options.sensibleDefaults, createPlan: options.createPlan }, mode);
   };
 
+  const toggleOptions = { state, snapshot, rerender, done };
   const openGuardMeToggle = () => {
     if (!actionsEnabled) {
       explainUnavailableAction("GuardMe settings are available from /guardme");
       return;
     }
-    if (snapshot.guardMe === "off") {
-      done({ kind: "set-guardme-enabled", enabled: true });
-      return;
-    }
-    if (snapshot.guardMe === "inactive") {
-      state.footerOverride = "GuardMe session state is not initialized. Start a session before changing enforcement.";
-      rerender();
-      return;
-    }
-    state.confirm = { kind: "guardme-off", selectedIndex: 0 };
-    state.pane = "General";
-    state.sidebarIndex = 0;
-    state.focus = "main";
-    rerender();
+    openGuardMeToggleAction(toggleOptions);
   };
-
   const openInsecureEditsToggle = () => {
     if (!actionsEnabled) {
       explainUnavailableAction("Insecure edits settings are available from /guardme");
       return;
     }
-    if (snapshot.guardMe === "inactive") {
-      state.footerOverride = "GuardMe session state is not initialized. Start a session before changing insecure edits.";
-      rerender();
-      return;
-    }
-    if (snapshot.insecureEdits) {
-      done({ kind: "set-insecure-edits", enabled: false });
-      return;
-    }
-    state.confirm = { kind: "insecure-edits", selectedIndex: 0 };
-    state.pane = "General";
-    state.sidebarIndex = 0;
-    state.focus = "main";
-    rerender();
+    openInsecureEditsToggleAction(toggleOptions);
   };
-
   const openProjectTrustToggle = () => {
     if (!actionsEnabled) {
       explainUnavailableAction("Pi project trust changes are available from /guardme");
       return;
     }
-    state.confirm = { kind: "project-trust", trusted: !snapshot.projectTrusted, selectedIndex: 0 };
-    state.pane = "General";
-    state.sidebarIndex = 0;
-    state.focus = "main";
-    rerender();
+    openProjectTrustToggleAction(toggleOptions);
   };
 
   const activateGeneralRow = createGeneralRowActivator(state, rerender, {
@@ -732,19 +686,15 @@ function createSuccessComponent(
 
   return {
     render(width: number): string[] {
-      const key = JSON.stringify({ width, state });
-      if (cachedLines && cachedKey === key) {
-        return cachedLines;
-      }
-      cachedKey = key;
-      cachedLines = renderStateScreen({
-        snapshot,
-        state,
-        width,
-        theme,
-        paneOptions: successPaneOptions(state, snapshot, plan, actionsEnabled),
-      });
-      return cachedLines;
+      return renderWithCache(renderCache, JSON.stringify({ width, state }), () =>
+        renderStateScreen({
+          snapshot,
+          state,
+          width,
+          theme,
+          paneOptions: successPaneOptions(state, snapshot, plan, actionsEnabled),
+        }),
+      );
     },
     invalidate,
     handleInput(data: string): void {
@@ -2019,41 +1969,3 @@ function formatConfigActionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isUp(data: string): boolean {
-  return data === "\u001B[A" || data === "k";
-}
-
-function isDown(data: string): boolean {
-  return data === "\u001B[B" || data === "j";
-}
-
-function isEnter(data: string): boolean {
-  return data === "\r" || data === "\n";
-}
-
-function isEscape(data: string): boolean {
-  const normalized = data.toLowerCase();
-  return (
-    data === "\u001B" ||
-    normalized === "escape" ||
-    normalized === "esc" ||
-    /^\u001B\[27(?:;1)?(?::1)?u$/.test(data) ||
-    data === "\u001B[27;1;27~"
-  );
-}
-
-function isTab(data: string): boolean {
-  return data === "\t" || data === "tab";
-}
-
-function isBackspace(data: string): boolean {
-  return data === "\b" || data === "\u007F" || data === "backspace";
-}
-
-function isPrintable(data: string): boolean {
-  return data.length === 1 && data >= " " && data !== "\u007F";
-}
-
-function isQuit(data: string): boolean {
-  return data === "q" || data === "Q";
-}

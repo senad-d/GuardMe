@@ -1,6 +1,8 @@
 import { basename, dirname, join } from "node:path";
 
 import type { PolicyAction, RiskLevel } from "./action.ts";
+import { isAsciiDigit, isAsciiLetter, isShellIdentifier } from "./shell-identifiers.ts";
+import { collapseByCharacter } from "./text-utils.ts";
 
 export type CommandClassificationKind =
   | "hard-denied"
@@ -1297,22 +1299,7 @@ function tokenNeedsShellQuoting(token: string): boolean {
 const SHELL_QUOTED_TOKEN_CHARS = new Set([";", "&", "|", "<", ">", "$", "(", ")", "`"]);
 
 function collapseWhitespace(value: string): string {
-  const parts: string[] = [];
-  let current = "";
-  for (const character of value) {
-    if (isShellWhitespace(character)) {
-      if (current !== "") {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += character;
-  }
-  if (current !== "") {
-    parts.push(current);
-  }
-  return parts.join(" ");
+  return collapseByCharacter(value, isShellWhitespace);
 }
 
 function withPriority(classified: CommandClassification): SegmentClassification {
@@ -2517,26 +2504,6 @@ function isEnvAssignment(value: string): boolean {
   return equalsIndex > 0 && isShellIdentifier(value.slice(0, equalsIndex));
 }
 
-function isShellIdentifier(value: string): boolean {
-  if (!isShellIdentifierStart(value[0] ?? "")) {
-    return false;
-  }
-  for (let index = 1; index < value.length; index += 1) {
-    if (!isShellIdentifierPart(value[index] ?? "")) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function isShellIdentifierStart(character: string): boolean {
-  return character === "_" || isAsciiLetter(character);
-}
-
-function isShellIdentifierPart(character: string): boolean {
-  return isShellIdentifierStart(character) || isAsciiDigit(character);
-}
-
 function containsDelimitedLiteral(value: string, literal: string): boolean {
   let index = value.indexOf(literal);
   while (index >= 0) {
@@ -2592,16 +2559,6 @@ function hasShortOptionFlag(arg: string, flag: string): boolean {
   }
   const flags = arg.slice(1);
   return [...flags].every(isAsciiLetter) && flags.toLowerCase().includes(flag.toLowerCase());
-}
-
-function isAsciiLetter(character: string): boolean {
-  const codePoint = character.codePointAt(0);
-  return codePoint !== undefined && ((codePoint >= 65 && codePoint <= 90) || (codePoint >= 97 && codePoint <= 122));
-}
-
-function isAsciiDigit(character: string): boolean {
-  const codePoint = character.codePointAt(0);
-  return codePoint !== undefined && codePoint >= 48 && codePoint <= 57;
 }
 
 function isAsciiOctalDigit(character: string): boolean {

@@ -2,6 +2,8 @@ import { basename, extname } from "node:path";
 
 import { tokenizeShellCommand } from "./commands.ts";
 import { redactSensitiveText } from "./redact.ts";
+import { isAsciiDigit, isShellIdentifier, isShellIdentifierPart, isShellIdentifierStart } from "./shell-identifiers.ts";
+import { collapseByCharacter, splitByCharacter } from "./text-utils.ts";
 
 export type ScriptContentContext =
   | "shell-script"
@@ -753,50 +755,15 @@ function splitLines(value: string): string[] {
 }
 
 function splitWhitespace(value: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  for (const character of value) {
-    if (isScriptWhitespace(character)) {
-      if (current !== "") {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += character;
-  }
-  if (current !== "") {
-    parts.push(current);
-  }
-  return parts;
+  return splitByCharacter(value, isScriptWhitespace);
 }
 
 function collapseWhitespace(value: string): string {
-  return splitWhitespace(value).join(" ");
+  return collapseByCharacter(value, isScriptWhitespace);
 }
 
 function isScriptWhitespace(character: string): boolean {
   return character === " " || character === "\t" || character === "\n" || character === "\r" || character === "\f" || character === "\v";
-}
-
-function isShellIdentifier(value: string): boolean {
-  if (!isShellIdentifierStart(value[0] ?? "")) {
-    return false;
-  }
-  for (let index = 1; index < value.length; index += 1) {
-    if (!isShellIdentifierPart(value[index] ?? "")) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function isShellIdentifierStart(character: string): boolean {
-  return character === "_" || isAsciiLetter(character);
-}
-
-function isShellIdentifierPart(character: string): boolean {
-  return isShellIdentifierStart(character) || isAsciiDigit(character);
 }
 
 function allAsciiDigits(value: string): boolean {
@@ -806,16 +773,6 @@ function allAsciiDigits(value: string): boolean {
     }
   }
   return true;
-}
-
-function isAsciiLetter(character: string): boolean {
-  const codePoint = character.codePointAt(0);
-  return codePoint !== undefined && ((codePoint >= 65 && codePoint <= 90) || (codePoint >= 97 && codePoint <= 122));
-}
-
-function isAsciiDigit(character: string): boolean {
-  const codePoint = character.codePointAt(0);
-  return codePoint !== undefined && codePoint >= 48 && codePoint <= 57;
 }
 
 const SHELL_EXECUTABLE_NAMES = new Set(["bash", "sh", "zsh", "ksh"]);

@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 
 import { LOCAL_SETTINGS_PATH, POLICY_VERSION } from "../constants.ts";
 import type { PolicyDiagnostic } from "../policy/action.ts";
+import { existingSymlinkInPath, isNodeError, writeTextAtomically } from "./safe-fs.ts";
 
 export interface GuardMeRuntimeSettingsPaths {
   readonly settingsPath: string;
@@ -172,7 +172,7 @@ export async function writeGuardMeRuntimeSettings(options: WriteGuardMeRuntimeSe
     enabled: options.enabled ?? current.enabled,
     insecureEdits: options.insecureEdits ?? current.insecureEdits,
   };
-  await writeTextAtomically(targetPath, `${JSON.stringify(settings, null, 2)}\n`);
+  await writeTextAtomically(targetPath, `${JSON.stringify(settings, null, 2)}\n`, ".guardme-settings");
 }
 
 async function readExistingRuntimeSettingsForWrite(path: string): Promise<GuardMeRuntimeSettings> {
@@ -262,73 +262,6 @@ function settingsDiagnostic(code: string, message: string, path: string): Policy
   };
 }
 
-async function writeTextAtomically(path: string, text: string): Promise<void> {
-  const directory = dirname(path);
-  const tempPath = join(directory, `.guardme-settings-${process.pid}-${Date.now()}-${randomUUID()}.tmp`);
-  try {
-    await writeFile(tempPath, text, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    await rename(tempPath, path);
-  } catch (error) {
-    await rm(tempPath, { force: true }).catch(() => {});
-    throw error;
-  }
-}
-
-async function existingSymlinkInPath(targetPath: string, scopeRoot: string, includeTarget: boolean): Promise<string | undefined> {
-  const rootPath = resolve(scopeRoot);
-  const absoluteTargetPath = resolve(targetPath);
-  if (!isPathInsideRoot(rootPath, absoluteTargetPath)) {
-    return absoluteTargetPath;
-  }
-
-  const relativePath = relative(rootPath, absoluteTargetPath);
-  if (relativePath === "") {
-    return undefined;
-  }
-  const segments = relativePath.split(sep).filter(Boolean);
-  let current = rootPath;
-
-  for (const [index, segment] of segments.entries()) {
-    current = join(current, segment);
-    const isTarget = index === segments.length - 1;
-    if (isTarget && !includeTarget) {
-      break;
-    }
-
-    const inspection = await inspectSymlinkPathSegment(current, isTarget);
-    if (inspection === "symlink") {
-      return current;
-    }
-    if (inspection === "stop") {
-      return undefined;
-    }
-  }
-
-  return undefined;
-}
-
-type SymlinkPathSegmentInspection = "safe" | "stop" | "symlink";
-
-async function inspectSymlinkPathSegment(path: string, isTarget: boolean): Promise<SymlinkPathSegmentInspection> {
-  try {
-    const stats = await lstat(path);
-    if (stats.isSymbolicLink()) {
-      return "symlink";
-    }
-    return !stats.isDirectory() && !isTarget ? "stop" : "safe";
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") {
-      return "stop";
-    }
-    throw error;
-  }
-}
-
-function isPathInsideRoot(rootPath: string, childPath: string): boolean {
-  const childRelative = relative(resolve(rootPath), resolve(childPath));
-  return childRelative === "" || (!childRelative.startsWith("..") && !isAbsolute(childRelative));
-}
-
 function formatSettingsError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -337,6 +270,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return typeof error === "object" && error !== null && "code" in error;
-}

@@ -2,6 +2,7 @@ import type { GuardMePolicyConfig, GuardMeRule, PolicyConfigSection } from "../c
 import { COMMAND_RULE_SECTIONS, PATH_RULE_SECTIONS, createEmptyPolicyConfig } from "../config/schema.ts";
 import type { PolicyAction } from "../policy/action.ts";
 import { footerSegments, type FrameMainRow, renderGuardMeFrame } from "./config-frame.ts";
+import { isBackspace, isCtrlC, isDown, isEnter, isEscape, isPrintable, isQuit, isUp } from "./key-input.ts";
 
 export type SetupScope = "global" | "local";
 export type SetupMode =
@@ -872,41 +873,3 @@ function wrapIndex(index: number, length: number): number {
   return ((index % length) + length) % length;
 }
 
-function isUp(data: string): boolean {
-  return data === "\u001B[A" || data === "k";
-}
-
-function isDown(data: string): boolean {
-  return data === "\u001B[B" || data === "j";
-}
-
-function isEnter(data: string): boolean {
-  return data === "\r" || data === "\n";
-}
-
-function isEscape(data: string): boolean {
-  const normalized = data.toLowerCase();
-  return (
-    data === "\u001B" ||
-    normalized === "escape" ||
-    normalized === "esc" ||
-    /^\u001B\[27(?:;1)?(?::1)?u$/.test(data) ||
-    data === "\u001B[27;1;27~"
-  );
-}
-
-function isBackspace(data: string): boolean {
-  return data === "\b" || data === "\u007F" || data === "backspace";
-}
-
-function isPrintable(data: string): boolean {
-  return data.length === 1 && data >= " " && data !== "\u007F";
-}
-
-function isCtrlC(data: string): boolean {
-  return data === "\u0003" || data.toLowerCase() === "ctrl+c";
-}
-
-function isQuit(data: string): boolean {
-  return data === "q" || data === "Q";
-}

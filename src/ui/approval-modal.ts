@@ -1,6 +1,7 @@
 import type { PolicyDecision, PolicyRequest, UserDecision } from "../policy/action.ts";
 import { isUserDecision } from "../policy/action.ts";
 import { fitCell, footerSegments, type ConfigFrameTheme } from "./config-frame.ts";
+import { isDown, isEnter, isEscape, isUp } from "./key-input.ts";
 import { renderMatchedRules, renderPolicySummary, type PolicySummaryLine } from "./render-policy-summary.ts";
 import { visibleWidth } from "./text.ts";
 
@@ -441,29 +442,6 @@ function wrapIndex(index: number, length: number): number {
     return 0;
   }
   return ((index % length) + length) % length;
-}
-
-function isUp(data: string): boolean {
-  return data === "\u001B[A" || data === "k";
-}
-
-function isDown(data: string): boolean {
-  return data === "\u001B[B" || data === "j";
-}
-
-function isEnter(data: string): boolean {
-  return data === "\r" || data === "\n";
-}
-
-function isEscape(data: string): boolean {
-  const normalized = data.toLowerCase();
-  return (
-    data === "\u001B" ||
-    normalized === "escape" ||
-    normalized === "esc" ||
-    /^\u001B\[27(?:;1)?(?::1)?u$/.test(data) ||
-    data === "\u001B[27;1;27~"
-  );
 }
 
 for (const choice of APPROVAL_CHOICES) {
