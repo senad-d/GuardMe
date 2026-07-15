@@ -302,6 +302,23 @@ test("wildcard command allows approve safe individual segments after path checks
   }
 });
 
+test("allowed command families can discard output through /dev/null", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-null-redirection-"));
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  const commands = [
+    "find specs -maxdepth 1 -type f -name 'spec-review-pi-extension-tasks*.md' -print 2>/dev/null",
+    "find .github -maxdepth 3 -type f -print 2>/dev/null",
+    "wc -l 2>/dev/null",
+  ];
+
+  for (const command of commands) {
+    const { request, classified } = shellRequest(cwd, command);
+    const decision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
+
+    assert.equal(decision.outcome, "allow", command);
+  }
+});
+
 test("compound command allowlists block the first missing or dangerous segment", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-segment-missing-"));
   const policy = policyFrom({
@@ -341,12 +358,18 @@ test("wildcard command allows do not bypass protected paths or dangerous command
   const envRead = shellRequest(cwd, "cat .env");
   const passwdRead = shellRequest(cwd, "cat /etc/passwd");
   const findDelete = shellRequest(cwd, "find . -delete");
+  const redirectedFindDelete = shellRequest(cwd, "find . -delete 2>/dev/null");
   const cloud = shellRequest(cwd, "aws sts get-caller-identity");
   const substitution = shellRequest(cwd, "echo $(rm -rf build)");
 
   const envDecision = evaluatePolicyRequest({ policy, request: envRead.request, commandClassification: envRead.classified });
   const passwdDecision = evaluatePolicyRequest({ policy, request: passwdRead.request, commandClassification: passwdRead.classified });
   const findDecision = evaluatePolicyRequest({ policy, request: findDelete.request, commandClassification: findDelete.classified });
+  const redirectedFindDecision = evaluatePolicyRequest({
+    policy,
+    request: redirectedFindDelete.request,
+    commandClassification: redirectedFindDelete.classified,
+  });
   const cloudDecision = evaluatePolicyRequest({ policy, request: cloud.request, commandClassification: cloud.classified });
   const substitutionDecision = evaluatePolicyRequest({ policy, request: substitution.request, commandClassification: substitution.classified });
 
@@ -356,6 +379,8 @@ test("wildcard command allows do not bypass protected paths or dangerous command
   assert.match(passwdDecision.reason, /Outside-project read requires/);
   assert.equal(findDecision.outcome, "coach");
   assert.match(findDecision.reason, /find -delete|exact allowCommands/);
+  assert.equal(redirectedFindDecision.outcome, "coach");
+  assert.match(redirectedFindDecision.reason, /find -delete|exact allowCommands/);
   assert.equal(cloudDecision.outcome, "deny");
   assert.equal(cloudDecision.hard, true);
   assert.equal(substitutionDecision.outcome, "coach");

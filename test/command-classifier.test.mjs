@@ -139,6 +139,18 @@ test("classification precedence preserves guarded policy boundary decisions", ()
   assert.equal(outsideRedirection.risk, "dangerous");
   assert.equal(outsideRedirection.requiresUserDecision, true);
 
+  const discardedStderr = classifyShellCommand("find src -type f 2>/dev/null");
+  assert.equal(discardedStderr.primaryAction, "list");
+  assert.equal(discardedStderr.risk, "low");
+  assert.equal(discardedStderr.dangerous, false);
+  assert.equal(discardedStderr.requiresUserDecision, false);
+  assert.deepEqual(discardedStderr.targetPaths, ["src"]);
+
+  const redirectedDelete = classifyShellCommand("find . -delete 2>/dev/null");
+  assert.equal(redirectedDelete.primaryAction, "delete");
+  assert.equal(redirectedDelete.risk, "dangerous");
+  assert.equal(redirectedDelete.dangerous, true);
+
   const wrappedDelete = classifyShellCommand("bash -lc 'rm -rf build'");
   assert.equal(wrappedDelete.primaryAction, "delete");
   assert.equal(wrappedDelete.risk, "dangerous");

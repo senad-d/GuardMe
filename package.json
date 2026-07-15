@@ -1,6 +1,6 @@
 {
   "name": "@senad-d/guardme",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "Deny-first Pi guardrails that keep LLM shell and file access safe, transparent, and user-approved.",
   "license": "MIT",

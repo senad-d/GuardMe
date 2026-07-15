@@ -407,6 +407,10 @@ test("bash tool calls are classified and blocked or allowed by policy", async ()
   const compoundBroadShellGrep = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "chmod 600 README.md && grep -R SECRET ." } }, ctx);
   const broadShellFind = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find -name '*'" } }, ctx);
   const safeShellFind = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find -name '*.ts'" } }, ctx);
+  const discardedFindErrors = await evaluateGuardedToolCall({
+    toolName: "bash",
+    input: { command: "find .github -maxdepth 3 -type f -print 2>/dev/null" },
+  }, ctx);
   const wildcardAllowCompound = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "npm test && rm -rf build" } }, ctx);
   const dangerousWithOutsideRead = await evaluateGuardedToolCall({ toolName: "bash", input: { command: `rm -rf build && cat ${outside}` } }, ctx);
   const dangerous = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
@@ -429,6 +433,7 @@ test("bash tool calls are classified and blocked or allowed by policy", async ()
   assert.equal(broadShellFind?.block, true);
   assert.match(broadShellFind?.reason ?? "", /Credential-like path|Environment files|Credential/i);
   assert.equal(safeShellFind, undefined);
+  assert.equal(discardedFindErrors, undefined);
   assert.equal(wildcardAllowCompound?.block, true);
   assert.match(wildcardAllowCompound?.reason ?? "", /GuardMe coaching|Recursive force deletion/);
   assert.equal(dangerousWithOutsideRead?.block, true);

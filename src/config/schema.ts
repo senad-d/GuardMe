@@ -151,13 +151,12 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "trivy *", reason: "Common project trivy command." },
       { pattern: "grype *", reason: "Common project grype command." },
       { pattern: "snyk *", reason: "Common project snyk command." },
-      { pattern: "ps", reason: "Common project ps command." },
+      { pattern: "ps *", reason: "Common project ps command." },
       { pattern: "if *", reason: "Common project if command." },
       { pattern: "cp *", reason: "Common project cp command." },
       { pattern: "mv *", reason: "Common project mv command." },
       { pattern: "cat *", reason: "Common project cat command." },
       { pattern: "test *", reason: "Common project test command." },
-      { pattern: "2>*", reason: "Common project redirection command." },
       { pattern: "echo *", reason: "Common project echo command." },
       { pattern: "printf *", reason: "Common project printf command." },
       { pattern: "chmod *", reason: "Common project chmod command." },
@@ -176,6 +175,8 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "set -*", reason: "Common project pipeline command." },
       { pattern: "date *", reason: "Common project date command." },
       { pattern: "gh *", reason: "Common project github cli command." },
+      { pattern: "which *", reason: "Common project which command." },
+      { pattern: "pi *", reason: "Common project pi command." },
     ],
     denyPaths: [
       {

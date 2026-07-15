@@ -718,17 +718,28 @@ function classifySegment(rawCommand: string, segmentTokens: readonly string[], d
   }
 
   const preWrapperClassification = classifyPreWrapperSegment(context);
-  if (preWrapperClassification) {
-    return withPriority(preWrapperClassification);
+  const wrapperClassification = !preWrapperClassification && depth < 5
+    ? riskyWrapperCommandClassification(rawCommand, context.commandName, context.args, depth)
+    : undefined;
+  const classified = preWrapperClassification ?? wrapperClassification ?? classifyPostWrapperSegment(context) ?? genericShellClassification(context);
+  return withPriority(mergeOutputRedirectionClassification(context, classified));
+}
+
+function mergeOutputRedirectionClassification(
+  context: ExecutableSegmentClassificationContext,
+  classified: CommandClassification,
+): CommandClassification {
+  const outputRedirection = outputRedirectionClassification(context);
+  if (!outputRedirection) {
+    return classified;
   }
 
-  const wrapperClassification = depth < 5 ? riskyWrapperCommandClassification(rawCommand, context.commandName, context.args, depth) : undefined;
-  if (wrapperClassification) {
-    return withPriority(wrapperClassification);
-  }
-
-  const classified = classifyPostWrapperSegment(context) ?? genericShellClassification(context);
-  return withPriority(classified);
+  const classifiedWithPriority = withPriority(classified);
+  const redirectionWithPriority = withPriority(outputRedirection);
+  const selected = classifiedWithPriority.priority > redirectionWithPriority.priority
+    ? classifiedWithPriority
+    : redirectionWithPriority;
+  return aggregateCommandClassification(context.rawCommand, selected, [classifiedWithPriority, redirectionWithPriority]);
 }
 
 function createSegmentClassificationContext(
@@ -883,7 +894,7 @@ function classifyGuardedSegment(context: ExecutableSegmentClassificationContext)
       credentialAccess: true,
     });
   }
-  return outputRedirectionClassification(context);
+  return undefined;
 }
 
 function outputRedirectionClassification(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
@@ -891,17 +902,22 @@ function outputRedirectionClassification(context: ExecutableSegmentClassificatio
   if (outputRedirectionTargets.length === 0) {
     return undefined;
   }
+  const mutationTargets = outputRedirectionTargets.filter((target) => !isNullOutputSink(target));
+  if (mutationTargets.length === 0) {
+    return undefined;
+  }
   const targetPaths = uniqueStrings([...context.inputRedirectionTargets, ...outputRedirectionTargets]);
+  const dangerous = isOutsideishMutation(mutationTargets);
   return segmentClassification(context, {
     kind: "write",
     primaryAction: "write",
-    risk: mutationRisk(targetPaths),
+    risk: mutationRisk(mutationTargets),
     reason: "Shell redirection writes to a file.",
     matchedPatterns: ["redirection"],
     targetPaths,
     hardDenied: false,
-    dangerous: isOutsideishMutation(targetPaths),
-    requiresUserDecision: isOutsideishMutation(targetPaths),
+    dangerous,
+    requiresUserDecision: dangerous,
   });
 }
 
@@ -2239,7 +2255,7 @@ function extractLikelyPathOperands(commandName: string | undefined, args: readon
   ) {
     return argsWithoutRedirections.filter((arg) => !arg.startsWith("-") && !isShellControlToken(arg) && !arg.includes("="));
   }
-  return extractOutputRedirectionTargets(segmentTokens);
+  return [];
 }
 
 function extractOutputRedirectionTargets(tokens: readonly string[]): readonly string[] {
@@ -2466,6 +2482,10 @@ function trimTrailingSlashes(value: string): string {
     endIndex -= 1;
   }
   return value.slice(0, endIndex);
+}
+
+function isNullOutputSink(target: string): boolean {
+  return target === "/dev/null";
 }
 
 function mutationRisk(targetPaths: readonly string[]): RiskLevel {
