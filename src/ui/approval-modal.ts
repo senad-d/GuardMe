@@ -109,10 +109,11 @@ export function formatApprovalUnavailableBlockReason(
   const summary = renderPolicySummary(request, decision);
   const displayedRules = renderMatchedRules(decision.matchedRules.slice(0, MAX_APPROVAL_MATCHED_RULES));
   const omittedRuleCount = Math.max(0, decision.matchedRules.length - MAX_APPROVAL_MATCHED_RULES);
+  const toolAction = `${request.toolName}:${request.action}`;
   const lines = [
     "WARNINGS & DECISIONS",
     `Risk classification: ${boundedApprovalValue(summaryValue(summary, "Risk", decision.risk), 64)}`,
-    `Guarded tool and action: ${boundedApprovalValue(summaryValue(summary, "Action", `${request.toolName}:${request.action}`), 128)}`,
+    `Guarded tool and action: ${boundedApprovalValue(summaryValue(summary, "Action", toolAction), 128)}`,
     `Target or command: ${boundedApprovalValue(summaryValue(summary, "Target", "<unknown>"), MAX_APPROVAL_TARGET_WIDTH)}`,
     `Reason: ${boundedApprovalValue(summaryValue(summary, "Reason", decision.reason), MAX_APPROVAL_REASON_WIDTH)}`,
     `Interactive approval: ${boundedApprovalValue(unavailableReason, MAX_APPROVAL_UNAVAILABLE_WIDTH)}`,

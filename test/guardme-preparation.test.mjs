@@ -28,9 +28,16 @@ test("package declares GuardMe Pi extension metadata", async () => {
 });
 
 test("prepared repository includes approved planning specs", async () => {
-  await access(new URL("../docs/PROJECT_DEFINITION_BRIEF.md", import.meta.url));
-  await access(new URL("../specs/spec-architecture.md", import.meta.url));
-  await access(new URL("../specs/spec-guidelines.md", import.meta.url));
+  const planningSpecs = [
+    "docs/PROJECT_DEFINITION_BRIEF.md",
+    "specs/spec-architecture.md",
+    "specs/spec-guidelines.md",
+  ];
+
+  for (const path of planningSpecs) {
+    const contents = await readProjectFile(path);
+    assert.ok(contents.length > 0, `${path} should not be empty`);
+  }
 });
 
 test("policy documentation covers supported sections and limitations", async () => {
