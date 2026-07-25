@@ -11,6 +11,8 @@ const lcovFile = resolve(coverageDirectory, "lcov.info");
 
 const coverageArgs = [
   "--test",
+  "--test-reporter=spec",
+  "--test-reporter-destination=stdout",
   "--test-reporter=lcov",
   `--test-reporter-destination=${lcovFile}`,
   "--experimental-test-coverage",

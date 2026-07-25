@@ -188,6 +188,23 @@ test("outside-project reads require explicit allowPaths or readOnlyPaths", async
   assert.equal(allowed.matchedRules[0]?.category, "readOnlyPaths");
 });
 
+test("built-in defaults do not broadly allow arbitrary temporary paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-eval-temp-boundary-"));
+  const cwd = join(root, "project");
+  const outside = join(root, "outside.txt");
+  await mkdir(cwd, { recursive: true });
+  await writeFile(outside, "outside", "utf8");
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+
+  const readDecision = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", outside) });
+  const writeDecision = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "write", outside) });
+
+  assert.equal(readDecision.outcome, "deny");
+  assert.match(readDecision.reason, /Outside-project read requires/);
+  assert.equal(writeDecision.outcome, "deny");
+  assert.match(writeDecision.reason, /Outside-project write requires/);
+});
+
 test("built-in defaults allow reading Pi skill files and local Pi docs outside the project", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-eval-skill-read-"));
   const cwd = join(root, "project");

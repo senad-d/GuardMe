@@ -87,11 +87,6 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
     approvalMode: "auto",
     allowPaths: [
       {
-        pattern: "/tmp/**",
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Pi skill files may be loaded from sibling repositories or global skill directories.",
-      },
-      {
         pattern: "/dev/null",
         actions: ["write"],
         reason: "Allow shell stderr/stdout redirection sink.",
