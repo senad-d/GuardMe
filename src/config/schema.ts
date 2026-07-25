@@ -1,4 +1,5 @@
 import { POLICY_VERSION } from "../constants.ts";
+import { type ApprovalMode, isApprovalMode } from "./approval-mode.ts";
 import {
   PATH_POLICY_ACTIONS,
   type PathPolicyAction,
@@ -41,6 +42,7 @@ export interface GuardMePathRule extends GuardMeRule {
 
 export interface GuardMePolicyConfig {
   readonly version: number;
+  readonly approvalMode?: ApprovalMode;
   readonly allowPaths: readonly GuardMePathRule[];
   readonly denyPaths: readonly GuardMePathRule[];
   readonly zeroAccessPaths: readonly GuardMePathRule[];
@@ -82,9 +84,10 @@ export function createEmptyPolicyConfig(version = POLICY_VERSION): GuardMePolicy
 export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
   return {
     ...createEmptyPolicyConfig(POLICY_VERSION),
+    approvalMode: "auto",
     allowPaths: [
       {
-        pattern: "*tmp*",
+        pattern: "/tmp/**",
         actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
         reason: "Pi skill files may be loaded from sibling repositories or global skill directories.",
       },
@@ -177,6 +180,8 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "gh *", reason: "Common project github cli command." },
       { pattern: "which *", reason: "Common project which command." },
       { pattern: "pi *", reason: "Common project pi command." },
+      { pattern: "tmux *", reason: "Common project tmux command." },
+      { pattern: "wc *", reason: "Common project wc command." },
     ],
     denyPaths: [
       {
@@ -338,12 +343,13 @@ export function validateGuardMeConfig(input: unknown, source: RuleSource): Confi
     }
   }
 
+  const approvalMode = validateApprovalMode(input.approvalMode, source, diagnostics);
   const normalized: Record<PolicyConfigSection, readonly GuardMeRule[]> = Object.fromEntries(
     POLICY_CONFIG_SECTIONS.map((section) => [section, validateRuleSection(section, input[section], source, diagnostics)]),
   ) as Record<PolicyConfigSection, readonly GuardMeRule[]>;
 
   for (const key of Object.keys(input)) {
-    if (key !== "version" && !POLICY_CONFIG_SECTION_SET.has(key)) {
+    if (key !== "version" && key !== "approvalMode" && !POLICY_CONFIG_SECTION_SET.has(key)) {
       diagnostics.push(configDiagnostic("warning", "config.unknownKey", `Unknown GuardMe policy key '${key}' ignored.`, source));
     }
   }
@@ -355,6 +361,7 @@ export function validateGuardMeConfig(input: unknown, source: RuleSource): Confi
   return {
     config: {
       ...config,
+      ...(approvalMode ? { approvalMode } : {}),
       allowPaths: normalized.allowPaths as readonly GuardMePathRule[],
       denyPaths: normalized.denyPaths as readonly GuardMePathRule[],
       zeroAccessPaths: normalized.zeroAccessPaths as readonly GuardMePathRule[],
@@ -438,6 +445,10 @@ function parsePolicyYamlTopLevelLine(line: ParsedYamlLine, state: PolicyYamlPars
     state.data.version = parseScalar(valueText);
     return;
   }
+  if (key === "approvalMode") {
+    state.data.approvalMode = parseScalar(valueText);
+    return;
+  }
   if (!isPolicyConfigSection(key)) {
     state.data[key] = parseScalar(valueText);
     return;
@@ -496,6 +507,28 @@ function parsePolicyYamlRuleProperty(line: ParsedYamlLine, state: PolicyYamlPars
 
 function isPolicyConfigSection(value: string): value is PolicyConfigSection {
   return POLICY_CONFIG_SECTION_SET.has(value);
+}
+
+function validateApprovalMode(
+  value: unknown,
+  source: RuleSource,
+  diagnostics: PolicyDiagnostic[],
+): ApprovalMode | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (isApprovalMode(value)) {
+    return value;
+  }
+  diagnostics.push(
+    configDiagnostic(
+      "error",
+      "config.invalidApprovalMode",
+      "GuardMe approvalMode must be one of: auto, interactive, block. GuardMe is using block mode for this policy source.",
+      source,
+    ),
+  );
+  return "block";
 }
 
 function validateRuleSection(

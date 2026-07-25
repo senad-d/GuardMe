@@ -32,7 +32,7 @@ GuardMe is a Pi extension for LLM tool-call safety. It checks Pi shell and files
 - **Deny-first:** deny rules and hard protections always win over allow rules.
 - **Shell-aware:** compound commands are evaluated by executable segment, including common wrappers and package-manager scripts.
 - **Filesystem-aware:** sensitive paths, `.git`, credentials, destructive moves/deletes, and unsafe generated file content are guarded.
-- **Approval-based:** first risky attempts are blocked with coaching; repeated attempts can use an in-session approval flow.
+- **Approval-based:** first risky attempts are blocked with coaching; repeated attempts use a mode-aware, fail-closed approval flow.
 - **Pi-native:** install globally, project-locally, from git, or from a source checkout.
 - **Configurable:** use `/guardme`, `~/.pi/agent/guardme.yaml`, and `.pi/agent/guardme.yaml`.
 
@@ -150,7 +150,9 @@ See [`docs/POLICY.md`](docs/POLICY.md) for the full policy reference.
 
 Global policy loads first. Project-local policy, runtime settings, and generated state load only after the project is trusted. Missing runtime settings mean GuardMe is active and Insecure edits is off. Turning GuardMe off from `/guardme` writes project-local settings and bypasses GuardMe enforcement for that trusted project until you turn it active again. Turning Insecure edits on writes the same project-local settings file and makes only `write`/`edit` skip proposed content/script scanning; path protections and deny rules still apply, and `bash`, reads, and discovery tools stay guarded.
 
-YAML sections:
+Policy YAML also accepts the validated top-level key `approvalMode: auto | interactive | block`. Built-in `auto` is the safe default: only TUI sessions can request GuardMe approval UI. Trusted project policy overrides global policy, and the process environment variable `GUARDME_APPROVAL_MODE` overrides both for managed child launches.
+
+YAML rule sections:
 
 - `allowPaths`
 - `denyPaths`
@@ -187,6 +189,7 @@ Minimal policy example:
 
 ```yaml
 version: 1
+approvalMode: auto
 
 allowCommands:
   - pattern: "pwd *"
@@ -235,10 +238,24 @@ The General pane includes project active/off state, Pi project-trust controls, w
 For dangerous-but-not-hard-forbidden actions and policy-missing shell/script commands:
 
 1. First matching attempt: GuardMe blocks the tool call, records a warned fingerprint, and gives the model safer-behavior guidance.
-2. Repeated matching attempt: GuardMe asks the user in an in-session approval prompt when UI is available.
-3. No UI available: GuardMe fails closed and blocks the action.
+2. Repeated matching attempt: GuardMe resolves `approvalMode` before touching any approval UI method.
+3. If interactive approval is unavailable, GuardMe returns an ordinary blocked tool result with bounded, redacted `WARNINGS & DECISIONS` guidance so the agent can continue safely.
 
-Approval choices:
+Approval modes:
+
+- `auto` (default): preserve TUI approval; RPC, JSON, print, and other non-interactive modes fail closed without an approval UI request.
+- `interactive`: allow approval UI when Pi exposes the relevant method, including RPC controllers that implement `extension_ui_request` / `extension_ui_response`.
+- `block`: never call an interactive GuardMe approval UI method.
+
+Managed orchestrators can force non-interactive behavior for every child session:
+
+```bash
+GUARDME_APPROVAL_MODE=block pi --mode rpc ...
+```
+
+Use `GUARDME_APPROVAL_MODE=interactive` only when the RPC controller explicitly completes the extension approval round trip. Invalid YAML or environment values report diagnostics and resolve safely to `block` for that source/override.
+
+Interactive approval choices:
 
 - Allow once
 - Deny once
@@ -256,7 +273,7 @@ Saved decisions append narrow YAML rules, reload policy for the current session,
 | Problem | Try |
 | --- | --- |
 | Expected command is blocked | Open `/guardme`, inspect the warning, then allow once or save a narrow project/global rule if appropriate. |
-| Approval prompt does not appear | Approval requires an interactive UI. Non-UI sessions fail closed by design. |
+| Approval prompt does not appear | `auto` prompts only in TUI. Use `interactive` only for an RPC controller that handles the extension UI round trip; non-interactive sessions fail closed by design. |
 | Project policy or settings are ignored | Trust the project from `/guardme` and reload/restart pi if needed. |
 | Cloud CLI is blocked | This is a hard protection. Run cloud commands outside Pi or use a separate, intentionally isolated workflow. |
 | A broad command allow still blocks | GuardMe evaluates every executable segment and protected path first; allow `ls *` cannot approve `ls && rm -rf build` or `cat .env`. |

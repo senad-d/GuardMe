@@ -73,11 +73,18 @@ test("policy writes use owner-only file permissions", async () => {
 
   await writePolicyConfigFile(
     paths.localPolicyPath,
-    { ...createEmptyPolicyConfig(), allowPaths: [{ pattern: "src/**", actions: ["read"], reason: "Source reads." }] },
+    {
+      ...createEmptyPolicyConfig(),
+      approvalMode: "block",
+      allowPaths: [{ pattern: "src/**", actions: ["read"], reason: "Source reads." }],
+    },
     { cwd, homeDir: home, scope: "local" },
   );
+  const loaded = await loadPolicyConfigFile(paths.localPolicyPath, "local");
 
   assert.equal((await stat(paths.localPolicyPath)).mode & 0o777, 0o600);
+  assert.equal(loaded.config.approvalMode, "block");
+  assert.match(await readFile(paths.localPolicyPath, "utf8"), /^version: 1\napprovalMode: block\n/u);
 });
 
 test("direct policy writes refuse secret-like command rules", async () => {
@@ -208,7 +215,10 @@ test("guard persists selected global allow rule from approval flow", async () =>
       },
     },
   };
-  await startGuardMeSession(ctx, { homeDir: home });
+  await startGuardMeSession(ctx, {
+    homeDir: home,
+    environment: { GUARDME_APPROVAL_MODE: "interactive" },
+  });
 
   await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
   const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
@@ -242,7 +252,10 @@ test("approval flow refuses to persist secret-like command rules", async () => {
       select: async () => label,
     },
   };
-  await startGuardMeSession(ctx, { homeDir: home });
+  await startGuardMeSession(ctx, {
+    homeDir: home,
+    environment: { GUARDME_APPROVAL_MODE: "interactive" },
+  });
 
   await evaluateGuardedToolCall({ toolName: "bash", input: { command: "custom-tool --token secret-value" } }, ctx);
   const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "custom-tool --token secret-value" } }, ctx);
@@ -345,7 +358,10 @@ test("guard persists selected local allow rule for a missing compound segment", 
       select: async () => label,
     },
   };
-  await startGuardMeSession(ctx, { homeDir: home });
+  await startGuardMeSession(ctx, {
+    homeDir: home,
+    environment: { GUARDME_APPROVAL_MODE: "interactive" },
+  });
 
   await evaluateGuardedToolCall({ toolName: "bash", input: { command: "pwd && unknown-tool" } }, ctx);
   const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "pwd && unknown-tool" } }, ctx);
@@ -383,7 +399,10 @@ test("guard persists selected local allow rule from approval flow", async () => 
       },
     },
   };
-  await startGuardMeSession(ctx, { homeDir: home });
+  await startGuardMeSession(ctx, {
+    homeDir: home,
+    environment: { GUARDME_APPROVAL_MODE: "interactive" },
+  });
 
   await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
   const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);

@@ -1,5 +1,6 @@
 import { POLICY_VERSION } from "../constants.ts";
 import { POLICY_ACTIONS, type PolicyAction, type PolicyDiagnostic, type RuleSource, type RuleSourceKind } from "../policy/action.ts";
+import { DEFAULT_APPROVAL_MODE, type ApprovalMode } from "./approval-mode.ts";
 import type {
   CommandRuleSection,
   GuardMePathRule,
@@ -30,6 +31,7 @@ export interface SourcedGuardMePathRule extends GuardMePathRule {
 
 export interface MergedGuardMePolicyConfig {
   readonly version: number;
+  readonly approvalMode: ApprovalMode;
   readonly allowPaths: readonly SourcedGuardMePathRule[];
   readonly denyPaths: readonly SourcedGuardMePathRule[];
   readonly zeroAccessPaths: readonly SourcedGuardMePathRule[];
@@ -78,6 +80,7 @@ export function mergePolicyConfigs(sources: readonly PolicyConfigSource[]): Merg
   };
 
   for (const source of sources) {
+    mergeApprovalModeFromSource(source, context);
     mergePathSectionsFromSource(source, context);
     mergeCommandSectionsFromSource(source, context);
   }
@@ -90,6 +93,12 @@ interface MergePolicyContext {
   readonly diagnostics: PolicyDiagnostic[];
   readonly seenBySection: Map<PolicyConfigSection, Set<string>>;
   readonly existingProtections: SourcedGuardMePathRule[];
+}
+
+function mergeApprovalModeFromSource(source: PolicyConfigSource, context: MergePolicyContext): void {
+  if (source.config.approvalMode !== undefined) {
+    context.mutable.approvalMode = source.config.approvalMode;
+  }
 }
 
 function mergePathSectionsFromSource(source: PolicyConfigSource, context: MergePolicyContext): void {
@@ -149,6 +158,7 @@ export function sourcePolicyConfig(kind: PolicyConfigSourceKind, config: GuardMe
 function createMutableMergedConfig(): MutableMergedGuardMePolicyConfig {
   return {
     ...createEmptyPolicyConfig(POLICY_VERSION),
+    approvalMode: DEFAULT_APPROVAL_MODE,
     allowPaths: [],
     denyPaths: [],
     zeroAccessPaths: [],
@@ -162,6 +172,7 @@ function createMutableMergedConfig(): MutableMergedGuardMePolicyConfig {
 }
 
 interface MutableMergedGuardMePolicyConfig extends MergedGuardMePolicyConfig {
+  approvalMode: ApprovalMode;
   readonly allowPaths: SourcedGuardMePathRule[];
   readonly denyPaths: SourcedGuardMePathRule[];
   readonly zeroAccessPaths: SourcedGuardMePathRule[];

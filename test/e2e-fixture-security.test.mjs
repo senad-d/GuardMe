@@ -34,12 +34,21 @@ test("e2e fixture rejects unsafe temp path labels", async () => {
 });
 
 test("rpc e2e helper uses node plus a checked CLI path and a fixed safe PATH", () => {
-  const env = createRpcChildEnv({ homeDir: "/home/e2e" }, { PATH: "/tmp/evil-bin", HOME: "/tmp/evil-home" });
+  const env = createRpcChildEnv(
+    { homeDir: "/home/e2e" },
+    { PATH: "/tmp/evil-bin", HOME: "/tmp/evil-home", GUARDME_APPROVAL_MODE: "interactive" },
+  );
+  const interactiveEnv = createRpcChildEnv(
+    { homeDir: "/home/e2e", approvalMode: "interactive" },
+    { PATH: "/tmp/evil-bin", HOME: "/tmp/evil-home" },
+  );
   const spawnCommand = createRpcSpawnCommand(["--help"]);
 
   assert.equal(env.PATH, SAFE_RPC_PATH);
   assert.doesNotMatch(env.PATH, /\/tmp\/evil-bin/);
   assert.equal(env.HOME, "/home/e2e");
+  assert.equal(env.GUARDME_APPROVAL_MODE, undefined);
+  assert.equal(interactiveEnv.GUARDME_APPROVAL_MODE, "interactive");
   assert.equal(spawnCommand.command, execPath);
   assert.match(spawnCommand.args[0], new RegExp(`${escapeRegExp(`${sep}pi-coding-agent${sep}`)}.*cli\\.js$`));
   assert.equal(spawnCommand.args.at(-1), "--help");

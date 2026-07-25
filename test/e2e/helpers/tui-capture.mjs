@@ -503,6 +503,7 @@ async function captureApprovalModal(snapshot) {
       cwd: snapshot.cwd,
       hasUI: true,
       mode: "tui",
+      approvalMode: "auto",
       ui: {
         custom: async (factory) => {
           let selected;

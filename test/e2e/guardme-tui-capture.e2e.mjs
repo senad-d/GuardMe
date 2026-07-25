@@ -2,10 +2,18 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { mergePolicyConfigs, sourcePolicyConfig } from "../../src/config/merge-policy.ts";
 import { createBuiltInDefaultPolicy, POLICY_CONFIG_SECTIONS } from "../../src/config/schema.ts";
 import { DEFAULT_TUI_ARTIFACT_PATH, captureGuardMeTuiPanels } from "./helpers/tui-capture.mjs";
 
-const DEFAULT_POLICY_RULE_COUNT = countPolicyRules(createBuiltInDefaultPolicy());
+const DEFAULT_POLICY = createBuiltInDefaultPolicy();
+const DEFAULT_POLICY_RULE_COUNT = countPolicyRules(DEFAULT_POLICY);
+const MERGED_DEFAULT_POLICY_RULE_COUNT = countPolicyRules(
+  mergePolicyConfigs([
+    sourcePolicyConfig("builtin", DEFAULT_POLICY),
+    sourcePolicyConfig("local", DEFAULT_POLICY),
+  ]).config,
+);
 
 test("GuardMe TUI capture writes one sanitized panel artifact", { timeout: 60_000 }, async () => {
   const { artifactPath } = await captureGuardMeTuiPanels({ artifactPath: DEFAULT_TUI_ARTIFACT_PATH });
@@ -60,7 +68,7 @@ test("GuardMe TUI capture writes one sanitized panel artifact", { timeout: 60_00
   assert.match(artifact, /Protected policy files\s+3 matching rules/);
   assert.match(artifact, new RegExp(`Project policy file\\s+${DEFAULT_POLICY_RULE_COUNT} rules in file`));
   assert.match(artifact, /SOURCE \/ TOTAL\s+RULES/);
-  assert.match(artifact, new RegExp(`Merged active policy\\s+${DEFAULT_POLICY_RULE_COUNT} active rules`));
+  assert.match(artifact, new RegExp(`Merged active policy\\s+${MERGED_DEFAULT_POLICY_RULE_COUNT} active rules`));
   assert.match(artifact, /Category rows can overlap/);
   assert.doesNotMatch(artifact, /Custom project rules/);
   assert.doesNotMatch(artifact, /TOTAL:/);

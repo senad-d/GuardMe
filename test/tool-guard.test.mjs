@@ -35,7 +35,7 @@ async function createGuardContext(options = {}) {
       notify: () => {},
     },
   };
-  await startGuardMeSession(ctx, { homeDir: home });
+  await startGuardMeSession(ctx, { homeDir: home, environment: options.environment ?? {} });
   return { root, home, cwd, ctx, statuses };
 }
 
@@ -494,6 +494,48 @@ test("first dangerous attempt records coaching state and repeated attempt asks f
   assert.doesNotMatch(second?.reason ?? "", /GuardMe coaching/);
   assert.equal(jsonl.trim().split("\n").length, 1);
   assert.equal(JSON.parse(jsonl).type, "warning");
+  stopGuardMeSession(ctx);
+});
+
+test("persisted warnings fail closed with bounded guidance in auto RPC mode without calling UI", async () => {
+  const { home, cwd, ctx } = await createGuardContext({ environment: {} });
+  const statePaths = resolveStatePaths(cwd, home);
+
+  const first = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  assert.equal(first?.block, true);
+  stopGuardMeSession(ctx);
+
+  let interactiveCalls = 0;
+  ctx.hasUI = true;
+  ctx.mode = "rpc";
+  ctx.ui.custom = async () => {
+    interactiveCalls += 1;
+  };
+  ctx.ui.select = async () => {
+    interactiveCalls += 1;
+    return "Allow once";
+  };
+  await startGuardMeSession(ctx, { homeDir: home, environment: {} });
+
+  const repeated = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const allowed = await evaluateGuardedToolCall({ toolName: "write", input: { path: "safe.txt", content: "safe\n" } }, ctx);
+  const stateText = await readFile(statePaths.localStatePath, "utf8");
+
+  assert.equal(repeated?.block, true);
+  assert.match(repeated?.reason ?? "", /WARNINGS & DECISIONS/);
+  assert.match(repeated?.reason ?? "", /Risk classification: dangerous/);
+  assert.match(repeated?.reason ?? "", /Guarded tool and action: bash:delete/);
+  assert.match(repeated?.reason ?? "", /Target or command: rm -rf build/);
+  assert.match(repeated?.reason ?? "", /Matched rules:/);
+  assert.match(repeated?.reason ?? "", /Interactive approval: .*unavailable/i);
+  assert.match(repeated?.reason ?? "", /safe built-in tool/);
+  assert.match(repeated?.reason ?? "", /Do not retry the identical request unchanged/);
+  assert.ok((repeated?.reason.length ?? Number.MAX_SAFE_INTEGER) <= 6144);
+  assert.equal(interactiveCalls, 0);
+  assert.equal(allowed, undefined);
+  assert.equal(stateText.trim().split("\n").length, 1);
+  assert.doesNotMatch(stateText, /"type":"decision"/);
+  await assert.rejects(access(join(cwd, ".pi", "agent", "guardme.yaml")));
   stopGuardMeSession(ctx);
 });
 

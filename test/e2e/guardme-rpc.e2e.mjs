@@ -27,6 +27,59 @@ import {
 
 const RPC_TIMEOUT_MS = 180_000;
 
+test("GuardMe RPC auto mode fails closed without an approval UI round trip", { timeout: 120_000 }, async () => {
+  const fixture = await createProjectFixture("rpc-auto");
+  const clients = [];
+  try {
+    const firstClient = await startRpcPi({
+      projectDir: fixture.projectDir,
+      homeDir: fixture.homeDir,
+      timeoutMs: 30_000,
+      respondToUnhandledUi: false,
+    });
+    clients.push(firstClient);
+
+    const first = await runScenario(firstClient, "approval-dangerous-delete", { timeoutMs: 30_000 });
+    let end = expectToolEnd(first.events, "bash", { error: true });
+    assert.match(resultText(end), /GuardMe coaching|Recursive force deletion/i);
+    await waitUntil(async () => (await fixture.readLocalState()).includes("dangerous-command"), "dangerous warning state");
+    await firstClient.stop();
+
+    const restarted = await startRpcPi({
+      projectDir: fixture.projectDir,
+      homeDir: fixture.homeDir,
+      timeoutMs: 30_000,
+      respondToUnhandledUi: false,
+    });
+    clients.push(restarted);
+
+    const repeated = await runScenario(restarted, "approval-dangerous-delete", { timeoutMs: 30_000 });
+    end = expectToolEnd(repeated.events, "bash", { error: true });
+    const blockedText = resultText(end);
+    assert.equal(repeated.uiRequests.length, 0, "auto RPC denial must not emit extension_ui_request");
+    assert.match(blockedText, /WARNINGS & DECISIONS/);
+    assert.match(blockedText, /Risk classification: dangerous/);
+    assert.match(blockedText, /Guarded tool and action: bash:delete/);
+    assert.match(blockedText, /Interactive approval: .*unavailable/i);
+    assert.match(blockedText, /Do not retry the identical request unchanged/);
+    assert.ok(blockedText.length <= 7000, "blocked guidance remains bounded after Pi result framing");
+    assert.equal(await pathExists(fixture.approvalTargetPath), true);
+    assert.equal(await pathExists(fixture.localPolicyPath), false);
+    assert.doesNotMatch(await fixture.readLocalState(), /"type":"decision"/);
+
+    const allowed = await runScenario(restarted, "allowed-read", { timeoutMs: 30_000 });
+    const allowedEnd = expectToolEnd(allowed.events, "read", { error: false });
+    assert.match(resultText(allowedEnd), /GuardMe e2e fixture/);
+    assert.match(eventsText(allowed.events), /SCENARIO TOOL RESULT RECEIVED: read/);
+    assert.equal(restarted.exit, undefined, "RPC agent remains alive after the ordinary blocked result");
+  } finally {
+    for (const client of clients) {
+      await client.stop();
+    }
+    await fixture.cleanup();
+  }
+});
+
 test("GuardMe RPC e2e setup, policy enforcement, approvals, and persistence", { timeout: 300_000 }, async () => {
   const fixture = await createProjectFixture("rpc");
   const artifactClients = [];
@@ -38,7 +91,12 @@ test("GuardMe RPC e2e setup, policy enforcement, approvals, and persistence", { 
   let client;
   let failed = false;
   try {
-    client = trackClient(await startRpcPi({ projectDir: fixture.projectDir, homeDir: fixture.homeDir, timeoutMs: RPC_TIMEOUT_MS }));
+    client = trackClient(await startRpcPi({
+      projectDir: fixture.projectDir,
+      homeDir: fixture.homeDir,
+      timeoutMs: RPC_TIMEOUT_MS,
+      approvalMode: "interactive",
+    }));
 
     const commands = await client.send({ type: "get_commands" });
     assert.ok(commands.data.commands.some((command) => command.name === "guardme"), "/guardme command should be registered");
@@ -53,7 +111,12 @@ test("GuardMe RPC e2e setup, policy enforcement, approvals, and persistence", { 
     assert.equal(await pathExists(fixture.globalPolicyPath), false, "setup should not write a global policy");
 
     await client.stop();
-    client = trackClient(await startRpcPi({ projectDir: fixture.projectDir, homeDir: fixture.homeDir, timeoutMs: RPC_TIMEOUT_MS }));
+    client = trackClient(await startRpcPi({
+      projectDir: fixture.projectDir,
+      homeDir: fixture.homeDir,
+      timeoutMs: RPC_TIMEOUT_MS,
+      approvalMode: "interactive",
+    }));
 
     await assertAllowedRead(client);
     await assertAllowedValidationCommand(client);
@@ -352,7 +415,12 @@ async function addOutsideReadPolicyRule(fixture) {
 
 async function restartRpcClient(client, fixture) {
   await client.stop();
-  const restarted = await startRpcPi({ projectDir: fixture.projectDir, homeDir: fixture.homeDir, timeoutMs: RPC_TIMEOUT_MS });
+  const restarted = await startRpcPi({
+    projectDir: fixture.projectDir,
+    homeDir: fixture.homeDir,
+    timeoutMs: RPC_TIMEOUT_MS,
+    approvalMode: "interactive",
+  });
   return typeof fixture.trackRpcClient === "function" ? fixture.trackRpcClient(restarted) : restarted;
 }
 

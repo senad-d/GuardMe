@@ -11,6 +11,8 @@ GuardMe enforces IAM-like, deny-first policy for Pi LLM tool calls routed throug
 
 Global policy loads first. Project-local policy, runtime settings, and generated state are loaded only when the project is trusted. GuardMe runtime settings are project-local; missing settings mean GuardMe is active with Insecure edits off. `{ "version": 1, "enabled": false }` means GuardMe is off for that project after trust, and `{ "version": 1, "enabled": true, "insecureEdits": true }` means `write`/`edit` skip proposed content/script scanning while path protections and other guarded tools remain enforced. Invalid settings fail safe to active with Insecure edits off and report diagnostics. Missing policy files are accepted at runtime, and GuardMe still applies built-in defaults. Use `/guardme` Setup to create or update `~/.pi/agent/guardme.yaml` or `.pi/agent/guardme.yaml`; policy writes are explicit user actions, refuse symlinked policy paths, and use owner-only permissions for new files. Policy, runtime settings, and state reads fail closed for symlinked GuardMe paths or oversized files. In untrusted projects, new warned-once state is recorded in the global state file for the active cwd rather than trusting project-local state, and saved project settings apply after project trust is enabled.
 
+Approval behavior is configured by the top-level policy key `approvalMode` (`auto`, `interactive`, or `block`). Built-in `auto` is the safe default. Global policy can set the mode, trusted project policy overrides global policy, and `GUARDME_APPROVAL_MODE` overrides both for the current process. Invalid policy or environment values produce error diagnostics and resolve to `block` for the invalid source/override; an untrusted project's mode is not loaded.
+
 ## Built-in defaults and starter policies
 
 The built-in defaults and policies created by Setup's sensible-defaults option include non-empty rules for:
@@ -32,6 +34,7 @@ Shell commands are evaluated by executable segment. A compound such as `pwd && l
 
 ```yaml
 version: 1
+approvalMode: auto
 
 allowPaths:
   - pattern: "src/**"
@@ -85,6 +88,14 @@ protectedCredentialPaths:
 
 Supported path actions are `read`, `list`, `write`, `edit`, `delete`, `move`, and `rename`. Command rules match normalized executable shell segments with simple glob syntax where `*` and `?` can match path separators inside command arguments. A trailing argument wildcard ending in ` *` is optional, so `ls *` matches both `ls` and `ls -lh`, and basename candidates allow `ls *` to match `/bin/ls -lh` during policy evaluation. Redirection operators are syntax within an executable segment, not standalone commands, so a pattern such as `2>*` does not independently allow stderr redirection. GuardMe recognizes the exact `/dev/null` path as a built-in sink, so that redirection leaves the underlying command classification intact; redirects to regular files remain write operations. Command rules do not support `actions`; command rules that include `actions` are rejected instead of being applied with surprising scope. Deny and dangerous command rules are also checked against executable shell segments, absolute executable paths, and common wrapper/subcommand forms, so `sudo`, `sudoedit`, `chmod 777`, or `rm -rf` appended after another command is still governed by the matching rule. Unsupported policy `version` values are reported as errors and their rules are ignored. Rules with malformed, empty, or path-incompatible `actions` lists are reported and are not broadened into all-action allow rules.
 
+### Approval modes
+
+- `auto`: TUI sessions may show GuardMe's existing approval UI. RPC, JSON, print, and unknown/non-interactive modes block without invoking an approval dialog method.
+- `interactive`: GuardMe may use the relevant approval method when Pi reports UI support. This is required for an RPC controller that intentionally handles `extension_ui_request` and sends `extension_ui_response`.
+- `block`: GuardMe never invokes `ui.custom`, `ui.select`, or another interactive approval method.
+
+For generic multi-agent orchestrators, use the default `auto` or set `GUARDME_APPROVAL_MODE=block` in every managed child environment. Do not set `interactive` unless the controller owns the complete approval response path.
+
 ## Sections
 
 - `allowPaths`: permits matching path actions when no deny or hard protection matches.
@@ -116,7 +127,7 @@ Outside-project writes, edits, deletes, moves, and renames require explicit `all
 
 ## Approval choices
 
-For repeated dangerous-but-not-hard-forbidden actions or repeated policy-missing shell/script commands, GuardMe shows an approval flow when UI is available:
+For repeated dangerous-but-not-hard-forbidden actions or repeated policy-missing shell/script commands, GuardMe shows an approval flow only when the resolved approval mode permits it:
 
 - Allow once
 - Deny once
@@ -125,9 +136,9 @@ For repeated dangerous-but-not-hard-forbidden actions or repeated policy-missing
 - Allow + save global rule
 - Deny + save global rule
 
-Escape/cancel behaves as deny once. In non-UI modes, approval-required actions fail closed.
+Escape/cancel behaves as deny once. Under `auto` outside TUI, under `block`, or whenever required UI support is absent, approval-required calls fail closed as ordinary blocked tool results. GuardMe does not synthesize a user decision, write an allow/deny rule, or append a decision record. The result includes bounded, redacted `WARNINGS & DECISIONS` guidance with risk, tool/action, target or command, reason, matched rules, explicit approval unavailability, safer alternatives, and a direction not to retry the identical request unchanged. Persisted warned fingerprints follow the same mode check and cannot force RPC UI under `auto`.
 
-Saved decisions append narrow YAML rules, reload policy for the current session, and record a decision in JSONL state. For policy-missing or dangerous compound commands, persistent allow decisions save the failed segment as an exact command rule by default rather than saving the whole compound. Warning records include reason codes such as `dangerous-command`, `policy-missing-command`, `script-content-denied`, and `local-script-uninspectable`; blocked deny decisions are also recorded with redacted reason and matched-rule metadata for the `/guardme` warning details screen. Model-facing follow-up guidance includes a `WARNINGS & DECISIONS` block with the reason and relevant matched rules. GuardMe refuses to save allow rules for hard-denied actions, refuses to persist command rules containing secret-like values, validates loaded JSONL state enums before using records, skips project-local policy/settings/state until the project is trusted, refuses symlinked or oversized policy/settings/state reads, refuses policy and runtime-settings writes that would follow symbolic links out of the expected config path, and refuses generated state writes through project-local state symlinks.
+Saved interactive decisions append narrow YAML rules, reload policy for the current session, and record a decision in JSONL state. For policy-missing or dangerous compound commands, persistent allow decisions save the failed segment as an exact command rule by default rather than saving the whole compound. Warning records include reason codes such as `dangerous-command`, `policy-missing-command`, `script-content-denied`, and `local-script-uninspectable`; blocked deny decisions are also recorded with redacted reason and matched-rule metadata for the `/guardme` warning details screen. Model-facing follow-up guidance includes a `WARNINGS & DECISIONS` block with the reason and relevant matched rules. GuardMe refuses to save allow rules for hard-denied actions, refuses to persist command rules containing secret-like values, validates loaded JSONL state enums before using records, skips project-local policy/settings/state until the project is trusted, refuses symlinked or oversized policy/settings/state reads, refuses policy and runtime-settings writes that would follow symbolic links out of the expected config path, and refuses generated state writes through project-local state symlinks.
 
 ## `/guardme` General pane
 
@@ -143,6 +154,7 @@ Global base policy:
 
 ```yaml
 version: 1
+approvalMode: auto
 
 denyCommands:
   - pattern: "sudo *"

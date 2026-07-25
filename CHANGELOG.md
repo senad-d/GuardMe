@@ -2,6 +2,7 @@
 
 ## 0.1.2 - Unreleased
 
+- Added validated `approvalMode: auto | interactive | block` policy configuration plus the `GUARDME_APPROVAL_MODE` process override. The safe `auto` default preserves TUI approvals while RPC/print/JSON sessions return ordinary bounded fail-closed guidance without emitting an approval UI request; explicit `interactive` retains RPC approval controllers.
 - Added a project-local **Insecure edits** runtime setting in `/guardme` General that lets `write` and `edit` skip proposed content/script scanning while preserving path protections and leaving shell execution and read/discovery tools guarded.
 - Removed the npm postinstall lifecycle hook and excluded the global-policy helper from the npm tarball so package installation works on Node 26, where Node refuses built-in TypeScript type stripping for `.ts` files under `node_modules`.
 - Documented that GuardMe does not need install-time policy creation: built-in defaults apply at runtime, and editable policy files can be created explicitly through `/guardme`.

@@ -24,6 +24,7 @@ export interface GuardMeLifecycleContext {
 export interface StartGuardMeSessionOptions {
   readonly homeDir?: string;
   readonly projectTrusted?: boolean;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
 }
 
 /** Register GuardMe session lifecycle handlers. */
@@ -43,7 +44,12 @@ export async function startGuardMeSession(
 ): Promise<GuardMeSessionState> {
   const projectTrusted = options.projectTrusted ?? ctx.isProjectTrusted();
   const settings = await loadGuardMeRuntimeSettings({ cwd: ctx.cwd, loadLocalSettings: projectTrusted });
-  const config = await loadGuardMeConfig({ cwd: ctx.cwd, homeDir: options.homeDir, loadLocalPolicy: projectTrusted });
+  const config = await loadGuardMeConfig({
+    cwd: ctx.cwd,
+    homeDir: options.homeDir,
+    loadLocalPolicy: projectTrusted,
+    environment: options.environment,
+  });
   const warnings = await loadWarningState({ cwd: ctx.cwd, homeDir: options.homeDir, loadLocalState: projectTrusted });
   const diagnostics = [...settings.diagnostics, ...config.diagnostics, ...warnings.diagnostics];
   const degraded = diagnostics.some((diagnostic) => diagnostic.severity === "error");

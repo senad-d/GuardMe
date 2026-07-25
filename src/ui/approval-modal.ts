@@ -1,9 +1,10 @@
+import type { ApprovalMode } from "../config/approval-mode.ts";
 import type { PolicyDecision, PolicyRequest, UserDecision } from "../policy/action.ts";
 import { isUserDecision } from "../policy/action.ts";
 import { fitCell, footerSegments, type ConfigFrameTheme } from "./config-frame.ts";
 import { isDown, isEnter, isEscape, isUp } from "./key-input.ts";
-import { renderMatchedRules, renderPolicySummary, type PolicySummaryLine } from "./render-policy-summary.ts";
-import { visibleWidth } from "./text.ts";
+import { redactSensitiveText, renderMatchedRules, renderPolicySummary, type PolicySummaryLine } from "./render-policy-summary.ts";
+import { truncateToVisibleWidth, visibleWidth } from "./text.ts";
 
 export type ApprovalResult =
   | { readonly kind: "decision"; readonly decision: UserDecision }
@@ -13,6 +14,7 @@ export interface ApprovalUiContext {
   readonly cwd: string;
   readonly hasUI: boolean;
   readonly mode?: string;
+  readonly approvalMode: ApprovalMode;
   readonly ui: {
     readonly custom?: <T>(factory: (...args: any[]) => unknown, options?: Record<string, unknown>) => Promise<T>;
     readonly select?: (title: string, options: readonly string[]) => Promise<string | undefined>;
@@ -35,33 +37,102 @@ export const APPROVAL_CHOICES: readonly ApprovalChoice[] = [
 ];
 
 const DEFAULT_SELECTED_INDEX = 1;
+const MAX_APPROVAL_TARGET_WIDTH = 512;
+const MAX_APPROVAL_REASON_WIDTH = 768;
+const MAX_APPROVAL_RULE_WIDTH = 384;
+const MAX_APPROVAL_UNAVAILABLE_WIDTH = 384;
+const MAX_APPROVAL_MATCHED_RULES = 8;
+const MAX_APPROVAL_BLOCK_LENGTH = 6144;
 
-export async function requestApprovalDecision(
-  ctx: ApprovalUiContext,
-  request: PolicyRequest,
-  decision: PolicyDecision,
-): Promise<ApprovalResult> {
+export const APPROVAL_UNAVAILABLE_NEXT_STEP =
+  "Interactive approval is unavailable. Use a safe built-in tool, narrow the request, update GuardMe policy with a reviewed exact rule, or report this limitation. Do not retry the identical request unchanged.";
+
+type ApprovalUiResolution =
+  | { readonly kind: "custom" }
+  | { readonly kind: "select" }
+  | { readonly kind: "blocked"; readonly reason: string };
+
+export function resolveApprovalUi(ctx: ApprovalUiContext): ApprovalUiResolution {
+  if (ctx.approvalMode === "block") {
+    return {
+      kind: "blocked",
+      reason: "GuardMe requires user approval for this action, but interactive approval is unavailable because approvalMode is 'block'. Blocking by default.",
+    };
+  }
+  if (ctx.approvalMode === "auto" && ctx.mode !== "tui") {
+    return {
+      kind: "blocked",
+      reason: `GuardMe requires user approval for this action, but interactive approval is unavailable because approvalMode is 'auto' and Pi mode is '${ctx.mode ?? "unknown"}', not 'tui'. Blocking by default.`,
+    };
+  }
   if (!ctx.hasUI) {
     return {
       kind: "blocked",
       reason: "GuardMe requires user approval for this action, but this Pi session has no UI. Blocking by default.",
     };
   }
-
   if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
-    const selected = await requestTuiApproval(ctx, request, decision);
-    return selected ? { kind: "decision", decision: selected } : { kind: "decision", decision: "deny-once" };
+    return { kind: "custom" };
   }
-
   if (typeof ctx.ui.select === "function") {
-    const selected = await requestSelectApproval(ctx, request, decision);
-    return selected ? { kind: "decision", decision: selected } : { kind: "decision", decision: "deny-once" };
+    return { kind: "select" };
   }
-
   return {
     kind: "blocked",
     reason: "GuardMe requires user approval, but no approval UI is available. Blocking by default.",
   };
+}
+
+export async function requestApprovalDecision(
+  ctx: ApprovalUiContext,
+  request: PolicyRequest,
+  decision: PolicyDecision,
+): Promise<ApprovalResult> {
+  const resolution = resolveApprovalUi(ctx);
+  if (resolution.kind === "blocked") {
+    return resolution;
+  }
+  if (resolution.kind === "custom") {
+    const selected = await requestTuiApproval(ctx, request, decision);
+    return selected ? { kind: "decision", decision: selected } : { kind: "decision", decision: "deny-once" };
+  }
+
+  const selected = await requestSelectApproval(ctx, request, decision);
+  return selected ? { kind: "decision", decision: selected } : { kind: "decision", decision: "deny-once" };
+}
+
+export function formatApprovalUnavailableBlockReason(
+  request: PolicyRequest,
+  decision: PolicyDecision,
+  unavailableReason: string,
+): string {
+  const summary = renderPolicySummary(request, decision);
+  const displayedRules = renderMatchedRules(decision.matchedRules.slice(0, MAX_APPROVAL_MATCHED_RULES));
+  const omittedRuleCount = Math.max(0, decision.matchedRules.length - MAX_APPROVAL_MATCHED_RULES);
+  const lines = [
+    "WARNINGS & DECISIONS",
+    `Risk classification: ${boundedApprovalValue(summaryValue(summary, "Risk", decision.risk), 64)}`,
+    `Guarded tool and action: ${boundedApprovalValue(summaryValue(summary, "Action", `${request.toolName}:${request.action}`), 128)}`,
+    `Target or command: ${boundedApprovalValue(summaryValue(summary, "Target", "<unknown>"), MAX_APPROVAL_TARGET_WIDTH)}`,
+    `Reason: ${boundedApprovalValue(summaryValue(summary, "Reason", decision.reason), MAX_APPROVAL_REASON_WIDTH)}`,
+    `Interactive approval: ${boundedApprovalValue(unavailableReason, MAX_APPROVAL_UNAVAILABLE_WIDTH)}`,
+    `Next step: ${APPROVAL_UNAVAILABLE_NEXT_STEP}`,
+    "Matched rules:",
+    ...displayedRules.map((rule) => `- ${boundedApprovalValue(rule, MAX_APPROVAL_RULE_WIDTH)}`),
+    ...(omittedRuleCount > 0 ? [`- ${omittedRuleCount} additional matched rule${omittedRuleCount === 1 ? "" : "s"} omitted.`] : []),
+  ];
+  return boundApprovalBlock(lines.join("\n"));
+}
+
+function boundedApprovalValue(value: string, width: number): string {
+  return truncateToVisibleWidth(redactSensitiveText(value), width);
+}
+
+function boundApprovalBlock(value: string): string {
+  if (value.length <= MAX_APPROVAL_BLOCK_LENGTH) {
+    return value;
+  }
+  return `${value.slice(0, MAX_APPROVAL_BLOCK_LENGTH - 32)}\n[GuardMe guidance truncated]`;
 }
 
 export function isAllowDecision(decision: UserDecision): boolean {

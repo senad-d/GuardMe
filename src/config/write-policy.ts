@@ -371,6 +371,9 @@ export async function writePolicyConfigFile(
 
 export function renderPolicyConfigYaml(config: GuardMePolicyConfig): string {
   const lines: string[] = [`version: ${POLICY_VERSION}`];
+  if (config.approvalMode) {
+    lines.push(`approvalMode: ${config.approvalMode}`);
+  }
   for (const section of [...PATH_RULE_SECTIONS, ...COMMAND_RULE_SECTIONS]) {
     const rules = config[section];
     if (rules.length === 0) {

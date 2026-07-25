@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { GLOBAL_POLICY_PATH, LOCAL_POLICY_PATH } from "../constants.ts";
 import type { PolicyDiagnostic, RuleSourceKind } from "../policy/action.ts";
+import { resolveApprovalModeEnvironment } from "./approval-mode.ts";
 import { type MergedGuardMePolicyConfig, mergePolicyConfigs, sourcePolicyConfig } from "./merge-policy.ts";
 import {
   type ConfigValidationResult,
@@ -43,6 +44,7 @@ export interface LoadGuardMeConfigOptions {
   readonly cwd: string;
   readonly homeDir?: string;
   readonly loadLocalPolicy?: boolean;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
 }
 
 const MAX_POLICY_FILE_BYTES = 1024 * 1024;
@@ -96,10 +98,15 @@ export async function loadGuardMeConfig(options: LoadGuardMeConfigOptions): Prom
     sourcePolicyConfig("builtin", builtInConfig),
     ...files.filter((file) => file.found).map((file) => sourcePolicyConfig(file.sourceKind, file.config, file.path)),
   ]);
-  const diagnostics = [...files.flatMap((file) => file.diagnostics), ...merged.diagnostics];
+  const approvalMode = resolveApprovalModeEnvironment(merged.config.approvalMode, options.environment);
+  const diagnostics = [
+    ...files.flatMap((file) => file.diagnostics),
+    ...merged.diagnostics,
+    ...approvalMode.diagnostics,
+  ];
 
   return {
-    config: merged.config,
+    config: { ...merged.config, approvalMode: approvalMode.mode },
     builtInConfig,
     paths,
     files,

@@ -42,10 +42,74 @@ function needsDecisionFixture() {
 test("approval flow blocks when no UI is available", async () => {
   const { request, decision } = needsDecisionFixture();
 
-  const result = await requestApprovalDecision({ cwd: request.cwd, hasUI: false, mode: "print", ui: {} }, request, decision);
+  const result = await requestApprovalDecision({ cwd: request.cwd, hasUI: false, mode: "print", approvalMode: "auto", ui: {} }, request, decision);
 
   assert.equal(result.kind, "blocked");
-  assert.match(result.reason, /no UI/i);
+  assert.match(result.reason, /interactive approval is unavailable|no UI/i);
+});
+
+test("auto mode suppresses approval UI in RPC even when UI methods exist", async () => {
+  const { request, decision } = needsDecisionFixture();
+  let interactiveCalls = 0;
+  const result = await requestApprovalDecision(
+    {
+      cwd: request.cwd,
+      hasUI: true,
+      mode: "rpc",
+      approvalMode: "auto",
+      ui: {
+        custom: async () => {
+          interactiveCalls += 1;
+        },
+        select: async () => {
+          interactiveCalls += 1;
+          return undefined;
+        },
+        confirm: async () => {
+          interactiveCalls += 1;
+          return false;
+        },
+      },
+    },
+    request,
+    decision,
+  );
+
+  assert.equal(result.kind, "blocked");
+  assert.match(result.reason, /interactive approval is unavailable|not 'tui'/i);
+  assert.equal(interactiveCalls, 0);
+});
+
+test("block mode suppresses every approval UI method in TUI", async () => {
+  const { request, decision } = needsDecisionFixture();
+  let interactiveCalls = 0;
+  const result = await requestApprovalDecision(
+    {
+      cwd: request.cwd,
+      hasUI: true,
+      mode: "tui",
+      approvalMode: "block",
+      ui: {
+        custom: async () => {
+          interactiveCalls += 1;
+        },
+        select: async () => {
+          interactiveCalls += 1;
+          return undefined;
+        },
+        confirm: async () => {
+          interactiveCalls += 1;
+          return false;
+        },
+      },
+    },
+    request,
+    decision,
+  );
+
+  assert.equal(result.kind, "blocked");
+  assert.match(result.reason, /approvalMode is 'block'/i);
+  assert.equal(interactiveCalls, 0);
 });
 
 test("approval select fallback returns the selected decision", async () => {
@@ -55,6 +119,7 @@ test("approval select fallback returns the selected decision", async () => {
     cwd: request.cwd,
     hasUI: true,
     mode: "rpc",
+    approvalMode: "interactive",
     ui: {
       select: async (title, options) => {
         assert.match(title, /GuardMe approval required/);
@@ -80,6 +145,7 @@ test("TUI approval frame renders facts, redacts secrets, and escape denies once"
     cwd: request.cwd,
     hasUI: true,
     mode: "tui",
+    approvalMode: "auto",
     ui: {
       custom: async (factory, options) => {
         assert.equal(options?.overlay, undefined);
@@ -139,6 +205,7 @@ test("TUI approval frame strips terminal control sequences from untrusted text",
     cwd: unsafeRequest.cwd,
     hasUI: true,
     mode: "tui",
+    approvalMode: "auto",
     ui: {
       custom: async (factory) => {
         const component = factory(
@@ -166,6 +233,7 @@ test("TUI approval selection wraps between first and last choices", async () => 
     cwd: request.cwd,
     hasUI: true,
     mode: "tui",
+    approvalMode: "auto",
     ui: {
       custom: async (factory) => {
         let selected;
@@ -207,7 +275,10 @@ test("guard uses approval fallback for repeated dangerous actions", async () => 
       select: async () => allowLabel,
     },
   };
-  await startGuardMeSession(ctx, { homeDir: home });
+  await startGuardMeSession(ctx, {
+    homeDir: home,
+    environment: { GUARDME_APPROVAL_MODE: "interactive" },
+  });
 
   const first = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
   const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);

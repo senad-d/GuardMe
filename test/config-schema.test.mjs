@@ -11,6 +11,7 @@ test("built-in default policy includes approved hard-protection sections", () =>
   const defaults = createBuiltInDefaultPolicy();
 
   assert.equal(defaults.version, 1);
+  assert.equal(defaults.approvalMode, "auto");
   assert.ok(defaults.zeroAccessPaths.some((rule) => rule.pattern === "~/.ssh/**"));
   assert.ok(defaults.noDeletePaths.some((rule) => rule.pattern.includes(".git")));
   const envSuffixRule = defaults.denyPaths.find((rule) => rule.pattern === "**/.env.*");

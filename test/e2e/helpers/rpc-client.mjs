@@ -20,7 +20,7 @@ export const SAFE_RPC_PATH = [
 ].join(delimiter);
 
 export function createRpcChildEnv(options, sourceEnv = processEnv) {
-  return {
+  const childEnvironment = {
     ...sourceEnv,
     HOME: options.homeDir,
     PI_CODING_AGENT_DIR: join(options.homeDir, ".pi", "agent"),
@@ -30,6 +30,11 @@ export function createRpcChildEnv(options, sourceEnv = processEnv) {
     NO_COLOR: "1",
     PATH: SAFE_RPC_PATH,
   };
+  delete childEnvironment.GUARDME_APPROVAL_MODE;
+  if (options.approvalMode !== undefined) {
+    childEnvironment.GUARDME_APPROVAL_MODE = options.approvalMode;
+  }
+  return childEnvironment;
 }
 
 export function createRpcSpawnCommand(args) {
@@ -356,6 +361,9 @@ export class RpcPiClient {
 
   async handleUiRequest(request) {
     if (!isDialogMethod(request.method)) {
+      return;
+    }
+    if (!this.activeUiHandler && this.options.respondToUnhandledUi === false) {
       return;
     }
 

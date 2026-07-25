@@ -26,7 +26,13 @@ import {
 import { loadGuardMeConfig } from "../config/load-config.ts";
 import { persistUserDecisionRule } from "../config/write-policy.ts";
 import { appendDecisionRecord, appendWarningRecord } from "../state/warnings.ts";
-import { isAllowDecision, requestApprovalDecision, type ApprovalUiContext } from "../ui/approval-modal.ts";
+import {
+  APPROVAL_UNAVAILABLE_NEXT_STEP,
+  formatApprovalUnavailableBlockReason,
+  isAllowDecision,
+  requestApprovalDecision,
+  type ApprovalUiContext,
+} from "../ui/approval-modal.ts";
 import { formatGuardMeStatus, getGuardMeSessionState, recordGuardMeGuidance, setGuardMeSessionState, type GuardMeSessionState } from "./session-store.ts";
 
 export interface GuardedToolCallEvent {
@@ -183,10 +189,10 @@ async function handlePolicyDecision(
     refreshGuardMeStatus(ctx);
   }
   if (decision.outcome === "needs-user-decision") {
-    const approval = await requestApprovalDecision(toApprovalContext(ctx), request, decision);
+    const approval = await requestApprovalDecision(toApprovalContext(ctx, state.config.config.approvalMode), request, decision);
     if (approval.kind === "blocked") {
-      recordDecisionGuidance(request, decision, approval.reason);
-      return block(approval.reason);
+      recordDecisionGuidance(request, decision, APPROVAL_UNAVAILABLE_NEXT_STEP);
+      return block(formatApprovalUnavailableBlockReason(request, decision, approval.reason));
     }
     const persisted = await persistApprovalRuleIfRequested(state, request, approval.decision, decision);
     if (!persisted.saved) {
@@ -1352,11 +1358,15 @@ async function normalizeTargets(
   return { targets: targets.filter((target): target is PathTarget => target.kind === "path") };
 }
 
-function toApprovalContext(ctx: GuardedToolCallContext): ApprovalUiContext {
+function toApprovalContext(
+  ctx: GuardedToolCallContext,
+  approvalMode: ApprovalUiContext["approvalMode"],
+): ApprovalUiContext {
   return {
     cwd: ctx.cwd,
     hasUI: ctx.hasUI,
     mode: ctx.mode,
+    approvalMode,
     ui: isRecord(ctx.ui) ? ctx.ui : {},
   } as ApprovalUiContext;
 }
