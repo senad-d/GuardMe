@@ -81,7 +81,7 @@ test("blocked tool calls refresh the footer warning status immediately", async (
   const blocked = await evaluateGuardedToolCall({ toolName: "write", input: { path: ".env", content: "seki=test\n" } }, ctx);
 
   assert.equal(blocked?.block, true);
-  assert.deepEqual(statuses.at(-1), [EXTENSION_STATUS_KEY, "🛡️"]);
+  assert.deepEqual(statuses.at(-1), [EXTENSION_STATUS_KEY, "🛡️\u00a0"]);
   stopGuardMeSession(ctx);
 });
 
@@ -165,7 +165,7 @@ test("insecure edits skips content scanning but preserves path protections and b
   await writeGuardMeRuntimeSettings({ cwd, insecureEdits: true });
   await stopGuardMeSession(ctx);
   await startGuardMeSession(ctx, { homeDir: home });
-  assert.deepEqual(statuses.at(-1), [EXTENSION_STATUS_KEY, "🛡️"]);
+  assert.deepEqual(statuses.at(-1), [EXTENSION_STATUS_KEY, "🛡️\u00a0"]);
 
   const scriptWrite = await evaluateGuardedToolCall({
     toolName: "write",

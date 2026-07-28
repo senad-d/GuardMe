@@ -69,5 +69,5 @@ export function formatGuardMeStatus(state: GuardMeSessionState): string | undefi
   if (!state.enabled) {
     return undefined;
   }
-  return "🛡️";
+  return "🛡️\u00a0";
 }
