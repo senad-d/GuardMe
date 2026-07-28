@@ -60,7 +60,7 @@ test("session_start loads policy and warning state, exposes status, and stores s
   ]);
   assert.equal(state.warnings.warnedFingerprints.has("sha256:lifecycle"), true);
   assert.equal(statuses.at(-1)?.[0], EXTENSION_STATUS_KEY);
-  assert.equal(statuses.at(-1)?.[1], "🛡️ (1 warning)");
+  assert.equal(statuses.at(-1)?.[1], "🛡️");
 });
 
 test("session_start loads persisted disabled runtime settings and clears status", async () => {
@@ -126,7 +126,7 @@ test("malformed policy degrades lifecycle status and exposes diagnostics", async
   const state = await startGuardMeSession(ctx, { homeDir: home });
 
   assert.equal(state.degraded, true);
-  assert.match(statuses.at(-1)?.[1] ?? "", /degraded/);
+  assert.equal(statuses.at(-1)?.[1], "🛡️");
   assert.equal(notifications.at(-1)?.[1], "warning");
   assert.ok(state.diagnostics.some((diagnostic) => diagnostic.severity === "error"));
 });

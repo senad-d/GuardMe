@@ -81,7 +81,7 @@ test("blocked tool calls refresh the footer warning status immediately", async (
   const blocked = await evaluateGuardedToolCall({ toolName: "write", input: { path: ".env", content: "seki=test\n" } }, ctx);
 
   assert.equal(blocked?.block, true);
-  assert.deepEqual(statuses.at(-1), [EXTENSION_STATUS_KEY, "🛡️ (1 warning)"]);
+  assert.deepEqual(statuses.at(-1), [EXTENSION_STATUS_KEY, "🛡️"]);
   stopGuardMeSession(ctx);
 });
 
@@ -156,7 +156,7 @@ test("write and edit script content are inspected before mutation", async () => 
 });
 
 test("insecure edits skips content scanning but preserves path protections and bash execution", async () => {
-  const { home, cwd, ctx } = await createGuardContext({
+  const { home, cwd, ctx, statuses } = await createGuardContext({
     localPolicy: 'version: 1\nzeroAccessPaths:\n  - pattern: "vault/**"\nreadOnlyPaths:\n  - pattern: "docs/**"\nprotectedCredentialPaths:\n  - pattern: "private/**"\n',
   });
   await mkdir(join(cwd, "docs"), { recursive: true });
@@ -165,6 +165,7 @@ test("insecure edits skips content scanning but preserves path protections and b
   await writeGuardMeRuntimeSettings({ cwd, insecureEdits: true });
   await stopGuardMeSession(ctx);
   await startGuardMeSession(ctx, { homeDir: home });
+  assert.deepEqual(statuses.at(-1), [EXTENSION_STATUS_KEY, "🛡️"]);
 
   const scriptWrite = await evaluateGuardedToolCall({
     toolName: "write",

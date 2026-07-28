@@ -66,18 +66,8 @@ export function clearGuardMeGuidance(): void {
 }
 
 export function formatGuardMeStatus(state: GuardMeSessionState): string | undefined {
-  const diagnosticCount = state.diagnostics.length;
-  const warningCount = state.warnings.warnedFingerprints.size;
   if (!state.enabled) {
     return undefined;
   }
-  if (state.degraded) {
-    return `🛡️ degraded (${diagnosticCount} diagnostic${diagnosticCount === 1 ? "" : "s"})`;
-  }
-  const prefix = state.insecureEdits ? "🛡️ insecure edits" : "🛡️";
-  if (warningCount === 0) {
-    return prefix;
-  }
-  const suffix = warningCount === 1 ? "" : "s";
-  return `${prefix} (${warningCount} warning${suffix})`;
+  return "🛡️";
 }
