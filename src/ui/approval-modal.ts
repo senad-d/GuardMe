@@ -387,11 +387,14 @@ function compactMatchedRuleRows(decision: PolicyDecision, availableRows: number)
   }
   const rendered = renderMatchedRules(decision.matchedRules);
   if (rendered.length <= availableRows) {
-    return rendered.map(formatMatchedRuleRow);
+    return rendered.map((rule, index) => formatMatchedRuleRow(rule, index));
   }
   const displayedCount = Math.max(0, availableRows - 1);
   const omittedCount = rendered.length - displayedCount;
-  return [...rendered.slice(0, displayedCount).map(formatMatchedRuleRow), formatOmittedRuleCount(omittedCount)];
+  return [
+    ...rendered.slice(0, displayedCount).map((rule, index) => formatMatchedRuleRow(rule, index)),
+    formatOmittedRuleCount(omittedCount),
+  ];
 }
 
 function formatMatchedRuleRow(rule: string, index: number): string {
