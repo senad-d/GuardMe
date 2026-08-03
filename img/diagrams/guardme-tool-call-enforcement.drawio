@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="26.0.9">
+  <diagram id="guardme-flow" name="GuardMe tool-call enforcement">
+    <mxGraphModel dx="2000" dy="1750" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1750" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="How GuardMe blocks unsafe LLM tool calls before execution" style="text;html=1;align=center;verticalAlign=middle;fontSize=26;fontStyle=1;fontColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="200" y="20" width="1500" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="GuardMe is a Pi extension and policy gate around local tools, not an OS sandbox." style="text;html=1;align=center;verticalAlign=middle;fontSize=15;fontColor=#4b5563;" vertex="1" parent="1">
+          <mxGeometry x="300" y="65" width="1300" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="user" value="&lt;b&gt;User&lt;/b&gt;&#xa;asks Pi to do work" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="180" y="160" width="190" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="llm" value="&lt;b&gt;LLM / Pi agent&lt;/b&gt;&#xa;reasons and proposes an action" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="520" y="160" width="250" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="toolcall" value="&lt;b&gt;Proposed Pi tool call&lt;/b&gt;&#xa;bash · read · grep · find · ls&#xa;write · edit" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;strokeWidth=2;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="900" y="150" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="notproxy" value="&lt;b&gt;Important clarification&lt;/b&gt;&#xa;GuardMe does not block prompts or network requests sent to the LLM API. It intercepts the LLM's requested local tool call inside Pi before that tool executes." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;dashed=1;strokeWidth=2;fontSize=13;align=left;spacingLeft=10;spacingRight=10;" vertex="1" parent="1">
+          <mxGeometry x="1320" y="140" width="420" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="guard" value="GuardMe enforcement boundary — Pi extension hooks" style="swimlane;startSize=36;html=1;container=1;pointerEvents=0;collapsible=0;rounded=1;fillColor=#f3f0f7;swimlaneFillColor=#ffffff;strokeColor=#9673a6;strokeWidth=2;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="310" width="1400" height="760" as="geometry" />
+        </mxCell>
+
+        <mxCell id="hook" value="&lt;b&gt;1. Pi tool_call hook&lt;/b&gt;&#xa;Runs before the selected local tool" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=14;" vertex="1" parent="guard">
+          <mxGeometry x="550" y="60" width="300" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="enabled" value="GuardMe&#xa;active?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=14;fontStyle=1;" vertex="1" parent="guard">
+          <mxGeometry x="610" y="170" width="180" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="disablednote" value="Off only via trusted project runtime setting: GuardMe bypasses enforcement until re-enabled." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontSize=12;" vertex="1" parent="guard">
+          <mxGeometry x="990" y="170" width="330" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="inspect" value="&lt;b&gt;2. Normalize and inspect&lt;/b&gt;&#xa;• Canonicalize paths and project boundary&#xa;• Split bash into executable segments&#xa;• Scan write/edit command-bearing content&#xa;• Inspect local and package scripts&#xa;• Detect protected descendants" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;strokeWidth=2;fontSize=13;align=left;spacingLeft=12;spacingRight=8;" vertex="1" parent="guard">
+          <mxGeometry x="520" y="300" width="360" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="engine" value="&lt;b&gt;3. Deny-first policy evaluation&lt;/b&gt;&#xa;1) built-in hard denials&#xa;2) credential/path protections + deny rules&#xa;3) outside-project path gate&#xa;4) every shell segment needs an allow rule&#xa;5) dangerous or unknown action uses warned-once flow" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=13;align=left;spacingLeft=12;spacingRight=8;" vertex="1" parent="guard">
+          <mxGeometry x="520" y="490" width="360" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="outcome" value="Policy&#xa;outcome" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=14;fontStyle=1;" vertex="1" parent="guard">
+          <mxGeometry x="610" y="670" width="180" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="policy" value="&lt;b&gt;Policy inputs&lt;/b&gt;&#xa;&#xa;• Built-in defaults and non-overridable hard protections&#xa;• ~/.pi/agent/guardme.yaml&#xa;• Trusted project .pi/agent/guardme.yaml&#xa;• GUARDME_APPROVAL_MODE override&#xa;&#xa;Project rules add to the global base; deny always wins." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=13;align=left;verticalAlign=top;spacingTop=12;spacingLeft=12;spacingRight=8;" vertex="1" parent="guard">
+          <mxGeometry x="50" y="330" width="360" height="280" as="geometry" />
+        </mxCell>
+        <mxCell id="state" value="&lt;b&gt;Session and warning state&lt;/b&gt;&#xa;&#xa;• Project trust controls local policy/state&#xa;• active/off and Insecure edits settings&#xa;• Redacted warned fingerprints in JSONL&#xa;• Pi mode and UI availability&#xa;&#xa;Insecure edits skips only write/edit content scanning; path and execution checks remain." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;fontSize=13;align=left;verticalAlign=top;spacingTop=12;spacingLeft=12;spacingRight=8;" vertex="1" parent="guard">
+          <mxGeometry x="990" y="330" width="360" height="280" as="geometry" />
+        </mxCell>
+
+        <mxCell id="allow" value="&lt;b&gt;ALLOW&lt;/b&gt;&#xa;No stronger rule matched and all required paths/command segments are allowed." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=2;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="170" y="1140" width="300" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="deny" value="&lt;b&gt;HARD / EXPLICIT DENY&lt;/b&gt;&#xa;Hard protection, protected path, or deny rule matched. Allow rules and approval cannot override it." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;strokeWidth=2;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="540" y="1140" width="300" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="first" value="&lt;b&gt;RISKY / UNKNOWN — FIRST FINGERPRINT&lt;/b&gt;&#xa;Block, return coaching, and append a redacted warned fingerprint to JSONL state." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="910" y="1140" width="330" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="repeat" value="&lt;b&gt;RISKY / UNKNOWN — REPEATED&lt;/b&gt;&#xa;If approval UI is permitted: user chooses allow/deny once or saves a narrow project/global rule.&#xa;If UI is unavailable, auto is non-TUI, or mode is block: fail closed." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;strokeWidth=2;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="1120" width="390" height="160" as="geometry" />
+        </mxCell>
+
+        <mxCell id="execute" value="&lt;b&gt;4. Pi applies GuardMe's pre-execution result&lt;/b&gt;&#xa;&lt;font color=&quot;#3d7a32&quot;&gt;&lt;b&gt;ALLOW&lt;/b&gt;&lt;/font&gt; → Pi starts the local tool and returns its result.&#xa;&lt;font color=&quot;#a43b37&quot;&gt;&lt;b&gt;BLOCK&lt;/b&gt;&lt;/font&gt; → GuardMe returns { block: true, reason }; the local tool never starts and no protected operation is performed." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;strokeWidth=2;fontSize=14;align=left;spacingLeft=20;" vertex="1" parent="1">
+          <mxGeometry x="250" y="1400" width="1300" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="feedback" value="&lt;b&gt;Agent conversation continues&lt;/b&gt;&#xa;Pi returns either the tool result or a bounded, redacted block reason. On the next turn GuardMe can inject WARNINGS &amp; DECISIONS guidance so the LLM chooses a safer action." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="650" y="1590" width="500" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend" value="Legend" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#666666;verticalAlign=top;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1580" width="250" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-blue" value="" style="rounded=0;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="30" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-blue-text" value="Pi / agent / state" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="28" width="180" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-purple" value="" style="rounded=0;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="54" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-purple-text" value="GuardMe policy / approval" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="52" width="180" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-green" value="" style="rounded=0;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="78" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-green-text" value="Allowed / executed" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="76" width="180" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-red" value="" style="rounded=0;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="102" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-red-text" value="Blocked / never executed" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="100" width="180" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e-user-llm" value="prompt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6c8ebf;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="user" target="llm">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-llm-tool" value="requests tool" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6c8ebf;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="llm" target="toolcall">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-tool-hook" value="pre-execution event" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="toolcall" target="hook">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1050" y="290" />
+              <mxPoint x="900" y="290" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-hook-enabled" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="hook" target="enabled">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-enabled-inspect" value="Yes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="enabled" target="inspect">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-enabled-off" value="No" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#666666;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="enabled" target="disablednote">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-inspect-engine" value="normalized PolicyRequest" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="inspect" target="engine">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-policy-engine" value="merged rules" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=2;exitX=1;exitY=0.65;entryX=0;entryY=0.65;" edge="1" parent="1" source="policy" target="engine">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-state-engine" value="trust, settings, fingerprints" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6c8ebf;strokeWidth=2;exitX=0;exitY=0.65;entryX=1;entryY=0.65;" edge="1" parent="1" source="state" target="engine">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-engine-outcome" value="structured decision" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="engine" target="outcome">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e-outcome-allow" value="allow" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#82b366;strokeWidth=2;exitX=0.1;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="outcome" target="allow">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="830" y="1090" />
+              <mxPoint x="320" y="1090" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-outcome-deny" value="deny" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b85450;strokeWidth=2;exitX=0.35;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="outcome" target="deny">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="870" y="1100" />
+              <mxPoint x="690" y="1100" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-outcome-first" value="coachable, new fingerprint" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#d6b656;strokeWidth=2;exitX=0.65;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="outcome" target="first">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="930" y="1100" />
+              <mxPoint x="1075" y="1100" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-outcome-repeat" value="coachable, known fingerprint" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=2;exitX=0.9;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="outcome" target="repeat">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="970" y="1080" />
+              <mxPoint x="1505" y="1080" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="e-allow-execute" value="allow" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#82b366;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.08;entryY=0;" edge="1" parent="1" source="allow" target="execute">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-deny-block" value="immediate block" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b85450;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.34;entryY=0;" edge="1" parent="1" source="deny" target="execute">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-first-block" value="block + coach" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#d6b656;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.66;entryY=0;" edge="1" parent="1" source="first" target="execute">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-repeat-execute" value="user decision or fail-closed" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.94;entryY=0;" edge="1" parent="1" source="repeat" target="execute">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e-execute-feedback" value="result or blocked reason" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6c8ebf;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="execute" target="feedback">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
