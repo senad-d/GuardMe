@@ -55,14 +55,14 @@ Manual/interactive smoke scenarios for TUI sessions:
 17. Oversized or malformed project runtime settings fail safe to active and report diagnostics.
 18. Unsupported policy versions report diagnostics and do not apply their rules.
 19. Malformed, empty, or path-incompatible path rule `actions` values report diagnostics and do not become broad allow rules.
-20. Approval modals and `/guardme` notifications strip terminal control sequences from untrusted command, path, rule, and command-argument text.
+20. Approval modals and `/guardme` notifications strip terminal control sequences from untrusted command, path, rule, and command-argument text. In a short or narrow terminal pane, verify the approval view remains within the available rows and columns, the selected decision/count/detail and deny-on-cancel guidance remain visible, and configured `tui.select.*` bindings navigate, confirm, and cancel correctly. This is a component/manual check, not automated multiplexer coverage.
 21. Outside-project read without allow policy blocks.
 22. Outside-project read with explicit `readOnlyPaths`/`allowPaths` succeeds.
 23. Outside-project mutation remains denied unless explicitly allowed and not protected.
 24. Segment-aware starter allows such as `pwd *` and `ls *` allow `pwd && ls -lh`, while `pwd && unknown-tool` blocks as policy-missing and names the missing segment.
 25. Broad validation command allows such as `npm test*` do not approve appended guarded segments, for example `npm test && rm -rf build`, `npm test && cat /etc/passwd`, or wrapped denied commands such as `env -- sudo ls`.
 26. Deny command rules catch absolute executable paths and slash-containing arguments, for example `/usr/bin/sudo ls`, `sudo /bin/ls`, `/usr/bin/sudoedit /etc/hosts`, and `chmod 777 /tmp/file`.
-27. Broad `grep`/`ggrep`/`find` discovery over a directory containing direct protected descendants blocks, including absolute executable paths and discovery segments appended to another command; direct built-in `grep`/`find` with a safe `glob`/pattern remains allowed, and constrained `bash` commands such as `find . -name '*.ts'` may run only when their command segment is allowed.
+27. Broad `grep`/`ggrep`/`rg`/`find` discovery over a directory containing direct protected descendants blocks, including absolute executable paths and discovery segments appended to another command; each discovery segment checks only its own normalized roots. Direct built-in `grep`/`find` with a safe `glob`/pattern remains allowed, constrained `bash` commands such as `find . -name '*.ts'` may run only when their command segment is allowed, and `find -L` requires exact review or approval because followed symlinks may leave the requested root.
 28. Broad destructive shell commands aimed at a directory containing protected metadata block, for example `find . -delete` when `.git` is present or `rm -rf vendor` when a nested `vendor/module/.git` is present.
 29. Exact command allows for compound commands do not approve outside-project path access; for example `rm -rf build && cat /etc/passwd` still blocks instead of turning the outside read into an approved destructive command.
 30. Writing or editing a command-bearing script that invokes `.env`, `~/.aws`, `~/.azure`, SSH keys, cloud CLIs, dangerous commands, or unknown commands blocks before mutation while Insecure edits is off.

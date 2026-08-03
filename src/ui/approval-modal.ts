@@ -1,8 +1,8 @@
 import type { ApprovalMode } from "../config/approval-mode.ts";
 import type { PolicyDecision, PolicyRequest, UserDecision } from "../policy/action.ts";
 import { isUserDecision } from "../policy/action.ts";
-import { fitCell, footerSegments, type ConfigFrameTheme } from "./config-frame.ts";
-import { isDown, isEnter, isEscape, isUp } from "./key-input.ts";
+import { fitCell, type ConfigFrameTheme } from "./config-frame.ts";
+import { isDown, isEnter, isEscape, isUp, type KeybindingManager } from "./key-input.ts";
 import { redactSensitiveText, renderMatchedRules, renderPolicySummary, type PolicySummaryLine } from "./render-policy-summary.ts";
 import { truncateToVisibleWidth, visibleWidth } from "./text.ts";
 
@@ -93,12 +93,22 @@ export async function requestApprovalDecision(
     return resolution;
   }
   if (resolution.kind === "custom") {
-    const selected = await requestTuiApproval(ctx, request, decision);
-    return selected ? { kind: "decision", decision: selected } : { kind: "decision", decision: "deny-once" };
+    try {
+      const selected = await requestTuiApproval(ctx, request, decision);
+      return selected ? { kind: "decision", decision: selected } : { kind: "decision", decision: "deny-once" };
+    } catch {
+      if (typeof ctx.ui.select !== "function") {
+        return { kind: "decision", decision: "deny-once" };
+      }
+    }
   }
 
-  const selected = await requestSelectApproval(ctx, request, decision);
-  return selected ? { kind: "decision", decision: selected } : { kind: "decision", decision: "deny-once" };
+  try {
+    const selected = await requestSelectApproval(ctx, request, decision);
+    return selected ? { kind: "decision", decision: selected } : { kind: "decision", decision: "deny-once" };
+  } catch {
+    return { kind: "decision", decision: "deny-once" };
+  }
 }
 
 export function formatApprovalUnavailableBlockReason(
@@ -158,78 +168,89 @@ async function requestSelectApproval(
   return selectedIndex >= 0 ? APPROVAL_CHOICES[selectedIndex]?.decision : undefined;
 }
 
+interface ApprovalTui {
+  readonly requestRender?: () => void;
+  readonly terminal?: { readonly rows?: number };
+}
+
 async function requestTuiApproval(
   ctx: ApprovalUiContext,
   request: PolicyRequest,
   decision: PolicyDecision,
 ): Promise<UserDecision | undefined> {
   return ctx.ui.custom?.<UserDecision | undefined>(
-    (tui: { requestRender?: () => void }, theme: ApprovalTheme, _keybindings: unknown, done: (value: UserDecision | undefined) => void) =>
-      createApprovalComponent(tui, theme, done, request, decision),
+    (tui: ApprovalTui, theme: ApprovalTheme, keybindings: KeybindingManager, done: (value: UserDecision | undefined) => void) =>
+      createApprovalComponent(tui, theme, keybindings, done, request, decision),
   );
 }
 
 type ApprovalTheme = ConfigFrameTheme;
 
+export function approvalRowBudget(terminalRows: number | undefined): number {
+  if (terminalRows === undefined || !Number.isFinite(terminalRows)) {
+    return 24;
+  }
+  return Math.max(1, Math.min(24, Math.floor(terminalRows) - 6));
+}
+
 function createApprovalComponent(
-  tui: { requestRender?: () => void },
+  tui: ApprovalTui,
   theme: ApprovalTheme,
+  keybindings: KeybindingManager,
   done: (value: UserDecision | undefined) => void,
   request: PolicyRequest,
   decision: PolicyDecision,
 ): { render: (width: number) => string[]; invalidate: () => void; handleInput: (data: string) => void } {
   let selectedIndex = DEFAULT_SELECTED_INDEX;
   let cachedWidth: number | undefined;
+  let cachedRows: number | undefined;
   let cachedLines: string[] | undefined;
 
   const invalidate = () => {
     cachedWidth = undefined;
+    cachedRows = undefined;
     cachedLines = undefined;
   };
 
   return {
     render(width: number): string[] {
-      if (cachedLines && cachedWidth === width) {
+      const terminalRows = tui.terminal?.rows;
+      if (cachedLines && cachedWidth === width && cachedRows === terminalRows) {
         return cachedLines;
       }
-      const lines = buildApprovalLines(width, theme, request, decision, selectedIndex);
+      const lines = buildApprovalLines(width, theme, request, decision, selectedIndex, approvalRowBudget(terminalRows));
       cachedWidth = width;
+      cachedRows = terminalRows;
       cachedLines = lines;
       return lines;
     },
     invalidate,
     handleInput(data: string): void {
-      if (isUp(data)) {
+      if (isUp(data, keybindings)) {
         selectedIndex = wrapIndex(selectedIndex - 1, APPROVAL_CHOICES.length);
         invalidate();
         tui.requestRender?.();
         return;
       }
-      if (isDown(data)) {
+      if (isDown(data, keybindings)) {
         selectedIndex = wrapIndex(selectedIndex + 1, APPROVAL_CHOICES.length);
         invalidate();
         tui.requestRender?.();
         return;
       }
-      if (isEnter(data)) {
+      if (isEnter(data, keybindings)) {
         done(APPROVAL_CHOICES[selectedIndex]?.decision ?? "deny-once");
         return;
       }
-      if (isEscape(data)) {
+      if (isEscape(data, keybindings)) {
         done("deny-once");
       }
     },
   };
 }
 
-interface ApprovalDisplayRow {
-  readonly text: string;
-  readonly tone?: "accent" | "dim" | "normal" | "warning";
-  readonly selected?: boolean;
-}
-
-const MIN_APPROVAL_BODY_ROWS = 11;
 const SELECTED_MARKER = "▶ ";
+const APPROVAL_FIXED_FULL_ROWS = 15;
 
 function buildApprovalLines(
   width: number,
@@ -237,150 +258,150 @@ function buildApprovalLines(
   request: PolicyRequest,
   decision: PolicyDecision,
   selectedIndex: number,
+  rowBudget: number,
 ): string[] {
   const frameWidth = Math.max(1, Math.floor(width));
+  const budget = Math.max(1, Math.floor(rowBudget));
   const summary = renderPolicySummary(request, decision);
-  const counter = `${selectedIndex + 1}/${APPROVAL_CHOICES.length}`;
-  const selectedChoice = APPROVAL_CHOICES[selectedIndex];
-  const actionFallback = `${request.toolName}:${request.action}`;
-  const context = `Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", actionFallback)} • Project: ${summaryValue(summary, "Project", request.cwd)}`;
-  const footer = footerSegments(
-    counter,
-    selectedChoice?.description,
-    `Recommendation: ${summaryValue(summary, "Recommendation", "Deny is safest unless the requested scope is necessary.")}`,
-  );
+  const selectedChoice = APPROVAL_CHOICES[selectedIndex] ?? APPROVAL_CHOICES[DEFAULT_SELECTED_INDEX]!;
 
+  if (budget < 7) {
+    return buildUltraShortApprovalLines(summary, decision, selectedChoice, selectedIndex, frameWidth, budget);
+  }
   if (frameWidth < 20) {
-    return renderTinyApproval(summary, decision, selectedChoice, frameWidth);
+    return buildTinyApprovalLines(summary, decision, selectedChoice, selectedIndex, frameWidth, budget);
   }
-
-  const innerWidth = frameWidth - 2;
-  const rows: ApprovalDisplayRow[] = [
-    ...headingRows("APPROVAL REQUIRED", counter, innerWidth),
-    ...labeledRows("Target", summaryValue(summary, "Target", "<unknown>"), innerWidth),
-    ...labeledRows("Reason", summaryValue(summary, "Reason", decision.reason), innerWidth, "warning"),
-  ];
-
-  for (const [index, rule] of renderMatchedRules(decision.matchedRules).entries()) {
-    rows.push(...labeledRows(index === 0 ? "Rule" : `Rule ${index + 1}`, rule, innerWidth));
+  if (budget < 16) {
+    return buildShortApprovalLines(summary, decision, selectedChoice, selectedIndex, frameWidth, budget, theme);
   }
-
-  rows.push(
-    { text: "" },
-    { text: "DECISION", tone: "accent" },
-    ...APPROVAL_CHOICES.flatMap((choice, index) => choiceRows(choice, index === selectedIndex, innerWidth)),
-  );
-
-  return renderApprovalFrame(
-    {
-      title: "GuardMe approval required",
-      activePane: "Decision",
-      context,
-      keys: "↑↓ decision • Enter select • Esc deny once",
-      rows,
-      footer,
-    },
-    frameWidth,
-    theme,
-  );
+  return buildFullApprovalLines(summary, decision, selectedChoice, selectedIndex, frameWidth, budget, theme, request);
 }
 
-function renderApprovalFrame(
-  options: {
-    readonly title: string;
-    readonly activePane: string;
-    readonly context: string;
-    readonly keys: string;
-    readonly rows: readonly ApprovalDisplayRow[];
-    readonly footer: string;
-  },
+function buildFullApprovalLines(
+  summary: readonly PolicySummaryLine[],
+  decision: PolicyDecision,
+  selectedChoice: ApprovalChoice,
+  selectedIndex: number,
   width: number,
+  budget: number,
+  theme: ApprovalTheme,
+  request: PolicyRequest,
+): string[] {
+  const innerWidth = width - 2;
+  const counter = `${selectedIndex + 1}/${APPROVAL_CHOICES.length}`;
+  const ruleRows = compactMatchedRuleRows(decision, Math.min(MAX_APPROVAL_MATCHED_RULES, budget - APPROVAL_FIXED_FULL_ROWS));
+  const summaryText = `Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", `${request.toolName}:${request.action}`)}`;
+  const rows = [
+    framedLine(summaryText, innerWidth, theme),
+    framedLine(`Target: ${summaryValue(summary, "Target", "<unknown>")}`, innerWidth, theme),
+    framedLine(`Reason: ${summaryValue(summary, "Reason", decision.reason)}`, innerWidth, theme, "warning"),
+    ...ruleRows.map((row) => framedLine(row, innerWidth, theme, "dim")),
+    buildApprovalFullBorder(width, theme),
+    framedLine("DECISION", innerWidth, theme, "accent"),
+    ...APPROVAL_CHOICES.map((choice, index) => compactChoiceLine(choice, index === selectedIndex, innerWidth, theme)),
+    framedLine(`Selected: ${selectedChoice.label} — ${selectedChoice.description}`, innerWidth, theme, "accent"),
+    framedLine("Esc = Deny once • ↑↓/j/k choose • Enter select", innerWidth, theme, "dim"),
+    buildApprovalBottomBorder(width, theme),
+  ];
+  const topTitle = width >= 60 ? `GuardMe approval required ${counter}` : `GuardMe ${counter}`;
+  return [buildApprovalTopBorder(width, topTitle, "Decision", theme), ...rows].slice(0, budget);
+}
+
+function buildShortApprovalLines(
+  summary: readonly PolicySummaryLine[],
+  decision: PolicyDecision,
+  selectedChoice: ApprovalChoice,
+  selectedIndex: number,
+  width: number,
+  budget: number,
   theme: ApprovalTheme,
 ): string[] {
   const innerWidth = width - 2;
-  const bodyRows: readonly ApprovalDisplayRow[] = options.rows.length >= MIN_APPROVAL_BODY_ROWS
-    ? options.rows
-    : [...options.rows, ...Array.from({ length: MIN_APPROVAL_BODY_ROWS - options.rows.length }, (): ApprovalDisplayRow => ({ text: "" }))];
-
-  return [
-    buildApprovalTopBorder(width, options.title, options.activePane, theme),
-    ...wrapFramedParagraph(options.context, innerWidth, theme),
-    ...wrapFramedParagraph(options.keys, innerWidth, theme, "dim"),
-    buildApprovalFullBorder(width, theme),
-    ...bodyRows.map((row) => renderApprovalRow(row, innerWidth, theme)),
-    buildApprovalFullBorder(width, theme),
-    ...wrapFramedParagraph(options.footer, innerWidth, theme, "dim"),
+  const choiceCount = Math.max(1, budget - 7);
+  const visibleIndexes = approvalChoiceWindow(selectedIndex, choiceCount);
+  const omittedRules = decision.matchedRules.length;
+  const lines = [
+    buildApprovalTopBorder(width, `GuardMe ${selectedIndex + 1}/${APPROVAL_CHOICES.length}`, "Decision", theme),
+    framedLine(`Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", decision.action)} • Target: ${summaryValue(summary, "Target", "<unknown>")}`, innerWidth, theme),
+    framedLine(`DECISION ${selectedIndex + 1}/${APPROVAL_CHOICES.length}${omittedRules > 0 ? ` • ${omittedRules} matched rule${omittedRules === 1 ? "" : "s"} omitted` : ""}`, innerWidth, theme, "accent"),
+    ...visibleIndexes.map((index) => compactChoiceLine(APPROVAL_CHOICES[index]!, index === selectedIndex, innerWidth, theme)),
+    framedLine(`Selected: ${selectedChoice.label} — ${selectedChoice.description}`, innerWidth, theme, "accent"),
+    framedLine("Esc = Deny once • ↑↓/j/k choose • Enter select", innerWidth, theme, "dim"),
     buildApprovalBottomBorder(width, theme),
   ];
+  return lines.slice(0, budget);
+}
+
+function buildUltraShortApprovalLines(
+  summary: readonly PolicySummaryLine[],
+  decision: PolicyDecision,
+  selectedChoice: ApprovalChoice,
+  selectedIndex: number,
+  width: number,
+  budget: number,
+): string[] {
+  const lines = [
+    `GuardMe ${selectedIndex + 1}/${APPROVAL_CHOICES.length} • ${selectedChoice.label} • Esc=Deny once`,
+    `Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", decision.action)}`,
+    `${decision.matchedRules.length > 0 ? `Rules omitted: ${decision.matchedRules.length} • ` : ""}Target: ${summaryValue(summary, "Target", "<unknown>")}`,
+    selectedChoice.description,
+    "↑↓/j/k choose • Enter select • Esc=Deny once",
+  ];
+  return lines.slice(0, budget).map((line) => boundedApprovalValue(line, width));
+}
+
+function buildTinyApprovalLines(
+  summary: readonly PolicySummaryLine[],
+  decision: PolicyDecision,
+  selectedChoice: ApprovalChoice,
+  selectedIndex: number,
+  width: number,
+  budget: number,
+): string[] {
+  const ruleRows = decision.matchedRules.length > 0 ? [`Rules omitted: ${decision.matchedRules.length}`] : [];
+  const choiceCount = Math.max(1, budget - 5 - ruleRows.length);
+  const visibleIndexes = approvalChoiceWindow(selectedIndex, choiceCount);
+  const lines = [
+    `GuardMe ${selectedIndex + 1}/${APPROVAL_CHOICES.length}`,
+    `Risk: ${summaryValue(summary, "Risk", decision.risk)} Action: ${summaryValue(summary, "Action", decision.action)}`,
+    `Target: ${summaryValue(summary, "Target", "<unknown>")}`,
+    ...ruleRows,
+    ...visibleIndexes.map((index) => `${index === selectedIndex ? ">" : " "} ${APPROVAL_CHOICES[index]!.label}`),
+    `${selectedChoice.label}: ${selectedChoice.description}`,
+    "Esc = Deny once",
+  ];
+  return lines.slice(0, budget).map((line) => boundedApprovalValue(line, width));
+}
+
+function compactMatchedRuleRows(decision: PolicyDecision, availableRows: number): readonly string[] {
+  if (decision.matchedRules.length === 0 || availableRows <= 0) {
+    return [];
+  }
+  const rendered = renderMatchedRules(decision.matchedRules);
+  if (rendered.length <= availableRows) {
+    return rendered.map((rule, index) => `Rule${index === 0 ? "" : ` ${index + 1}`}: ${rule}`);
+  }
+  const displayedCount = Math.max(0, availableRows - 1);
+  const omittedCount = rendered.length - displayedCount;
+  return [
+    ...rendered.slice(0, displayedCount).map((rule, index) => `Rule${index === 0 ? "" : ` ${index + 1}`}: ${rule}`),
+    `${omittedCount} matched rule${omittedCount === 1 ? "" : "s"} omitted`,
+  ];
+}
+
+function compactChoiceLine(choice: ApprovalChoice, selected: boolean, width: number, theme: ApprovalTheme): string {
+  const text = `${selected ? SELECTED_MARKER : "  "}${choice.label}`;
+  return framedLine(selected ? maybeBold(theme, text) : text, width, theme, selected ? "accent" : "normal");
+}
+
+function approvalChoiceWindow(selectedIndex: number, count: number): readonly number[] {
+  const visibleCount = Math.min(APPROVAL_CHOICES.length, Math.max(1, count));
+  const start = Math.min(Math.max(0, selectedIndex - Math.floor(visibleCount / 2)), APPROVAL_CHOICES.length - visibleCount);
+  return Array.from({ length: visibleCount }, (_value, index) => start + index);
 }
 
 function summaryValue(summary: readonly PolicySummaryLine[], label: string, fallback: string): string {
   return summary.find((line) => line.label === label)?.value ?? fallback;
-}
-
-function headingRows(label: string, value: string, width: number): readonly ApprovalDisplayRow[] {
-  const gap = width - visibleWidth(label) - visibleWidth(value);
-  if (gap >= 1) {
-    return [{ text: `${label}${" ".repeat(gap)}${value}`, tone: "accent" }];
-  }
-  return wrapTextToWidth(`${label} ${value}`, width).map((text) => ({ text, tone: "accent" }));
-}
-
-function labeledRows(label: string, value: string, width: number, tone: ApprovalDisplayRow["tone"] = "normal"): readonly ApprovalDisplayRow[] {
-  const labelText = `${label}: `;
-  const prefix = `  ${labelText}`;
-  const continuationPrefix = `  ${" ".repeat(visibleWidth(labelText))}`;
-  return wrapPrefixedText(prefix, value, width, continuationPrefix).map((text) => ({ text, tone }));
-}
-
-function choiceRows(choice: ApprovalChoice, selected: boolean, width: number): readonly ApprovalDisplayRow[] {
-  const marker = selected ? SELECTED_MARKER : "  ";
-  const markerWidth = visibleWidth(marker);
-  const labelWidth = choiceLabelWidth(width);
-  const gap = "  ";
-  const descriptionWidth = width - markerWidth - labelWidth - visibleWidth(gap);
-
-  if (descriptionWidth < 20) {
-    return wrapPrefixedText(marker, `${choice.label} — ${choice.description}`, width, "  ").map((text) => ({ text, selected }));
-  }
-
-  const descriptionLines = wrapTextToWidth(choice.description, descriptionWidth);
-  const continuationPrefix = `${" ".repeat(markerWidth)}${" ".repeat(labelWidth)}${gap}`;
-  return descriptionLines.map((line, index) => ({
-    text: index === 0
-      ? `${marker}${padVisible(choice.label, labelWidth)}${gap}${line}`
-      : `${continuationPrefix}${line}`,
-    selected,
-  }));
-}
-
-function choiceLabelWidth(width: number): number {
-  const longestLabelWidth = Math.max(...APPROVAL_CHOICES.map((choice) => visibleWidth(choice.label)));
-  return Math.min(longestLabelWidth, Math.max(14, Math.floor(width * 0.36)));
-}
-
-function padVisible(text: string, width: number): string {
-  return `${text}${" ".repeat(Math.max(0, width - visibleWidth(text)))}`;
-}
-
-function wrapFramedParagraph(text: string, width: number, theme: ApprovalTheme, role: string = "normal"): string[] {
-  return wrapTextToWidth(text, width).map((line) => framedLine(line, width, theme, role));
-}
-
-function renderApprovalRow(row: ApprovalDisplayRow, width: number, theme: ApprovalTheme): string {
-  const role = roleForApprovalRow(row);
-  const text = row.selected ? maybeBold(theme, row.text) : row.text;
-  return framedLine(text, width, theme, role);
-}
-
-function roleForApprovalRow(row: ApprovalDisplayRow): string {
-  if (row.selected) {
-    return "accent";
-  }
-  if (row.tone && row.tone !== "normal") {
-    return row.tone;
-  }
-  return "normal";
 }
 
 function framedLine(text: string, width: number, theme: ApprovalTheme, role: string = "normal"): string {
@@ -416,89 +437,6 @@ function buildApprovalBottomBorder(width: number, theme: ApprovalTheme): string 
     return style(theme, "accent", "─".repeat(width));
   }
   return style(theme, "accent", `╰${"─".repeat(width - 2)}╯`);
-}
-
-function wrapPrefixedText(prefix: string, text: string, firstWidth: number, continuationPrefix: string): readonly string[] {
-  const firstContentWidth = Math.max(1, firstWidth - visibleWidth(prefix));
-  const continuationContentWidth = Math.max(1, firstWidth - visibleWidth(continuationPrefix));
-  return wrapTextToVariableWidths(text, firstContentWidth, continuationContentWidth).map((line, index) =>
-    `${index === 0 ? prefix : continuationPrefix}${line}`,
-  );
-}
-
-function wrapTextToWidth(text: string, width: number): readonly string[] {
-  return wrapTextToVariableWidths(text, width, width);
-}
-
-function wrapTextToVariableWidths(text: string, firstWidth: number, continuationWidth: number): readonly string[] {
-  const safeFirstWidth = Math.max(1, firstWidth);
-  const safeContinuationWidth = Math.max(1, continuationWidth);
-  let remaining = text.replaceAll(/\s+/g, " ").trim();
-  if (remaining.length === 0) {
-    return [""];
-  }
-
-  const lines: string[] = [];
-  let currentWidth = safeFirstWidth;
-  while (remaining.length > 0) {
-    const next = takeFittingPrefix(remaining, currentWidth);
-    lines.push(next.line);
-    remaining = next.remaining.trimStart();
-    currentWidth = safeContinuationWidth;
-  }
-  return lines;
-}
-
-function takeFittingPrefix(text: string, width: number): { readonly line: string; readonly remaining: string } {
-  if (visibleWidth(text) <= width) {
-    return { line: text, remaining: "" };
-  }
-
-  const characters = Array.from(text);
-  let usedWidth = 0;
-  let endIndex = 0;
-  let lastSpaceIndex = -1;
-
-  for (const [index, character] of characters.entries()) {
-    const nextWidth = usedWidth + visibleWidth(character);
-    if (nextWidth > width) {
-      break;
-    }
-    usedWidth = nextWidth;
-    endIndex = index + 1;
-    if (/\s/u.test(character)) {
-      lastSpaceIndex = index + 1;
-    }
-  }
-
-  if (lastSpaceIndex > 0) {
-    return {
-      line: characters.slice(0, lastSpaceIndex).join("").trimEnd(),
-      remaining: characters.slice(lastSpaceIndex).join(""),
-    };
-  }
-
-  const safeEndIndex = Math.max(1, endIndex);
-  return {
-    line: characters.slice(0, safeEndIndex).join(""),
-    remaining: characters.slice(safeEndIndex).join(""),
-  };
-}
-
-function renderTinyApproval(
-  summary: readonly PolicySummaryLine[],
-  decision: PolicyDecision,
-  selectedChoice: ApprovalChoice | undefined,
-  width: number,
-): string[] {
-  const lines = [
-    "GuardMe approval required",
-    `Risk: ${summaryValue(summary, "Risk", decision.risk)}`,
-    `Action: ${summaryValue(summary, "Action", decision.action)}`,
-    `Target: ${summaryValue(summary, "Target", "<unknown>")}`,
-    selectedChoice ? `Choice: ${selectedChoice.label}` : "Choice: Deny once",
-  ];
-  return lines.flatMap((line) => wrapTextToWidth(line, width));
 }
 
 function maybeBold(theme: ApprovalTheme, text: string): string {

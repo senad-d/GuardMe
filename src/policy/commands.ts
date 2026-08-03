@@ -159,8 +159,8 @@ type SegmentClassificationOptions = Omit<ClassificationOptions, "rawCommand" | "
 
 const CLOUD_CLI_COMMANDS = new Set(["aws", "az", "gcloud"]);
 const READ_COMMANDS = new Set(["cat", "less", "more", "head", "tail"]);
-const GREP_COMMANDS = new Set(["grep", "ggrep"]);
-const ADDITIONAL_READ_COMMANDS = new Set(["awk", "base64", "md5sum", "od", "sed", "sha1sum", "sha256sum", "sha512sum", "shasum", "strings", "wc", "xxd"]);
+const GREP_COMMANDS = new Set(["grep", "ggrep", "rg"]);
+const ADDITIONAL_READ_COMMANDS = new Set(["awk", "base64", "md5sum", "od", "readlink", "sed", "sha1sum", "sha256sum", "sha512sum", "shasum", "strings", "wc", "xxd"]);
 const LIST_COMMANDS = new Set(["ls", "find", "tree"]);
 const COPY_COMMANDS = new Set(["cp", "install"]);
 const ARCHIVE_COMMANDS = new Set(["7z", "bunzip2", "bzip2", "gunzip", "gzip", "tar", "unxz", "xz", "zip"]);
@@ -1071,6 +1071,19 @@ function dangerousDeleteClassification(
 function classifyReadListSegment(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
   if (GREP_COMMANDS.has(context.commandName) || READ_COMMANDS.has(context.commandName) || ADDITIONAL_READ_COMMANDS.has(context.commandName)) {
     return readCommandClassification(context);
+  }
+  if (context.commandName === "find" && findFollowsSymlinks(context.args)) {
+    return segmentClassification(context, {
+      kind: "dangerous",
+      primaryAction: "list",
+      risk: "dangerous",
+      reason: "find -L follows symbolic links and may traverse outside the reviewed search root; an exact allowCommands rule or user approval is required.",
+      matchedPatterns: ["find", "find -L"],
+      hardDenied: false,
+      dangerous: true,
+      requiresUserDecision: true,
+      credentialAccess: context.credentialAccess,
+    });
   }
   if (LIST_COMMANDS.has(context.commandName)) {
     return segmentClassification(context, {
@@ -2226,7 +2239,7 @@ function extractLikelyPathOperands(commandName: string | undefined, args: readon
   }
   const argsWithoutRedirections = stripRedirectionOperands(args);
   if (GREP_COMMANDS.has(commandName)) {
-    return grepPathOperands(argsWithoutRedirections);
+    return grepPathOperands(argsWithoutRedirections, commandName === "rg");
   }
   if (commandName === "find") {
     return findPathOperands(argsWithoutRedirections);
@@ -2294,30 +2307,55 @@ function isFileRedirectionTarget(token: string): boolean {
   return token !== "&" && !token.startsWith("&") && token !== "-";
 }
 
-function grepPathOperands(args: readonly string[]): readonly string[] {
+function grepPathOperands(args: readonly string[], recursiveByDefault = false): readonly string[] {
   const operands = args.filter((arg) => !arg.startsWith("-"));
   if (operands.length > 1) {
     return operands.slice(1);
   }
-  return grepArgsAreRecursive(args) && operands.length === 1 ? ["."] : [];
+  return (recursiveByDefault || grepArgsAreRecursive(args)) && operands.length === 1 ? ["."] : [];
 }
 
 function grepArgsAreRecursive(args: readonly string[]): boolean {
   return args.some((arg) => arg === "--recursive" || hasShortOptionFlag(arg, "r"));
 }
 
+const FIND_GLOBAL_SYMLINK_OPTIONS = new Set(["-H", "-L", "-P"]);
+
 function findPathOperands(args: readonly string[]): readonly string[] {
   const paths: string[] = [];
+  let afterDoubleDash = false;
   for (const arg of args) {
-    if (arg === "--") {
+    if (!afterDoubleDash && paths.length === 0 && FIND_GLOBAL_SYMLINK_OPTIONS.has(arg)) {
       continue;
     }
-    if (arg.startsWith("-") || isFindExpressionToken(arg)) {
+    if (!afterDoubleDash && arg === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (isFindExpressionToken(arg) || (!afterDoubleDash && arg.startsWith("-"))) {
+      break;
+    }
+    if (afterDoubleDash && paths.length > 0 && arg.startsWith("-")) {
       break;
     }
     paths.push(arg);
   }
   return paths.length > 0 ? paths : ["."];
+}
+
+function findFollowsSymlinks(args: readonly string[]): boolean {
+  for (const arg of args) {
+    if (arg === "--" || (!FIND_GLOBAL_SYMLINK_OPTIONS.has(arg) && (arg.startsWith("-") || isFindExpressionToken(arg)))) {
+      return false;
+    }
+    if (arg === "-L") {
+      return true;
+    }
+    if (!FIND_GLOBAL_SYMLINK_OPTIONS.has(arg)) {
+      return false;
+    }
+  }
+  return false;
 }
 
 function isFindExpressionToken(arg: string): boolean {

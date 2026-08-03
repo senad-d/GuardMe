@@ -2,7 +2,7 @@ import type { GuardMePolicyConfig, GuardMeRule, PolicyConfigSection } from "../c
 import { COMMAND_RULE_SECTIONS, PATH_RULE_SECTIONS, createEmptyPolicyConfig } from "../config/schema.ts";
 import type { PolicyAction } from "../policy/action.ts";
 import { footerSegments, type FrameMainRow, renderGuardMeFrame } from "./config-frame.ts";
-import { isBackspace, isCtrlC, isDown, isEnter, isEscape, isPrintable, isQuit, isUp } from "./key-input.ts";
+import { isBackspace, isCtrlC, isDown, isEnter, isEscape, isPrintable, isQuit, isUp, type KeybindingManager } from "./key-input.ts";
 
 export type SetupScope = "global" | "local";
 export type SetupMode =
@@ -147,8 +147,8 @@ export async function requestSetupConfiguration(
 export async function requestSetupMode(ctx: SetupWizardContext): Promise<SetupMode | undefined> {
   if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
     const selected = await ctx.ui.custom<SetupMode | undefined>(
-      (tui: { requestRender?: () => void }, theme: SetupTheme, _keybindings: unknown, done: (value: SetupMode | undefined) => void) =>
-        createSetupModeComponent(tui, theme, done),
+      (tui: { requestRender?: () => void }, theme: SetupTheme, keybindings: KeybindingManager, done: (value: SetupMode | undefined) => void) =>
+        createSetupModeComponent(tui, theme, keybindings, done),
     );
     return selected;
   }
@@ -303,8 +303,8 @@ interface SetupBooleanPrompt {
 async function requestSetupBoolean(ctx: SetupWizardContext, prompt: SetupBooleanPrompt): Promise<boolean> {
   if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
     const selected = await ctx.ui.custom<boolean | undefined>(
-      (tui: { requestRender?: () => void }, theme: SetupTheme, _keybindings: unknown, done: (value: boolean | undefined) => void) =>
-        createSetupBooleanComponent(tui, theme, done, prompt),
+      (tui: { requestRender?: () => void }, theme: SetupTheme, keybindings: KeybindingManager, done: (value: boolean | undefined) => void) =>
+        createSetupBooleanComponent(tui, theme, keybindings, done, prompt),
     );
     return selected ?? false;
   }
@@ -315,6 +315,7 @@ async function requestSetupBoolean(ctx: SetupWizardContext, prompt: SetupBoolean
 function createSetupModeComponent(
   tui: { requestRender?: () => void },
   theme: SetupTheme,
+  keybindings: KeybindingManager,
   done: (value: SetupMode | undefined) => void,
 ): { render: (width: number) => string[]; invalidate: () => void; handleInput: (data: string) => void } {
   let selectedIndex = 0;
@@ -337,23 +338,23 @@ function createSetupModeComponent(
     },
     invalidate,
     handleInput(data: string): void {
-      if (isUp(data)) {
+      if (isUp(data, keybindings)) {
         selectedIndex = wrapIndex(selectedIndex - 1, SETUP_MODE_CHOICES.length);
         invalidate();
         tui.requestRender?.();
         return;
       }
-      if (isDown(data)) {
+      if (isDown(data, keybindings)) {
         selectedIndex = wrapIndex(selectedIndex + 1, SETUP_MODE_CHOICES.length);
         invalidate();
         tui.requestRender?.();
         return;
       }
-      if (isEnter(data)) {
+      if (isEnter(data, keybindings)) {
         done(SETUP_MODE_CHOICES[selectedIndex]?.mode);
         return;
       }
-      if (isEscape(data) || isQuit(data)) {
+      if (isEscape(data, keybindings) || isQuit(data)) {
         done(undefined);
       }
     },
@@ -363,6 +364,7 @@ function createSetupModeComponent(
 function createSetupBooleanComponent(
   tui: { requestRender?: () => void },
   theme: SetupTheme,
+  keybindings: KeybindingManager,
   done: (value: boolean | undefined) => void,
   prompt: SetupBooleanPrompt,
 ): { render: (width: number) => string[]; invalidate: () => void; handleInput: (data: string) => void } {
@@ -386,17 +388,17 @@ function createSetupBooleanComponent(
     },
     invalidate,
     handleInput(data: string): void {
-      if (isUp(data) || isDown(data)) {
+      if (isUp(data, keybindings) || isDown(data, keybindings)) {
         selectedIndex = selectedIndex === 0 ? 1 : 0;
         invalidate();
         tui.requestRender?.();
         return;
       }
-      if (isEnter(data)) {
+      if (isEnter(data, keybindings)) {
         done(selectedIndex === 0);
         return;
       }
-      if (isEscape(data) || isQuit(data)) {
+      if (isEscape(data, keybindings) || isQuit(data)) {
         done(undefined);
       }
     },
@@ -464,8 +466,8 @@ async function chooseRuleSection(ctx: SetupWizardContext, scope: SetupScope): Pr
   const choices = ruleSectionChoices();
   if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
     return ctx.ui.custom<RuleSectionSelection | undefined>(
-      (tui: { requestRender?: () => void }, theme: SetupTheme, _keybindings: unknown, done: (value: RuleSectionSelection | undefined) => void) =>
-        createRuleSectionComponent(tui, theme, done, choices, scope),
+      (tui: { requestRender?: () => void }, theme: SetupTheme, keybindings: KeybindingManager, done: (value: RuleSectionSelection | undefined) => void) =>
+        createRuleSectionComponent(tui, theme, keybindings, done, choices, scope),
     );
   }
 
@@ -478,6 +480,7 @@ async function chooseRuleSection(ctx: SetupWizardContext, scope: SetupScope): Pr
 function createRuleSectionComponent(
   tui: { requestRender?: () => void },
   theme: SetupTheme,
+  keybindings: KeybindingManager,
   done: (value: RuleSectionSelection | undefined) => void,
   choices: readonly RuleSectionChoice[],
   scope: SetupScope,
@@ -502,23 +505,23 @@ function createRuleSectionComponent(
     },
     invalidate,
     handleInput(data: string): void {
-      if (isUp(data)) {
+      if (isUp(data, keybindings)) {
         selectedIndex = wrapIndex(selectedIndex - 1, choices.length);
         invalidate();
         tui.requestRender?.();
         return;
       }
-      if (isDown(data)) {
+      if (isDown(data, keybindings)) {
         selectedIndex = wrapIndex(selectedIndex + 1, choices.length);
         invalidate();
         tui.requestRender?.();
         return;
       }
-      if (isEnter(data)) {
+      if (isEnter(data, keybindings)) {
         done(choices[selectedIndex]?.section);
         return;
       }
-      if (isEscape(data) || isQuit(data)) {
+      if (isEscape(data, keybindings) || isQuit(data)) {
         done(undefined);
       }
     },
@@ -679,8 +682,8 @@ async function requestSetupTextInput(
 ): Promise<string | undefined> {
   if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
     return ctx.ui.custom<string | undefined>(
-      (tui: { requestRender?: () => void }, theme: SetupTheme, _keybindings: unknown, done: (value: string | undefined) => void) =>
-        createSetupTextInputComponent(tui, theme, done, prompt, scope),
+      (tui: { requestRender?: () => void }, theme: SetupTheme, keybindings: KeybindingManager, done: (value: string | undefined) => void) =>
+        createSetupTextInputComponent(tui, theme, keybindings, done, prompt, scope),
     );
   }
 
@@ -690,6 +693,7 @@ async function requestSetupTextInput(
 function createSetupTextInputComponent(
   tui: { requestRender?: () => void },
   theme: SetupTheme,
+  keybindings: KeybindingManager,
   done: (value: string | undefined) => void,
   prompt: SetupTextInputPrompt,
   scope: SetupScope,
@@ -719,11 +723,11 @@ function createSetupTextInputComponent(
     },
     invalidate,
     handleInput(data: string): void {
-      if (isEnter(data)) {
+      if (isEnter(data, keybindings)) {
         done(value);
         return;
       }
-      if (isEscape(data) || isCtrlC(data)) {
+      if (isEscape(data, keybindings) || isCtrlC(data)) {
         done(undefined);
         return;
       }

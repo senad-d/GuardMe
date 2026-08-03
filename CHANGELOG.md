@@ -2,6 +2,8 @@
 
 ## 0.1.2 - Unreleased
 
+- Made GuardMe custom selection screens use Pi's injected keybindings, and bounded the approval view by terminal height with compact decisions, selected details, scoped matched-rule truncation, and resize-aware render caching.
+- Fixed `find -H`/`-L`/`-P` starting-path parsing and shell-segment discovery scoping; `find -L` now names symlink traversal and requires an exact reviewed allow or user approval instead of inheriting unrelated project-root credential matches.
 - Added validated `approvalMode: auto | interactive | block` policy configuration plus the `GUARDME_APPROVAL_MODE` process override. The safe `auto` default preserves TUI approvals while RPC/print/JSON sessions return ordinary bounded fail-closed guidance without emitting an approval UI request; explicit `interactive` retains RPC approval controllers.
 - Added a project-local **Insecure edits** runtime setting in `/guardme` General that lets `write` and `edit` skip proposed content/script scanning while preserving path protections and leaving shell execution and read/discovery tools guarded.
 - Removed the npm postinstall lifecycle hook and excluded the global-policy helper from the npm tarball so package installation works on Node 26, where Node refuses built-in TypeScript type stripping for `.ts` files under `node_modules`.

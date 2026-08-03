@@ -444,6 +444,57 @@ test("bash tool calls are classified and blocked or allowed by policy", async ()
   stopGuardMeSession(ctx);
 });
 
+test("find -L keeps its explicit root and reports conservative symlink traversal", async () => {
+  const { cwd, ctx } = await createGuardContext();
+  await writeFile(join(cwd, ".env"), "SECRET=redacted\n", "utf8");
+  await mkdir(join(cwd, "node_modules", "pkg"), { recursive: true });
+
+  const blocked = await evaluateGuardedToolCall({
+    toolName: "bash",
+    input: { command: "find -L node_modules/pkg -maxdepth 2 -type f" },
+  }, ctx);
+  const mapped = await mapToolCallToPolicyRequest(
+    { toolName: "bash", input: { command: "find -L node_modules/pkg -maxdepth 2 -type f" } },
+    cwd,
+  );
+
+  assert.equal(blocked?.block, true);
+  assert.match(blocked?.reason ?? "", /symbolic links|symlink/i);
+  assert.doesNotMatch(blocked?.reason ?? "", /Environment files|\.env/);
+  assert.equal("request" in mapped ? mapped.request.targets.some((target) => target.raw === ".") : true, false);
+  assert.equal("request" in mapped ? mapped.request.targets.some((target) => target.raw === "node_modules/pkg") : false, true);
+  stopGuardMeSession(ctx);
+});
+
+test("compound discovery segments inspect only their own roots", async () => {
+  const { cwd, ctx } = await createGuardContext({
+    localPolicy: 'version: 1\nallowCommands:\n  - pattern: "readlink *"\n',
+  });
+  await writeFile(join(cwd, ".env"), "SECRET=redacted\n", "utf8");
+  await mkdir(join(cwd, "scoped", "find-root"), { recursive: true });
+  await mkdir(join(cwd, "scoped", "grep-root"), { recursive: true });
+  await writeFile(join(cwd, "scoped", "find-root", "index.ts"), "export {};\n", "utf8");
+  await writeFile(join(cwd, "scoped", "grep-root", "index.ts"), "const needle = true;\n", "utf8");
+
+  const findResult = await evaluateGuardedToolCall({
+    toolName: "bash",
+    input: { command: "ls . && find scoped/find-root -type f" },
+  }, ctx);
+  const grepResult = await evaluateGuardedToolCall({
+    toolName: "bash",
+    input: { command: "readlink . && grep -R needle scoped/grep-root" },
+  }, ctx);
+  const rgResult = await evaluateGuardedToolCall({
+    toolName: "bash",
+    input: { command: "ls . && rg needle scoped/grep-root" },
+  }, ctx);
+
+  assert.equal(findResult, undefined);
+  assert.equal(grepResult, undefined);
+  assert.equal(rgResult, undefined);
+  stopGuardMeSession(ctx);
+});
+
 test("destructive shell commands cannot target directories containing protected metadata", async () => {
   const { cwd, ctx } = await createGuardContext();
   await mkdir(join(cwd, ".git"), { recursive: true });

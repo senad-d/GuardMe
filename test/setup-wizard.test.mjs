@@ -45,6 +45,38 @@ test("TUI setup element renders an intuitive setup menu", async () => {
   assert.equal(rendered.some((line) => line.includes("Cancel setup")), false);
 });
 
+test("TUI setup uses injected selection keybindings", async () => {
+  const actions = new Map([
+    ["custom-up", "tui.select.up"],
+    ["custom-down", "tui.select.down"],
+    ["custom-confirm", "tui.select.confirm"],
+  ]);
+  const mode = await requestSetupMode({
+    cwd: "/repo",
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      custom: async (factory) => {
+        let selected;
+        const component = factory(
+          { requestRender: () => {} },
+          { fg: (_color, text) => text },
+          { matches: (data, action) => actions.get(data) === action },
+          (value) => {
+            selected = value;
+          },
+        );
+        component.handleInput("custom-up");
+        component.handleInput("custom-down");
+        component.handleInput("custom-confirm");
+        return selected;
+      },
+    },
+  });
+
+  assert.equal(mode, "global-defaults");
+});
+
 test("TUI setup selection wraps between first and last options", async () => {
   const mode = await requestSetupMode({
     cwd: "/repo",

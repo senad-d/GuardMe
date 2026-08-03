@@ -1,16 +1,37 @@
-export function isUp(data: string): boolean {
-  return data === "\u001B[A" || data === "k";
+export type SelectionKeybindingAction =
+  | "tui.select.up"
+  | "tui.select.down"
+  | "tui.select.confirm"
+  | "tui.select.cancel";
+
+export interface KeybindingManager {
+  readonly matches: (data: string, action: SelectionKeybindingAction) => boolean;
 }
 
-export function isDown(data: string): boolean {
-  return data === "\u001B[B" || data === "j";
+function matchesSelectionAction(
+  keybindings: KeybindingManager | undefined,
+  data: string,
+  action: SelectionKeybindingAction,
+): boolean {
+  return typeof keybindings?.matches === "function" && keybindings.matches(data, action);
 }
 
-export function isEnter(data: string): boolean {
-  return data === "\r" || data === "\n";
+export function isUp(data: string, keybindings?: KeybindingManager): boolean {
+  return matchesSelectionAction(keybindings, data, "tui.select.up") || data === "\u001B[A" || data === "k";
 }
 
-export function isEscape(data: string): boolean {
+export function isDown(data: string, keybindings?: KeybindingManager): boolean {
+  return matchesSelectionAction(keybindings, data, "tui.select.down") || data === "\u001B[B" || data === "j";
+}
+
+export function isEnter(data: string, keybindings?: KeybindingManager): boolean {
+  return matchesSelectionAction(keybindings, data, "tui.select.confirm") || data === "\r" || data === "\n";
+}
+
+export function isEscape(data: string, keybindings?: KeybindingManager): boolean {
+  if (matchesSelectionAction(keybindings, data, "tui.select.cancel")) {
+    return true;
+  }
   const normalized = data.toLowerCase();
   return (
     data === "\u001B" ||

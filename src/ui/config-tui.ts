@@ -4,7 +4,7 @@ import type { GuardMeStateRecord } from "../state/warnings.ts";
 import { SETUP_MODE_CHOICES, type SetupMode, type SetupScope, type SetupWizardConfig, setupConfigForMode, setupModeRows, setupScopeLabel } from "./setup-wizard.ts";
 import { fitCell, footerSegments, type ConfigFrameTheme, type FrameMainRow, type FrameSidebarItem, type FrameValue, renderGuardMeFrame } from "./config-frame.ts";
 import { formatDiagnostics, formatWarningDecisionRecords } from "./detail-formatters.ts";
-import { isBackspace, isDown, isEnter, isEscape, isPrintable, isQuit, isTab, isUp } from "./key-input.ts";
+import { isBackspace, isDown, isEnter, isEscape, isPrintable, isQuit, isTab, isUp, type KeybindingManager } from "./key-input.ts";
 import { visibleWidth } from "./text.ts";
 
 export type ConfigPane = "Setup" | "General" | "Policies" | "Rules";
@@ -179,6 +179,7 @@ type GeneralToggleHandlers = Pick<GeneralRowHandlers, "openGuardMeToggle" | "ope
 
 interface ConfigPanelInputOptions {
   readonly data: string;
+  readonly keybindings: KeybindingManager;
   readonly state: ConfigComponentState;
   readonly snapshot: ConfigSnapshot;
   readonly rerender: () => void;
@@ -235,8 +236,8 @@ export async function requestGuardMeConfigAction(
   }
 
   return ctx.ui.custom<ConfigAction>(
-    (tui: { requestRender?: () => void }, theme: ConfigTheme, _keybindings: unknown, done: (value: ConfigAction) => void) =>
-      createConfigComponent(tui, theme, done, snapshot, sensibleDefaults, createPlan),
+    (tui: { requestRender?: () => void }, theme: ConfigTheme, keybindings: KeybindingManager, done: (value: ConfigAction) => void) =>
+      createConfigComponent(tui, theme, keybindings, done, snapshot, sensibleDefaults, createPlan),
   );
 }
 
@@ -250,8 +251,8 @@ export async function requestPolicyWriteConfirmationAction(
   }
 
   const result = await ctx.ui.custom<PolicyWriteConfirmationAction>(
-    (tui: { requestRender?: () => void }, theme: ConfigTheme, _keybindings: unknown, done: (value: PolicyWriteConfirmationAction) => void) =>
-      createStandaloneConfirmComponent(tui, theme, done, setupConfig, plan),
+    (tui: { requestRender?: () => void }, theme: ConfigTheme, keybindings: KeybindingManager, done: (value: PolicyWriteConfirmationAction) => void) =>
+      createStandaloneConfirmComponent(tui, theme, keybindings, done, setupConfig, plan),
   );
   return result ?? "cancel";
 }
@@ -275,8 +276,8 @@ export async function showPolicyWriteSuccess(
   }
 
   const result = await ctx.ui.custom<PolicyWriteSuccessResult>(
-    (tui: { requestRender?: () => void }, theme: ConfigTheme, _keybindings: unknown, done: (value: PolicyWriteSuccessResult) => void) =>
-      createSuccessComponent(tui, theme, done, snapshot, plan, options),
+    (tui: { requestRender?: () => void }, theme: ConfigTheme, keybindings: KeybindingManager, done: (value: PolicyWriteSuccessResult) => void) =>
+      createSuccessComponent(tui, theme, keybindings, done, snapshot, plan, options),
   );
   return result ?? { kind: "closed" };
 }
@@ -525,6 +526,7 @@ function openGeneralConfirm(state: ConfigComponentState, confirm: Exclude<Confir
 function createConfigComponent(
   tui: { requestRender?: () => void },
   theme: ConfigTheme,
+  keybindings: KeybindingManager,
   done: (value: ConfigAction) => void,
   snapshot: ConfigSnapshot,
   sensibleDefaults: GuardMePolicyConfig,
@@ -567,6 +569,7 @@ function createConfigComponent(
     handleInput(data: string): void {
       handleConfigPanelInput({
         data,
+        keybindings,
         state,
         snapshot,
         rerender,
@@ -586,6 +589,7 @@ function createConfigComponent(
 function createStandaloneConfirmComponent(
   tui: { requestRender?: () => void },
   theme: ConfigTheme,
+  keybindings: KeybindingManager,
   done: (value: "write" | "back" | "cancel") => void,
   setupConfig: SetupWizardConfig,
   plan: SetupWritePlan,
@@ -603,6 +607,7 @@ function createStandaloneConfirmComponent(
     handleInput(data: string): void {
       handleConfirmInput(
         data,
+        keybindings,
         confirm,
         () => done("back"),
         (result) => {
@@ -619,6 +624,7 @@ function createStandaloneConfirmComponent(
 function createSuccessComponent(
   tui: { requestRender?: () => void },
   theme: ConfigTheme,
+  keybindings: KeybindingManager,
   done: (value: PolicyWriteSuccessResult) => void,
   snapshot: ConfigSnapshot,
   plan: SetupWritePlan,
@@ -700,6 +706,7 @@ function createSuccessComponent(
     handleInput(data: string): void {
       handleConfigPanelInput({
         data,
+        keybindings,
         state,
         snapshot,
         rerender,
@@ -728,7 +735,7 @@ function handleSearchStateInput(options: ConfigPanelInputOptions): boolean {
   if (!options.state.searchActive) {
     return false;
   }
-  handleSearchInput(options.data, options.state, options.snapshot, options.rerender);
+  handleSearchInput(options.data, options.keybindings, options.state, options.snapshot, options.rerender);
   return true;
 }
 
@@ -737,12 +744,12 @@ function handleDetailStateInput(options: ConfigPanelInputOptions): boolean {
   if (!detail) {
     return false;
   }
-  if (isEscape(options.data) || isQuit(options.data)) {
+  if (isEscape(options.data, options.keybindings) || isQuit(options.data)) {
     closeDetailScreen(options.state, options.rerender);
     return true;
   }
-  if (isUp(options.data) || isDown(options.data)) {
-    detail.selectedIndex = moveDetailSelection(options.snapshot, detail, isDown(options.data) ? 1 : -1);
+  if (isUp(options.data, options.keybindings) || isDown(options.data, options.keybindings)) {
+    detail.selectedIndex = moveDetailSelection(options.snapshot, detail, isDown(options.data, options.keybindings) ? 1 : -1);
     clearFooterAfterNavigation(options);
     return true;
   }
@@ -765,6 +772,7 @@ function handleConfirmStateInput(options: ConfigPanelInputOptions): boolean {
   }
   handleConfirmInput(
     options.data,
+    options.keybindings,
     confirm,
     () => returnFromConfirm(options.state, confirm, options.rerender),
     (action) => finishConfirmAction(confirm, action, options.done, options.state, options.rerender),
@@ -774,7 +782,7 @@ function handleConfirmStateInput(options: ConfigPanelInputOptions): boolean {
 }
 
 function handlePanelCommandInput(options: ConfigPanelInputOptions): boolean {
-  if (isQuit(options.data) || isEscape(options.data)) {
+  if (isQuit(options.data) || isEscape(options.data, options.keybindings)) {
     options.done({ kind: "closed" });
     return true;
   }
@@ -815,28 +823,28 @@ function handlePaneNavigationInput(options: ConfigPanelInputOptions): void {
 }
 
 function handleSidebarNavigation(options: ConfigPanelInputOptions): void {
-  if (isUp(options.data) || isDown(options.data)) {
-    moveSidebarSelection(options.state, isDown(options.data) ? 1 : -1);
+  if (isUp(options.data, options.keybindings) || isDown(options.data, options.keybindings)) {
+    moveSidebarSelection(options.state, isDown(options.data, options.keybindings) ? 1 : -1);
     clearFooterAfterNavigation(options);
     return;
   }
-  if (isEnter(options.data) && !paneIsReadOnly(options.state.pane)) {
+  if (isEnter(options.data, options.keybindings) && !paneIsReadOnly(options.state.pane)) {
     options.state.focus = "main";
     clearFooterAfterNavigation(options);
   }
 }
 
 function handleMainNavigation(options: ConfigPanelInputOptions): void {
-  if (isUp(options.data) || isDown(options.data)) {
-    moveSelection(options.state, isDown(options.data) ? 1 : -1, options.snapshot);
+  if (isUp(options.data, options.keybindings) || isDown(options.data, options.keybindings)) {
+    moveSelection(options.state, isDown(options.data, options.keybindings) ? 1 : -1, options.snapshot);
     clearFooterAfterNavigation(options);
     return;
   }
-  if (isEnter(options.data) && options.state.pane === "Setup") {
+  if (isEnter(options.data, options.keybindings) && options.state.pane === "Setup") {
     options.openSetupActionForMode(setupModeAt(options.state.setupIndex));
     return;
   }
-  if (isEnter(options.data) && options.state.pane === "General") {
+  if (isEnter(options.data, options.keybindings) && options.state.pane === "General") {
     options.activateGeneralRow();
   }
 }
@@ -945,6 +953,7 @@ function successKeysForState(state: ConfigComponentState, actionsEnabled = false
 
 function handleConfirmInput(
   data: string,
+  keybindings: KeybindingManager,
   confirm: ConfirmState,
   goBack: () => void,
   done: (value: ConfirmInputResult) => void,
@@ -954,16 +963,16 @@ function handleConfirmInput(
     done({ kind: "cancel" });
     return;
   }
-  if (isEscape(data)) {
+  if (isEscape(data, keybindings)) {
     goBack();
     return;
   }
-  if (isUp(data) || isDown(data)) {
-    moveConfirmSelection(confirm, isDown(data) ? 1 : -1);
+  if (isUp(data, keybindings) || isDown(data, keybindings)) {
+    moveConfirmSelection(confirm, isDown(data, keybindings) ? 1 : -1);
     rerender();
     return;
   }
-  if (isEnter(data)) {
+  if (isEnter(data, keybindings)) {
     done(confirmActionForSelection(confirm));
   }
 }
@@ -1009,21 +1018,27 @@ function confirmChoices(confirm: ConfirmState): readonly string[] {
   }
 }
 
-function handleSearchInput(data: string, state: ConfigComponentState, snapshot: ConfigSnapshot, rerender: () => void): void {
-  if (isEscape(data)) {
+function handleSearchInput(
+  data: string,
+  keybindings: KeybindingManager,
+  state: ConfigComponentState,
+  snapshot: ConfigSnapshot,
+  rerender: () => void,
+): void {
+  if (isEscape(data, keybindings)) {
     clearSearch(state);
     rerender();
     return;
   }
 
-  if (isUp(data) || isDown(data)) {
+  if (isUp(data, keybindings) || isDown(data, keybindings)) {
     const results = searchResults(snapshot, state.searchQuery);
-    state.searchIndex = wrap(state.searchIndex + (isDown(data) ? 1 : -1), 0, results.length - 1);
+    state.searchIndex = wrap(state.searchIndex + (isDown(data, keybindings) ? 1 : -1), 0, results.length - 1);
     rerender();
     return;
   }
 
-  if (isEnter(data)) {
+  if (isEnter(data, keybindings)) {
     const result = searchResults(snapshot, state.searchQuery)[state.searchIndex];
     if (result) {
       state.pane = result.pane;

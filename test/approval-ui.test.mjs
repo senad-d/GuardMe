@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { APPROVAL_CHOICES, requestApprovalDecision } from "../src/ui/approval-modal.ts";
+import { APPROVAL_CHOICES, approvalRowBudget, requestApprovalDecision } from "../src/ui/approval-modal.ts";
+import { visibleWidth } from "../src/ui/text.ts";
 import { USER_DECISIONS } from "../src/policy/action.ts";
 import { evaluateGuardedToolCall } from "../src/events/register-guard.ts";
 import { startGuardMeSession, stopGuardMeSession } from "../src/events/register-lifecycle.ts";
@@ -138,6 +139,49 @@ test("approval select fallback returns the selected decision", async () => {
   assert.deepEqual(result, { kind: "decision", decision: "allow-once" });
 });
 
+test("approval falls back to native select when custom TUI creation fails", async () => {
+  const { request, decision } = needsDecisionFixture();
+  const selectedLabel = `${APPROVAL_CHOICES[4].label} — ${APPROVAL_CHOICES[4].description}`;
+  const result = await requestApprovalDecision(
+    {
+      cwd: request.cwd,
+      hasUI: true,
+      mode: "tui",
+      approvalMode: "auto",
+      ui: {
+        custom: async () => {
+          throw new Error("custom TUI unavailable");
+        },
+        select: async (_title, options) => {
+          assert.equal(options.length, 6);
+          return selectedLabel;
+        },
+      },
+    },
+    request,
+    decision,
+  );
+
+  assert.deepEqual(result, { kind: "decision", decision: "allow-global" });
+});
+
+test("native approval cancellation denies once", async () => {
+  const { request, decision } = needsDecisionFixture();
+  const result = await requestApprovalDecision(
+    {
+      cwd: request.cwd,
+      hasUI: true,
+      mode: "rpc",
+      approvalMode: "interactive",
+      ui: { select: async () => undefined },
+    },
+    request,
+    decision,
+  );
+
+  assert.deepEqual(result, { kind: "decision", decision: "deny-once" });
+});
+
 test("TUI approval frame renders facts, redacts secrets, and escape denies once", async () => {
   const { request, decision } = needsDecisionFixture();
   let rendered = [];
@@ -174,7 +218,7 @@ test("TUI approval frame renders facts, redacts secrets, and escape denies once"
   assert.ok(rendered.some((line) => line.includes("Risk:")));
   assert.ok(rendered.some((line) => line.includes("dangerousCommands")));
   assert.ok(rendered.some((line) => line.includes("Allow + save project rule")));
-  assert.ok(rendered.some((line) => line.includes("Run now and save an allow rule")));
+  assert.ok(rendered.some((line) => line.includes("Block this call only")));
   assert.equal(rendered.some((line) => line.includes("supersecret")), false);
   assert.equal(rendered.some((line) => line.includes("hunter2")), false);
   assert.ok(rendered.some((line) => line.includes("SECRET_KEY=<redacted>")));
@@ -256,6 +300,132 @@ test("TUI approval selection wraps between first and last choices", async () => 
   const result = await requestApprovalDecision(ctx, request, decision);
 
   assert.deepEqual(result, { kind: "decision", decision: "deny-global" });
+});
+
+test("TUI approval uses injected selection keybindings for navigation, confirm, and cancel", async () => {
+  const { request, decision } = needsDecisionFixture();
+  const actionForInput = new Map([
+    ["custom-up", "tui.select.up"],
+    ["custom-down", "tui.select.down"],
+    ["custom-confirm", "tui.select.confirm"],
+    ["custom-cancel", "tui.select.cancel"],
+  ]);
+  const keybindings = { matches: (data, action) => actionForInput.get(data) === action };
+  let call = 0;
+  const ctx = {
+    cwd: request.cwd,
+    hasUI: true,
+    mode: "tui",
+    approvalMode: "auto",
+    ui: {
+      custom: async (factory) => {
+        call += 1;
+        let selected;
+        const component = factory(
+          { requestRender: () => {}, terminal: { rows: 24 } },
+          { fg: (_color, text) => text, bold: (text) => text },
+          keybindings,
+          (value) => {
+            selected = value;
+          },
+        );
+        if (call === 1) {
+          component.handleInput("custom-down");
+          component.handleInput("custom-up");
+          component.handleInput("custom-confirm");
+        } else {
+          component.handleInput("custom-cancel");
+        }
+        return selected;
+      },
+    },
+  };
+
+  assert.deepEqual(await requestApprovalDecision(ctx, request, decision), { kind: "decision", decision: "deny-once" });
+  assert.deepEqual(await requestApprovalDecision(ctx, request, decision), { kind: "decision", decision: "deny-once" });
+});
+
+test("TUI approval stays width- and height-bounded in short and narrow panes", async () => {
+  const { request, decision } = needsDecisionFixture();
+  const terminal = { rows: 16 };
+  const renderedBySize = [];
+  const ctx = {
+    cwd: request.cwd,
+    hasUI: true,
+    mode: "tui",
+    approvalMode: "auto",
+    ui: {
+      custom: async (factory) => {
+        const component = factory(
+          { requestRender: () => {}, terminal },
+          { fg: (_color, text) => text, bold: (text) => text },
+          { matches: () => false },
+          () => {},
+        );
+        renderedBySize.push({ width: 44, rows: terminal.rows, lines: component.render(44) });
+        terminal.rows = 30;
+        renderedBySize.push({ width: 44, rows: terminal.rows, lines: component.render(44) });
+        renderedBySize.push({ width: 18, rows: terminal.rows, lines: component.render(18) });
+        terminal.rows = 8;
+        renderedBySize.push({ width: 44, rows: terminal.rows, lines: component.render(44) });
+        return "deny-once";
+      },
+    },
+  };
+
+  await requestApprovalDecision(ctx, request, decision);
+
+  for (const rendered of renderedBySize) {
+    assert.ok(rendered.lines.length <= approvalRowBudget(rendered.rows));
+    assert.ok(rendered.lines.every((line) => visibleWidth(line) <= rendered.width));
+    assert.ok(rendered.lines.some((line) => line.includes("2/6")));
+    assert.ok(rendered.lines.some((line) => line.includes("Deny once")));
+    assert.ok(rendered.lines.some((line) => /Esc.*Deny once|Esc cancel = Deny once/.test(line)));
+  }
+  assert.notEqual(renderedBySize[0].lines.length, renderedBySize[1].lines.length);
+});
+
+test("short TUI approval keeps all six decisions reachable and reports omitted rules", async () => {
+  const { request, decision } = needsDecisionFixture();
+  const manyRulesDecision = {
+    ...decision,
+    matchedRules: Array.from({ length: 12 }, (_value, index) => ({
+      ...decision.matchedRules[0],
+      pattern: `rule-${index}`,
+    })),
+  };
+  const visited = [];
+  let fullLines = [];
+  const ctx = {
+    cwd: request.cwd,
+    hasUI: true,
+    mode: "tui",
+    approvalMode: "auto",
+    ui: {
+      custom: async (factory) => {
+        const terminal = { rows: 16 };
+        const component = factory(
+          { requestRender: () => {}, terminal },
+          { fg: (_color, text) => text, bold: (text) => text },
+          { matches: (data, action) => data === "next" && action === "tui.select.down" },
+          () => {},
+        );
+        for (let index = 0; index < APPROVAL_CHOICES.length; index += 1) {
+          const lines = component.render(70);
+          visited.push(APPROVAL_CHOICES.find((choice) => lines.some((line) => line.includes(`Selected: ${choice.label}`)))?.decision);
+          component.handleInput("next");
+        }
+        terminal.rows = 40;
+        fullLines = component.render(100);
+        return "deny-once";
+      },
+    },
+  };
+
+  await requestApprovalDecision(ctx, request, manyRulesDecision);
+
+  assert.deepEqual(new Set(visited), new Set(APPROVAL_CHOICES.map((choice) => choice.decision)));
+  assert.ok(fullLines.some((line) => /matched rules? omitted/.test(line)));
 });
 
 test("guard uses approval fallback for repeated dangerous actions", async () => {

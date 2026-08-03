@@ -516,6 +516,50 @@ test("config TUI starts on General and setup selection wraps to local append rul
   assert.deepEqual(result, { kind: "append-rules", scope: "local" });
 });
 
+test("config TUI uses injected selection keybindings", async () => {
+  const defaults = createBuiltInDefaultPolicy();
+  const actions = new Map([
+    ["custom-up", "tui.select.up"],
+    ["custom-down", "tui.select.down"],
+    ["custom-confirm", "tui.select.confirm"],
+    ["custom-cancel", "tui.select.cancel"],
+  ]);
+  let focusedLines = [];
+  const result = await requestGuardMeConfigAction(
+    {
+      cwd: "/repo",
+      hasUI: true,
+      mode: "tui",
+      ui: {
+        custom: async (factory) => {
+          let selected;
+          const component = factory(
+            { requestRender: () => {} },
+            { fg: (_color, text) => text, bold: (text) => text },
+            { matches: (data, action) => actions.get(data) === action },
+            (value) => {
+              selected = value;
+            },
+          );
+          component.handleInput("custom-down");
+          component.handleInput("custom-up");
+          component.handleInput("custom-confirm");
+          component.handleInput("custom-down");
+          focusedLines = component.render(120);
+          component.handleInput("custom-cancel");
+          return selected;
+        },
+      },
+    },
+    snapshotFixture(defaults),
+    defaults,
+    async () => ({ ok: false, reason: "createPlan should not run" }),
+  );
+
+  assert.ok(focusedLines.some((line) => line.includes("▶ Insecure edits")));
+  assert.deepEqual(result, { kind: "closed" });
+});
+
 test("config TUI Escape exits the panel", async () => {
   const defaults = createBuiltInDefaultPolicy();
   for (const escapeInput of ["\u001B", "esc", "\u001B[27u", "\u001B[27;1;27~"]) {

@@ -143,6 +143,9 @@ export async function mapToolCallToPolicyRequest(
       return { error: normalized.error };
     }
     const discoveryTargets = await protectedShellDiscoveryTargets(commandClassification, normalized.targets);
+    if ("error" in discoveryTargets) {
+      return discoveryTargets;
+    }
     const mutationTargets = await protectedMutationDescendantTargets(commandClassification.primaryAction, normalized.targets);
     return {
       request: {
@@ -150,7 +153,7 @@ export async function mapToolCallToPolicyRequest(
         action: commandClassification.primaryAction,
         cwd,
         command,
-        targets: [...normalized.targets, ...discoveryTargets, ...mutationTargets],
+        targets: [...normalized.targets, ...discoveryTargets.targets, ...mutationTargets],
         riskHint: commandClassification.risk,
       },
       commandClassification,
@@ -664,6 +667,9 @@ async function scriptCommandPolicyRequest(
     return { error: normalized.error };
   }
   const discoveryTargets = await protectedShellDiscoveryTargets(commandClassification, normalized.targets);
+  if ("error" in discoveryTargets) {
+    return discoveryTargets;
+  }
   const mutationTargets = await protectedMutationDescendantTargets(commandClassification.primaryAction, normalized.targets);
   return {
     request: {
@@ -673,7 +679,7 @@ async function scriptCommandPolicyRequest(
       command: command.command,
       targets: [
         ...normalized.targets,
-        ...discoveryTargets,
+        ...discoveryTargets.targets,
         ...mutationTargets,
         { kind: "tool", raw: `${source.sourceKind}:${source.sourcePath ?? source.snippetLabel}:${command.lineStart}:${command.preview}` },
       ],
@@ -1056,37 +1062,55 @@ async function protectedMutationDescendantTargets(
 async function protectedShellDiscoveryTargets(
   commandClassification: ReturnType<typeof classifyShellCommand>,
   targets: readonly PathTarget[],
-): Promise<readonly PathTarget[]> {
+): Promise<{ readonly targets: readonly PathTarget[] } | { readonly error: string }> {
   const protectedTargets: PathTarget[] = [];
   for (const segment of extractExecutableCommandSegments(commandClassification.rawCommand)) {
+    if (segment.commandName !== "find" && !(isGrepCommandName(segment.commandName) && shellGrepIsRecursive(segment.originalText))) {
+      continue;
+    }
+    const segmentTargets = pathTargetsForCommandSegment(segment, targets);
+    if ("error" in segmentTargets) {
+      return segmentTargets;
+    }
     if (segment.commandName === "find") {
       protectedTargets.push(
         ...(await protectedDiscoveryTargets(
           "find",
           { pattern: shellFindPattern(segment.originalText) ?? shellFindPattern(segment.normalizedText) ?? "*" },
-          pathTargetsForCommandSegment(segment, targets),
+          segmentTargets.targets,
         )),
       );
       continue;
     }
-    if (isGrepCommandName(segment.commandName) && shellGrepIsRecursive(segment.originalText)) {
-      protectedTargets.push(...(await protectedDiscoveryTargets("grep", {}, pathTargetsForCommandSegment(segment, targets))));
-    }
+    protectedTargets.push(...(await protectedDiscoveryTargets("grep", {}, segmentTargets.targets)));
   }
-  return dedupePathTargets(protectedTargets);
+  return { targets: dedupePathTargets(protectedTargets) };
 }
 
 function isGrepCommandName(commandName: string | undefined): boolean {
-  return commandName === "grep" || commandName === "ggrep";
+  return commandName === "grep" || commandName === "ggrep" || commandName === "rg";
 }
 
 function pathTargetsForCommandSegment(
   segment: ExecutableCommandSegment,
   targets: readonly PathTarget[],
-): readonly PathTarget[] {
-  const segmentRawTargets = new Set(segment.targetPaths);
-  const segmentTargets = targets.filter((target) => segmentRawTargets.has(target.raw));
-  return segmentTargets.length > 0 ? segmentTargets : targets;
+): { readonly targets: readonly PathTarget[] } | { readonly error: string } {
+  const mappedTargets: PathTarget[] = [];
+  for (const rawTarget of segment.targetPaths) {
+    const matches = targets.filter((target) => target.raw === rawTarget);
+    if (matches.length === 0) {
+      return {
+        error: `GuardMe could not safely map discovery target '${redactSensitiveText(rawTarget)}' for shell segment '${redactSensitiveText(segment.normalizedText)}'. Blocking by default.`,
+      };
+    }
+    mappedTargets.push(...matches);
+  }
+  if (mappedTargets.length === 0) {
+    return {
+      error: `GuardMe found no safely normalized discovery targets for shell segment '${redactSensitiveText(segment.normalizedText)}'. Blocking by default.`,
+    };
+  }
+  return { targets: dedupePathTargets(mappedTargets) };
 }
 
 function dedupePathTargets(targets: readonly PathTarget[]): readonly PathTarget[] {
@@ -1106,6 +1130,9 @@ function shellGrepIsRecursive(command: string): boolean {
   const grepIndex = tokens.findIndex((token) => isGrepCommandName(basename(token).toLowerCase()));
   if (grepIndex < 0) {
     return false;
+  }
+  if (basename(tokens[grepIndex] ?? "").toLowerCase() === "rg") {
+    return !tokens.slice(grepIndex + 1).includes("--no-recursive");
   }
   for (const token of tokens.slice(grepIndex + 1)) {
     if (token === "--") {

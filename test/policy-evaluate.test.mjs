@@ -319,6 +319,22 @@ test("wildcard command allows approve safe individual segments after path checks
   }
 });
 
+test("find -L requires an exact reviewed allow because symlinks can escape the search root", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-find-symlink-"));
+  const command = "find -L node_modules/pkg -maxdepth 2 -type f";
+  const broadPolicy = policyFrom({ ...createEmptyPolicyConfig(), allowCommands: [{ pattern: "find *" }] });
+  const exactPolicy = policyFrom({ ...createEmptyPolicyConfig(), allowCommands: [{ pattern: command }] });
+  const { request, classified } = shellRequest(cwd, command);
+
+  const broadDecision = evaluatePolicyRequest({ policy: broadPolicy, request, commandClassification: classified });
+  const exactDecision = evaluatePolicyRequest({ policy: exactPolicy, request, commandClassification: classified });
+
+  assert.equal(broadDecision.outcome, "coach");
+  assert.match(broadDecision.reason, /symbolic links|symlink/i);
+  assert.doesNotMatch(broadDecision.reason, /\.env/);
+  assert.equal(exactDecision.outcome, "allow");
+});
+
 test("allowed command families can discard output through /dev/null", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-null-redirection-"));
   const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;

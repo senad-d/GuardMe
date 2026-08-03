@@ -269,11 +269,25 @@ test("credential detection handles long exact path boundaries", () => {
   assert.equal(classifyShellCommand(`python -c "print('${longPrefix} .env*')"`).credentialAccess, true);
 });
 
+test("find global symlink options preserve starting paths and classify -L conservatively", () => {
+  const followed = classifyShellCommand("find -L node_modules/pkg -maxdepth 2 -type f");
+  assert.deepEqual(followed.targetPaths, ["node_modules/pkg"]);
+  assert.equal(followed.risk, "dangerous");
+  assert.equal(followed.requiresUserDecision, true);
+  assert.match(followed.reason, /symbolic links|symlink/i);
+
+  assert.deepEqual(classifyShellCommand("find -H src -name '*.ts'").targetPaths, ["src"]);
+  assert.deepEqual(classifyShellCommand("find -P src -name '*.ts'").targetPaths, ["src"]);
+  assert.deepEqual(classifyShellCommand("find -L -maxdepth 2 -type f").targetPaths, ["."]);
+  assert.deepEqual(classifyShellCommand("find -- -leading-dash -type f").targetPaths, ["-leading-dash"]);
+});
+
 test("common shell commands map to read list write edit move and rename actions", () => {
   assert.equal(classifyShellCommand("ls src").primaryAction, "list");
   assert.equal(classifyShellCommand("find -name '*.ts'").targetPaths[0], ".");
   assert.equal(classifyShellCommand("grep -R value").targetPaths[0], ".");
   assert.equal(classifyShellCommand("ggrep -R value").targetPaths[0], ".");
+  assert.equal(classifyShellCommand("rg value").targetPaths[0], ".");
   assert.equal(classifyShellCommand("cat README.md").primaryAction, "read");
   assert.equal(classifyShellCommand("echo hello > out.txt").primaryAction, "write");
   assert.equal(classifyShellCommand("cp README.md README.copy").primaryAction, "write");

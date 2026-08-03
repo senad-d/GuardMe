@@ -276,7 +276,7 @@ Saved decisions append narrow YAML rules, reload policy for the current session,
 | Approval prompt does not appear | `auto` prompts only in TUI. Use `interactive` only for an RPC controller that handles the extension UI round trip; non-interactive sessions fail closed by design. |
 | Project policy or settings are ignored | Trust the project from `/guardme` and reload/restart pi if needed. |
 | Cloud CLI is blocked | This is a hard protection. Run cloud commands outside Pi or use a separate, intentionally isolated workflow. |
-| A broad command allow still blocks | GuardMe evaluates every executable segment and protected path first; allow `ls *` cannot approve `ls && rm -rf build` or `cat .env`. |
+| A broad command allow still blocks | GuardMe evaluates every executable segment and protected path first; allow `ls *` cannot approve `ls && rm -rf build` or `cat .env`. `find -L` follows symlinks, so it needs an exact reviewed command allow or user approval even when `find *` is allowed. |
 | Saved rule is refused | GuardMe will not persist hard-denied actions or command rules containing secret-like values. Use allow once or add a sanitized rule manually. |
 | Need a starter policy file | Run `/guardme`, open Setup, and create global or project defaults. Missing files are okay because built-in defaults still apply. |
 
