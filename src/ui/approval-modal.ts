@@ -274,23 +274,27 @@ function buildApprovalLines(
   if (budget < 16) {
     return buildShortApprovalLines(summary, decision, selectedChoice, selectedIndex, frameWidth, budget, theme);
   }
-  return buildFullApprovalLines(summary, decision, selectedChoice, selectedIndex, frameWidth, budget, theme, request);
+  return buildFullApprovalLines({ summary, decision, selectedChoice, selectedIndex, width: frameWidth, budget, theme, request });
 }
 
-function buildFullApprovalLines(
-  summary: readonly PolicySummaryLine[],
-  decision: PolicyDecision,
-  selectedChoice: ApprovalChoice,
-  selectedIndex: number,
-  width: number,
-  budget: number,
-  theme: ApprovalTheme,
-  request: PolicyRequest,
-): string[] {
+interface FullApprovalLineOptions {
+  readonly summary: readonly PolicySummaryLine[];
+  readonly decision: PolicyDecision;
+  readonly selectedChoice: ApprovalChoice;
+  readonly selectedIndex: number;
+  readonly width: number;
+  readonly budget: number;
+  readonly theme: ApprovalTheme;
+  readonly request: PolicyRequest;
+}
+
+function buildFullApprovalLines(options: FullApprovalLineOptions): string[] {
+  const { summary, decision, selectedChoice, selectedIndex, width, budget, theme, request } = options;
   const innerWidth = width - 2;
   const counter = `${selectedIndex + 1}/${APPROVAL_CHOICES.length}`;
   const ruleRows = compactMatchedRuleRows(decision, Math.min(MAX_APPROVAL_MATCHED_RULES, budget - APPROVAL_FIXED_FULL_ROWS));
-  const summaryText = `Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", `${request.toolName}:${request.action}`)}`;
+  const toolAction = `${request.toolName}:${request.action}`;
+  const summaryText = `Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", toolAction)}`;
   const rows = [
     framedLine(summaryText, innerWidth, theme),
     framedLine(`Target: ${summaryValue(summary, "Target", "<unknown>")}`, innerWidth, theme),
@@ -320,10 +324,12 @@ function buildShortApprovalLines(
   const choiceCount = Math.max(1, budget - 7);
   const visibleIndexes = approvalChoiceWindow(selectedIndex, choiceCount);
   const omittedRules = decision.matchedRules.length;
+  const omittedRuleSummary = formatOmittedRuleCount(omittedRules, " • ");
+  const decisionHeading = `DECISION ${selectedIndex + 1}/${APPROVAL_CHOICES.length}${omittedRuleSummary}`;
   const lines = [
     buildApprovalTopBorder(width, `GuardMe ${selectedIndex + 1}/${APPROVAL_CHOICES.length}`, "Decision", theme),
     framedLine(`Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", decision.action)} • Target: ${summaryValue(summary, "Target", "<unknown>")}`, innerWidth, theme),
-    framedLine(`DECISION ${selectedIndex + 1}/${APPROVAL_CHOICES.length}${omittedRules > 0 ? ` • ${omittedRules} matched rule${omittedRules === 1 ? "" : "s"} omitted` : ""}`, innerWidth, theme, "accent"),
+    framedLine(decisionHeading, innerWidth, theme, "accent"),
     ...visibleIndexes.map((index) => compactChoiceLine(APPROVAL_CHOICES[index]!, index === selectedIndex, innerWidth, theme)),
     framedLine(`Selected: ${selectedChoice.label} — ${selectedChoice.description}`, innerWidth, theme, "accent"),
     framedLine("Esc = Deny once • ↑↓/j/k choose • Enter select", innerWidth, theme, "dim"),
@@ -340,10 +346,12 @@ function buildUltraShortApprovalLines(
   width: number,
   budget: number,
 ): string[] {
+  const omittedRuleSummary = decision.matchedRules.length > 0 ? `Rules omitted: ${decision.matchedRules.length} • ` : "";
+  const target = summaryValue(summary, "Target", "<unknown>");
   const lines = [
     `GuardMe ${selectedIndex + 1}/${APPROVAL_CHOICES.length} • ${selectedChoice.label} • Esc=Deny once`,
     `Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", decision.action)}`,
-    `${decision.matchedRules.length > 0 ? `Rules omitted: ${decision.matchedRules.length} • ` : ""}Target: ${summaryValue(summary, "Target", "<unknown>")}`,
+    `${omittedRuleSummary}Target: ${target}`,
     selectedChoice.description,
     "↑↓/j/k choose • Enter select • Esc=Deny once",
   ];
@@ -379,14 +387,24 @@ function compactMatchedRuleRows(decision: PolicyDecision, availableRows: number)
   }
   const rendered = renderMatchedRules(decision.matchedRules);
   if (rendered.length <= availableRows) {
-    return rendered.map((rule, index) => `Rule${index === 0 ? "" : ` ${index + 1}`}: ${rule}`);
+    return rendered.map(formatMatchedRuleRow);
   }
   const displayedCount = Math.max(0, availableRows - 1);
   const omittedCount = rendered.length - displayedCount;
-  return [
-    ...rendered.slice(0, displayedCount).map((rule, index) => `Rule${index === 0 ? "" : ` ${index + 1}`}: ${rule}`),
-    `${omittedCount} matched rule${omittedCount === 1 ? "" : "s"} omitted`,
-  ];
+  return [...rendered.slice(0, displayedCount).map(formatMatchedRuleRow), formatOmittedRuleCount(omittedCount)];
+}
+
+function formatMatchedRuleRow(rule: string, index: number): string {
+  const ruleNumber = index === 0 ? "" : ` ${index + 1}`;
+  return `Rule${ruleNumber}: ${rule}`;
+}
+
+function formatOmittedRuleCount(count: number, prefix: string = ""): string {
+  if (count <= 0) {
+    return "";
+  }
+  const noun = count === 1 ? "rule" : "rules";
+  return `${prefix}${count} matched ${noun} omitted`;
 }
 
 function compactChoiceLine(choice: ApprovalChoice, selected: boolean, width: number, theme: ApprovalTheme): string {
