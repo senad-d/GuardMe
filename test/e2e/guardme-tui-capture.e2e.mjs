@@ -98,7 +98,7 @@ test("GuardMe TUI capture writes one sanitized panel artifact", { timeout: 60_00
   assert.match(artifact, /Pi project trust → OFF • GuardMe skips project policy\/settings\/state until trusted again/);
   assert.match(artifact, /GuardMe will skip project policy, settings, and state until trusted again/);
   assert.match(artifact, /Approval - Decision Modal/);
-  assert.match(artifact, /APPROVAL REQUIRED/);
+  assert.match(artifact, /GuardMe approval required/);
   assert.match(artifact, /GuardMe/);
   assert.match(artifact, /Pi project trust/);
   assert.match(artifact, /WARNINGS|Warning and Decision Details/);
