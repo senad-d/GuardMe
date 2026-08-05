@@ -639,6 +639,7 @@ function createConfigSnapshot(ctx: GuardMeStatusContext): ConfigSnapshot {
     projectTrusted: trusted,
     guardMe: snapshotGuardMeStatus(state),
     insecureEdits: state?.insecureEdits ?? false,
+    approvalMode: config.approvalMode ?? "auto",
     policyRules: countPolicyRules(config),
     warnedFingerprints: state?.warnings.warnedFingerprints.size ?? 0,
     warningRecords: state?.warnings.records ?? [],
@@ -664,6 +665,7 @@ function renderLegacyStatusSummary(snapshot: ConfigSnapshot): string {
   return [
     `GuardMe: ${snapshot.guardMe}`,
     `Insecure edits: ${snapshot.insecureEdits ? "on" : "off"}`,
+    `Approval mode: ${snapshot.approvalMode}`,
     `Project: ${snapshot.cwd}`,
     `Pi project trust: ${snapshot.projectTrusted ? "yes" : "no"}`,
     `Policy rules: ${snapshot.policyRules}`,

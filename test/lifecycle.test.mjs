@@ -59,6 +59,8 @@ test("session_start loads policy and warning state, exposes status, and stores s
     ["local/**", "local"],
   ]);
   assert.equal(state.warnings.warnedFingerprints.has("sha256:lifecycle"), true);
+  assert.equal(state.agentApprovals.currentTurn, 0);
+  assert.equal(state.agentApprovals.blockedTurnByFingerprint.size, 0);
   assert.equal(statuses.at(-1)?.[0], EXTENSION_STATUS_KEY);
   assert.equal(statuses.at(-1)?.[1], "🛡️\u00a0");
 });

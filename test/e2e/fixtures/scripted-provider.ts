@@ -58,12 +58,15 @@ async function loadPiAi(): Promise<{ createAssistantMessageEventStream: () => an
 }
 
 function responseForContext(context: any): ScriptedResponse {
+  const scenario = latestScenarioName(context);
+  if (scenario === "agent-approval-turn-gate") {
+    return agentApprovalTurnGateResponse(context, scenario);
+  }
+
   const latest = context.messages?.at(-1);
   if (latest?.role === "toolResult") {
     return { kind: "text", text: `SCENARIO TOOL RESULT RECEIVED: ${latest.toolName}` };
   }
-
-  const scenario = latestScenarioName(context);
   if (!scenario) {
     return { kind: "text", text: "GuardMe e2e scripted provider idle." };
   }
@@ -73,6 +76,37 @@ function responseForContext(context: any): ScriptedResponse {
     return { kind: "text", text: `Unknown GuardMe e2e scenario: ${scenario}` };
   }
   return { kind: "tool", scenario, toolCall };
+}
+
+function agentApprovalTurnGateResponse(context: any, scenario: string): ScriptedResponse {
+  const previousToolCalls = countScenarioToolCalls(context, scenario);
+  if (previousToolCalls === 0) {
+    const toolCall = agentApprovalToolCall();
+    return { kind: "tools", scenario, toolCalls: [toolCall, toolCall] };
+  }
+  if (previousToolCalls === 2) {
+    return { kind: "tool", scenario, toolCall: agentApprovalToolCall() };
+  }
+  return { kind: "text", text: "SCENARIO AGENT APPROVAL TURN GATE COMPLETE" };
+}
+
+function countScenarioToolCalls(context: any, scenario: string): number {
+  let count = 0;
+  for (const message of context.messages ?? []) {
+    if (message?.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const part of message.content) {
+      if (part?.type === "toolCall" && typeof part.id === "string" && part.id.includes(`-${scenario}-`)) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+function agentApprovalToolCall(): ScriptedToolCall {
+  return { name: "bash", arguments: { command: "awk 'BEGIN { print \"guardme agent automatic\" }'" } };
 }
 
 function latestScenarioName(context: any): string | undefined {
@@ -102,7 +136,8 @@ interface ScriptedToolCall {
 
 type ScriptedResponse =
   | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "tool"; readonly scenario: string; readonly toolCall: ScriptedToolCall };
+  | { readonly kind: "tool"; readonly scenario: string; readonly toolCall: ScriptedToolCall }
+  | { readonly kind: "tools"; readonly scenario: string; readonly toolCalls: readonly ScriptedToolCall[] };
 
 function outsideFixturePath(directoryName: "outside-read" | "outside-write" | "outside-delete"): string {
   return resolve(process.cwd(), "..", directoryName, "file.txt");
@@ -184,16 +219,28 @@ async function streamAssistantResponse(stream: any, model: any, response: Script
     return;
   }
 
-  const id = `guardme-e2e-${response.scenario}-${++toolCallCounter}`;
-  const toolCall = { type: "toolCall", id, name: response.toolCall.name, arguments: response.toolCall.arguments };
-  const message = createAssistantMessage(model, [toolCall], "toolUse");
-  const argsJson = JSON.stringify(response.toolCall.arguments);
-  const partial = { ...message, content: [{ type: "toolCall", id, name: response.toolCall.name, arguments: {} }] };
+  const requestedToolCalls = response.kind === "tool" ? [response.toolCall] : response.toolCalls;
+  const toolCalls = requestedToolCalls.map((toolCall) => ({
+    type: "toolCall",
+    id: `guardme-e2e-${response.scenario}-${++toolCallCounter}`,
+    name: toolCall.name,
+    arguments: toolCall.arguments,
+  }));
+  const message = createAssistantMessage(model, toolCalls, "toolUse");
   stream.push({ type: "start", partial: { ...message, content: [] } });
-  stream.push({ type: "toolcall_start", contentIndex: 0, partial });
-  stream.push({ type: "toolcall_delta", contentIndex: 0, delta: argsJson, partial });
-  partial.content[0].arguments = response.toolCall.arguments;
-  stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: message });
+  for (const [contentIndex, toolCall] of toolCalls.entries()) {
+    const partialToolCall = { ...toolCall, arguments: {} };
+    const partialContent = [...toolCalls.slice(0, contentIndex), partialToolCall];
+    const partial = { ...message, content: partialContent };
+    stream.push({ type: "toolcall_start", contentIndex, partial });
+    stream.push({ type: "toolcall_delta", contentIndex, delta: JSON.stringify(toolCall.arguments), partial });
+    stream.push({
+      type: "toolcall_end",
+      contentIndex,
+      toolCall,
+      partial: { ...message, content: toolCalls.slice(0, contentIndex + 1) },
+    });
+  }
   stream.push({ type: "done", reason: "toolUse", message });
   stream.end(message);
 }

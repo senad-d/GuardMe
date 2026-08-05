@@ -63,6 +63,10 @@ export async function startGuardMeSession(
     config,
     settings,
     warnings,
+    agentApprovals: {
+      currentTurn: 0,
+      blockedTurnByFingerprint: new Map(),
+    },
     diagnostics,
     degraded,
   };

@@ -47,6 +47,18 @@ test("warning and decision records render in human-readable form", () => {
       persistedTo: "none",
       reason: "User selected deny-once.",
     },
+    {
+      type: "automatic-decision",
+      version: 1,
+      timestamp: "2026-06-22T10:10:00.000Z",
+      fingerprint: "sha256:abc",
+      scope: "project",
+      cwd: "/repo",
+      decision: "allow-once",
+      approvalMode: "agent",
+      persistedTo: "none",
+      reason: "GuardMe agent mode automatically allowed this retry once.",
+    },
   ]);
 
   assert.ok(lines.includes("WARNING 2026-06-22T10:00:00.000Z"));
@@ -59,6 +71,9 @@ test("warning and decision records render in human-readable form", () => {
   assert.ok(lines.includes("DECISION 2026-06-22T10:05:00.000Z"));
   assert.ok(lines.includes("  Decision    deny-once"));
   assert.ok(lines.includes("  Reason      User selected deny-once."));
+  assert.ok(lines.includes("AUTOMATIC DECISION 2026-06-22T10:10:00.000Z"));
+  assert.ok(lines.includes("  Mode        agent"));
+  assert.ok(lines.includes("  Reason      GuardMe agent mode automatically allowed this retry once."));
 });
 
 test("warning and decision formatter renders a helpful empty state", () => {

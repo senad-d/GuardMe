@@ -1,6 +1,6 @@
 {
   "name": "@senad-d/guardme",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "type": "module",
   "description": "Deny-first Pi guardrails that keep LLM shell and file access safe, transparent, and user-approved.",
   "license": "MIT",
@@ -68,7 +68,7 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@earendil-works/pi-coding-agent": "^0.75.3",
     "@types/node": "^26.0.0",
     "typescript": "^7.0.2"
   }

@@ -27,7 +27,7 @@ GuardMe should register Pi event handlers that classify each relevant tool call,
 
 Command evaluation should be segment-aware. A compound shell command such as `pwd && ls -lh` should be split into executable segments, each segment should be checked against hard-deny/path/script protections first, and the full command should run only when every segment is explicitly allowed by an acceptable `allowCommands` rule. Wildcard command rules can allow safe command families such as `ls *`, `pwd *`, `grep *`, or `find *`, but they cannot override hard denials, protected paths, outside-project path requirements, dangerous/destructive actions, or uninspectable script content.
 
-For dangerous-but-not-hard-forbidden or policy-missing actions, the first attempt should be blocked with model-facing coaching feedback and recorded in JSONL state; repeated attempts of the same normalized command/action/segment type should present a TUI approval flow when UI is available. User decisions can be one-time or persisted to global/local YAML. Hard-denied and existing deny-rule matches remain non-overridable and do not offer an allow choice.
+For dangerous-but-not-hard-forbidden or policy-missing actions, the first attempt should be blocked with model-facing coaching feedback and recorded in JSONL state; repeated attempts of the same normalized command/action/segment type should follow the configured approval mode. TUI keeps the user approval flow. Explicit `agent` mode may automatically allow one identical later-turn retry in RPC/JSON/print after a process-local first block. User decisions can be one-time or persisted to global/local YAML; automatic decisions are consumed, never persist policy, and use distinct audit records. Hard-denied and existing deny-rule matches remain non-overridable and do not offer an allow choice.
 
 Key Pi APIs and documented constraints:
 
@@ -35,7 +35,7 @@ Key Pi APIs and documented constraints:
 - `event.input` may be inspected and, if needed, patched before execution; GuardMe should prefer block/allow over mutation.
 - Use `ctx.cwd` as the active project root and `ctx.hasUI` / `ctx.mode` before prompting.
 - Use `ctx.ui.custom()` for the polished TUI modal in TUI mode; use simpler `ctx.ui.select()` fallback for RPC/UI-capable non-TUI if needed.
-- In non-UI modes, prompt-needed decisions must fail closed.
+- In non-UI modes, prompt-needed decisions fail closed unless the explicit `agent` process-local later-turn gate authorizes the identical fingerprint.
 - Keep `src/extension.ts` small and delegate to `register*` modules.
 - Do not start file watchers, timers, sockets, or background jobs in the extension factory.
 - If future mutating custom tools are added, use Pi file mutation queue helpers and safe path resolution.
@@ -109,8 +109,9 @@ GuardMe should use explicit deny-first and segment-aware command-default-deny ev
 9. `allowPaths` and segment-aware `allowCommands` may allow actions only if no deny/hard/protection/outside-project/content-derived rule matched. A compound `bash` command is allowed only when every executable segment is allowed by an acceptable command rule or a narrower exact full-command rule. Wildcard command rules may authorize non-dangerous generic/read/list/write/edit segments after path checks; exact command rules are still required for dangerous, destructive, delete, move, or rename behavior.
 10. Dangerous or policy-missing commands/actions use warned-once behavior:
     - first fingerprint/type: block with coaching, append JSONL state, and inject model-facing guidance
-    - repeated fingerprint/type: ask user if UI exists, otherwise block
-    - persistent allow decisions write an explicit `allowCommands` or path allow rule; persistent block decisions write an explicit deny rule
+    - repeated fingerprint/type: use the configured approval mode; explicit `agent` outside TUI requires an in-process first block and a later-turn identical retry
+    - automatic agent approvals are consumed after one use, append a distinct audit record, and never write policy
+    - persistent user allow decisions write an explicit `allowCommands` or path allow rule; persistent user block decisions write an explicit deny rule
 11. Built-in default project policy applies only to direct path actions when no explicit rule matches:
     - reads/lists/writes/edits inside `ctx.cwd` allowed unless denied/protected/content-derived checks fail
     - deletes inside project require stricter dangerous/destructive analysis
@@ -233,9 +234,10 @@ Shell parsing should be conservative and segment-oriented. Split top-level compo
 
 The approval flow should be designed before feature implementation and implemented with Pi TUI patterns. It applies to repeated dangerous-but-not-hard-forbidden actions and repeated policy-missing commands/content. Existing deny rules and built-in hard denials still block without an allow option.
 
-- TUI mode: custom overlay/modal with a compact table of facts and keyboard-selectable actions.
-- RPC mode or UI-capable non-TUI: use `ctx.ui.select()` fallback.
-- No UI: block prompt-needed actions with an explanatory reason and model-facing next-step guidance.
+- TUI mode: custom in-session component with a compact table of facts and keyboard-selectable actions.
+- RPC mode under `interactive`: use `ctx.ui.select()` fallback.
+- RPC/JSON/print under `agent`: block the first in-process attempt and same-turn duplicates; automatically allow-once only an identical later-turn fingerprint, then consume it and audit it separately from user decisions.
+- Other no-UI cases: block prompt-needed actions with an explanatory reason and model-facing next-step guidance.
 
 The modal should show:
 

@@ -1,6 +1,6 @@
 import type { PolicyDiagnostic } from "../policy/action.ts";
 
-export const APPROVAL_MODES = ["auto", "interactive", "block"] as const;
+export const APPROVAL_MODES = ["auto", "interactive", "agent", "block"] as const;
 export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 
 export const APPROVAL_MODE_ENV = "GUARDME_APPROVAL_MODE";

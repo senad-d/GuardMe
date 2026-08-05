@@ -14,6 +14,7 @@ import {
   lastToolExecutionEnd,
   resultText,
   startRpcPi,
+  toolExecutionEnds,
 } from "./helpers/rpc-client.mjs";
 import {
   EDITED_SAFE_NOTE_CONTENT,
@@ -76,6 +77,66 @@ test("GuardMe RPC auto mode fails closed without an approval UI round trip", { t
     for (const client of clients) {
       await client.stop();
     }
+    await fixture.cleanup();
+  }
+});
+
+test("GuardMe RPC agent mode uses real turn boundaries without approval UI", { timeout: 120_000 }, async () => {
+  const fixture = await createProjectFixture("rpc-agent");
+  let client;
+  try {
+    client = await startRpcPi({
+      projectDir: fixture.projectDir,
+      homeDir: fixture.homeDir,
+      timeoutMs: 30_000,
+      approvalMode: "agent",
+      respondToUnhandledUi: false,
+    });
+
+    const run = await runScenario(client, "agent-approval-turn-gate", { timeoutMs: 30_000 });
+    const bashEnds = toolExecutionEnds(run.events, "bash");
+    const turnEndIndexes = [];
+    const bashEndIndexes = [];
+    let turnStartCount = 0;
+    for (const [index, event] of run.events.entries()) {
+      if (event.type === "turn_start") {
+        turnStartCount += 1;
+      }
+      if (event.type === "turn_end") {
+        turnEndIndexes.push(index);
+      }
+      if (event.type === "tool_execution_end" && event.toolName === "bash") {
+        bashEndIndexes.push(index);
+      }
+    }
+
+    assert.equal(bashEnds.length, 3, "two same-turn duplicates and one later-turn retry should execute preflight");
+    assert.equal(bashEnds[0].isError, true);
+    assert.equal(bashEnds[1].isError, true);
+    assert.equal(bashEnds[2].isError, false);
+    assert.match(resultText(bashEnds[0]), /GuardMe coaching|later agent turn/i);
+    assert.match(resultText(bashEnds[1]), /same agent turn|first attempt in this process/i);
+    assert.match(resultText(bashEnds[2]), /guardme agent automatic/i);
+    assert.ok(turnStartCount >= 3, "Pi should emit turns for the duplicate response, retry, and final text");
+    assert.ok(bashEndIndexes[0] < turnEndIndexes[0] && bashEndIndexes[1] < turnEndIndexes[0]);
+    assert.ok(bashEndIndexes[2] > turnEndIndexes[0], "automatic approval must occur after the first real turn ends");
+    assert.equal(
+      run.uiRequests.some((request) => ["select", "confirm", "input", "editor"].includes(request.method)),
+      false,
+      "agent mode must not emit an approval dialog request",
+    );
+
+    const stateRecords = (await fixture.readLocalState()).trim().split("\n").map((line) => JSON.parse(line));
+    const automaticRecords = stateRecords.filter((record) => record.type === "automatic-decision");
+    assert.equal(automaticRecords.length, 1);
+    assert.equal(automaticRecords[0].decision, "allow-once");
+    assert.equal(automaticRecords[0].approvalMode, "agent");
+    assert.equal(automaticRecords[0].persistedTo, "none");
+    assert.equal(stateRecords.some((record) => record.type === "decision"), false);
+    assert.equal(await pathExists(fixture.localPolicyPath), false);
+    assert.equal(await pathExists(fixture.globalPolicyPath), false);
+  } finally {
+    await client?.stop();
     await fixture.cleanup();
   }
 });

@@ -65,6 +65,12 @@ export function resolveApprovalUi(ctx: ApprovalUiContext): ApprovalUiResolution 
       reason: `GuardMe requires user approval for this action, but interactive approval is unavailable because approvalMode is 'auto' and Pi mode is '${ctx.mode ?? "unknown"}', not 'tui'. Blocking by default.`,
     };
   }
+  if (ctx.approvalMode === "agent" && ctx.mode !== "tui") {
+    return {
+      kind: "blocked",
+      reason: `GuardMe approvalMode 'agent' never invokes approval UI outside TUI. The in-process retry gate must authorize an identical request from a later agent turn. Blocking by default.`,
+    };
+  }
   if (!ctx.hasUI) {
     return {
       kind: "blocked",
@@ -115,6 +121,7 @@ export function formatApprovalUnavailableBlockReason(
   request: PolicyRequest,
   decision: PolicyDecision,
   unavailableReason: string,
+  nextStep: string = APPROVAL_UNAVAILABLE_NEXT_STEP,
 ): string {
   const summary = renderPolicySummary(request, decision);
   const displayedRules = renderMatchedRules(decision.matchedRules.slice(0, MAX_APPROVAL_MATCHED_RULES));
@@ -127,7 +134,7 @@ export function formatApprovalUnavailableBlockReason(
     `Target or command: ${boundedApprovalValue(summaryValue(summary, "Target", "<unknown>"), MAX_APPROVAL_TARGET_WIDTH)}`,
     `Reason: ${boundedApprovalValue(summaryValue(summary, "Reason", decision.reason), MAX_APPROVAL_REASON_WIDTH)}`,
     `Interactive approval: ${boundedApprovalValue(unavailableReason, MAX_APPROVAL_UNAVAILABLE_WIDTH)}`,
-    `Next step: ${APPROVAL_UNAVAILABLE_NEXT_STEP}`,
+    `Next step: ${boundedApprovalValue(nextStep, MAX_APPROVAL_REASON_WIDTH)}`,
     "Matched rules:",
     ...displayedRules.map((rule) => `- ${boundedApprovalValue(rule, MAX_APPROVAL_RULE_WIDTH)}`),
     ...(omittedRuleCount > 0 ? [`- ${omittedRuleCount} additional matched rule${omittedRuleCount === 1 ? "" : "s"} omitted.`] : []),

@@ -15,6 +15,13 @@ export interface GuardMeGuidanceEvent {
   readonly reasonCode?: string;
 }
 
+export interface AgentApprovalState {
+  readonly currentTurn: number;
+  readonly blockedTurnByFingerprint: ReadonlyMap<string, number>;
+}
+
+export type AgentApprovalEligibility = "unseen" | "same-turn" | "later-turn";
+
 export interface GuardMeSessionState {
   readonly cwd: string;
   readonly homeDir?: string;
@@ -25,6 +32,7 @@ export interface GuardMeSessionState {
   readonly config: LoadedGuardMeConfig;
   readonly settings: LoadedGuardMeRuntimeSettings;
   readonly warnings: LoadedWarningState;
+  readonly agentApprovals: AgentApprovalState;
   readonly diagnostics: readonly PolicyDiagnostic[];
   readonly degraded: boolean;
   readonly lastGuidance?: GuardMeGuidanceEvent;
@@ -42,6 +50,75 @@ export function getGuardMeSessionState(): GuardMeSessionState | undefined {
 
 export function clearGuardMeSessionState(): void {
   currentSessionState = undefined;
+}
+
+export function beginGuardMeAgentTurn(): void {
+  if (!currentSessionState) {
+    return;
+  }
+  currentSessionState = {
+    ...currentSessionState,
+    agentApprovals: {
+      ...currentSessionState.agentApprovals,
+      currentTurn: currentSessionState.agentApprovals.currentTurn + 1,
+    },
+  };
+}
+
+export function agentApprovalEligibility(fingerprint: string): AgentApprovalEligibility {
+  if (!currentSessionState) {
+    return "unseen";
+  }
+  const blockedTurn = currentSessionState.agentApprovals.blockedTurnByFingerprint.get(fingerprint);
+  if (blockedTurn === undefined) {
+    return "unseen";
+  }
+  return blockedTurn < currentSessionState.agentApprovals.currentTurn ? "later-turn" : "same-turn";
+}
+
+export function recordAgentApprovalBlock(fingerprint: string): void {
+  if (!currentSessionState || currentSessionState.agentApprovals.blockedTurnByFingerprint.has(fingerprint)) {
+    return;
+  }
+  const blockedTurnByFingerprint = new Map(currentSessionState.agentApprovals.blockedTurnByFingerprint);
+  blockedTurnByFingerprint.set(fingerprint, currentSessionState.agentApprovals.currentTurn);
+  currentSessionState = {
+    ...currentSessionState,
+    agentApprovals: {
+      ...currentSessionState.agentApprovals,
+      blockedTurnByFingerprint,
+    },
+  };
+}
+
+export function deferAgentApproval(fingerprint: string): void {
+  if (!currentSessionState) {
+    return;
+  }
+  const blockedTurnByFingerprint = new Map(currentSessionState.agentApprovals.blockedTurnByFingerprint);
+  blockedTurnByFingerprint.set(fingerprint, currentSessionState.agentApprovals.currentTurn);
+  currentSessionState = {
+    ...currentSessionState,
+    agentApprovals: {
+      ...currentSessionState.agentApprovals,
+      blockedTurnByFingerprint,
+    },
+  };
+}
+
+export function consumeAgentApproval(fingerprint: string): void {
+  if (!currentSessionState?.agentApprovals.blockedTurnByFingerprint.has(fingerprint)) {
+    return;
+  }
+  const blockedTurnByFingerprint = new Map(currentSessionState.agentApprovals.blockedTurnByFingerprint);
+  blockedTurnByFingerprint.delete(fingerprint);
+  currentSessionState = {
+    ...currentSessionState,
+    agentApprovals: {
+      ...currentSessionState.agentApprovals,
+      blockedTurnByFingerprint,
+    },
+  };
 }
 
 export function recordGuardMeGuidance(guidance: Omit<GuardMeGuidanceEvent, "timestamp">): void {

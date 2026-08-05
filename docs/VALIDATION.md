@@ -24,6 +24,14 @@ pi --no-extensions -e . --offline --no-tools --no-session -p ""
 
 The command above loads only this checkout as an explicit extension, disables discovered extensions and tools, avoids network startup work, and exits without contacting a model.
 
+Focused approval, agent-mode, and state checks:
+
+```bash
+node --test test/approval-mode.test.mjs test/approval-ui.test.mjs test/policy-evaluate.test.mjs test/tool-guard.test.mjs test/warning-state.test.mjs
+```
+
+The RPC e2e includes a deterministic `agent` scenario with duplicate tool calls in one assistant response and an identical retry after Pi emits the next real `turn_start`. It verifies that no approval dialog is requested, one automatic audit record is written, and no YAML rule is created.
+
 Local-only e2e suite (not part of `npm test` or CI):
 
 ```bash
@@ -69,3 +77,4 @@ Manual/interactive smoke scenarios for TUI sessions:
 31. Running a local script such as `./audit.sh` or `bash audit.sh` inspects the script before execution and blocks when the script content fails policy.
 32. Running package-manager scripts such as `npm test`, `npm run test`, `pnpm run build`, `yarn test`, or `bun run test` inspects the relevant `package.json` script and matching `pre*`/`post*` scripts, including cwd/prefix variants such as `npm --prefix packages/app test`, `npm test --prefix packages/app`, `pnpm -C packages/app run build`, `yarn --cwd packages/app test`, and `bun --cwd packages/app run test`; cloud CLIs, credential reads, dangerous commands, and outside-project path access inside those scripts block before execution.
 33. Generic browser/GUI launchers such as `brave ...` or `open -a Brave ...` block as policy-missing on first attempt and require approval on repeat.
+34. With `GUARDME_APPROVAL_MODE=agent` in RPC/JSON/print, the first in-process attempt and same-turn duplicate block, an identical later-turn fingerprint is automatically allowed once, the next execution starts a new block/retry cycle, and state contains `automatic-decision` rather than user `decision` audit records. Restart the child with persisted warning state and verify its first attempt still blocks. Hard denials, explicit deny rules, protected credentials/paths, and outside-project denials must remain blocked across turns.

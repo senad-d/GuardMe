@@ -53,7 +53,7 @@ Use small, testable modules with clear domain types and a deny-first, segment-aw
 - Start session-scoped work from `session_start`, a command, or a tool; clean up in `session_shutdown`.
 - Use `pi.on("tool_call", ...)` for enforcement before built-in tools execute.
 - Use `ctx.hasUI` before any dialog and `ctx.mode === "tui"` before TUI-specific custom UI.
-- In non-UI modes, block any action that would require user approval.
+- In non-UI modes, block approval-required actions unless explicit `approvalMode: agent` authorizes one identical later-turn retry through the process-local gate.
 - Use `ctx.cwd` as the active project root.
 - `registerGuidance` should inject concise model-facing guidance after blocked/coached/policy-missing events; it must not leak full file content, command output, or secrets.
 - Use Pi's `CONFIG_DIR_NAME` instead of hardcoding `.pi` if implementation needs rebrand-aware config paths; preserve the approved user-facing default `.pi/agent/guardme.yaml` unless Pi API requires a different composition.
@@ -113,7 +113,7 @@ Use small, testable modules with clear domain types and a deny-first, segment-aw
 - Detect common credential reads: exact `.env`, ambiguous `.env*` shell globs, SSH private keys, cloud credential directories, and credential-like filenames; do not hard-block exact template files such as `.env.example` unless policy denies them.
 - Detect local script execution forms such as `./script.sh`, `bash script.sh`, `sh script`, and `zsh script.zsh`, and request content inspection before allowing execution.
 - Treat unrecognized or unmatched generic command segments as policy-missing even if they look low-risk.
-- If a destructive command, script, or unknown command is ambiguous, require approval or block in non-UI mode.
+- If a destructive command, script, or unknown command is ambiguous, require approval or block; `agent` mode may authorize only a fingerprint that already passed all deny/protection checks and was blocked in an earlier turn of the current process.
 - Do not execute shell commands during classification.
 
 ### Script and generated content rules
@@ -132,10 +132,12 @@ Use small, testable modules with clear domain types and a deny-first, segment-aw
 
 - First dangerous-but-not-hard-forbidden or policy-missing segment fingerprint: block the tool call and return a coaching reason that tells the model which segment failed and what safer next step to try.
 - Persist the first warning in JSONL state with a reason code such as `dangerous-command`, `policy-missing-command`, or `script-content-denied`.
-- Repeated fingerprint/type: ask the user when UI exists.
+- Repeated fingerprint/type: ask the user when UI exists, except that explicit `agent` mode preserves the existing TUI prompt and uses process-local turn-aware approval in RPC/JSON/print.
 - If the user chooses a one-time decision, do not write YAML policy.
 - If the user chooses persistent decision, write the selected allow/deny rule to local/global YAML after rechecking that the rule does not weaken hard policy or existing deny/protection policy.
-- If no UI exists for a repeated dangerous or policy-missing action, block.
+- In `agent` mode outside TUI, block the first in-process attempt and same-turn duplicates; allow-once only an identical later-turn retry, consume it, and append a distinct automatic audit record without writing YAML.
+- Persisted warning state must never pre-arm a new process for automatic approval.
+- If no UI exists for a repeated dangerous or policy-missing action, block unless the explicit agent-mode gate authorizes it.
 - Fingerprints should be stable enough to recognize repeated behavior for the missing/dangerous segment across similar compounds, but should not include secret contents or full file contents.
 
 ### TUI and user experience rules

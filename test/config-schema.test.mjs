@@ -37,6 +37,20 @@ test("built-in default policy includes approved hard-protection sections", () =>
   assert.ok(defaults.allowCommands.some((rule) => rule.pattern === "npm *"));
   assert.ok(defaults.allowCommands.some((rule) => rule.pattern === "node *"));
   assert.ok(defaults.allowCommands.some((rule) => rule.pattern === "git *"));
+  const shellTestCommands = [
+    "shellcheck --version",
+    "shellcheck *.sh",
+    "bash -n *.sh",
+    "sh -n *.sh",
+    "shfmt -d *.sh",
+    "shfmt -l *.sh",
+    "checkbashisms *.sh",
+    "bashate *.sh",
+    "bats test/*.bats",
+  ];
+  for (const pattern of shellTestCommands) {
+    assert.ok(defaults.allowCommands.some((rule) => rule.pattern === pattern), pattern);
+  }
   assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "aws *"));
   assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "az *"));
   assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "gcloud *"));

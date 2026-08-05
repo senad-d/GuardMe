@@ -67,7 +67,20 @@ export interface UserDecisionStateRecord {
   readonly reason?: string;
 }
 
-export type GuardMeStateRecord = WarningStateRecord | UserDecisionStateRecord;
+export interface AutomaticDecisionStateRecord {
+  readonly type: "automatic-decision";
+  readonly version: number;
+  readonly timestamp: string;
+  readonly fingerprint: string;
+  readonly scope: GuardMeStateScope;
+  readonly cwd: string;
+  readonly decision: "allow-once";
+  readonly approvalMode: "agent";
+  readonly persistedTo: "none";
+  readonly reason?: string;
+}
+
+export type GuardMeStateRecord = WarningStateRecord | UserDecisionStateRecord | AutomaticDecisionStateRecord;
 
 export interface ReadStateFileResult {
   readonly path: string;
@@ -105,6 +118,14 @@ export interface CreateDecisionRecordInput {
   readonly cwd: string;
   readonly decision: UserDecision;
   readonly persistedTo?: PersistedDecisionTarget;
+  readonly reason?: string;
+  readonly timestamp?: string;
+}
+
+export interface CreateAutomaticDecisionRecordInput {
+  readonly fingerprint: string;
+  readonly scope: GuardMeStateScope;
+  readonly cwd: string;
   readonly reason?: string;
   readonly timestamp?: string;
 }
@@ -157,6 +178,21 @@ export function createDecisionRecord(input: CreateDecisionRecordInput): UserDeci
   };
 }
 
+export function createAutomaticDecisionRecord(input: CreateAutomaticDecisionRecordInput): AutomaticDecisionStateRecord {
+  return {
+    type: "automatic-decision",
+    version: POLICY_VERSION,
+    timestamp: input.timestamp ?? new Date().toISOString(),
+    fingerprint: input.fingerprint,
+    scope: input.scope,
+    cwd: input.cwd,
+    decision: "allow-once",
+    approvalMode: "agent",
+    persistedTo: "none",
+    ...(input.reason ? { reason: redactSensitiveText(input.reason) } : {}),
+  };
+}
+
 function redactMatchedRule(rule: MatchedRule): MatchedRule {
   return {
     ...rule,
@@ -186,6 +222,15 @@ export async function appendWarningRecord(path: string, input: CreateWarningReco
 
 export async function appendDecisionRecord(path: string, input: CreateDecisionRecordInput): Promise<UserDecisionStateRecord> {
   const record = createDecisionRecord(input);
+  await appendStateRecord(path, record);
+  return record;
+}
+
+export async function appendAutomaticDecisionRecord(
+  path: string,
+  input: CreateAutomaticDecisionRecordInput,
+): Promise<AutomaticDecisionStateRecord> {
+  const record = createAutomaticDecisionRecord(input);
   await appendStateRecord(path, record);
   return record;
 }
@@ -419,6 +464,9 @@ function validateStateRecord(
   if (isDecisionStateRecordCandidate(parsed)) {
     return validateDecisionStateRecord(parsed, scope, path, lineNumber, diagnostics);
   }
+  if (isAutomaticDecisionStateRecordCandidate(parsed)) {
+    return validateAutomaticDecisionStateRecord(parsed, scope, path, lineNumber, diagnostics);
+  }
 
   diagnostics.push(stateDiagnostic("state.invalidRecord", "Ignoring GuardMe state record with missing or invalid fields.", scope, path, lineNumber));
   return undefined;
@@ -430,6 +478,10 @@ function isWarningStateRecordCandidate(parsed: Record<string, unknown>): boolean
 
 function isDecisionStateRecordCandidate(parsed: Record<string, unknown>): boolean {
   return parsed.type === "decision" && isString(parsed.fingerprint) && isString(parsed.cwd) && isString(parsed.decision);
+}
+
+function isAutomaticDecisionStateRecordCandidate(parsed: Record<string, unknown>): boolean {
+  return parsed.type === "automatic-decision" && isString(parsed.fingerprint) && isString(parsed.cwd);
 }
 
 function validateWarningStateRecord(
@@ -485,6 +537,31 @@ function validateDecisionStateRecord(
     cwd: parsed.cwd as string,
     decision,
     persistedTo,
+    ...(isString(parsed.reason) ? { reason: redactSensitiveText(parsed.reason) } : {}),
+  };
+}
+
+function validateAutomaticDecisionStateRecord(
+  parsed: Record<string, unknown>,
+  scope: GuardMeStateScope,
+  path: string,
+  lineNumber: number,
+  diagnostics: PolicyDiagnostic[],
+): AutomaticDecisionStateRecord | undefined {
+  if (parsed.decision !== "allow-once" || parsed.approvalMode !== "agent" || parsed.persistedTo !== "none") {
+    diagnostics.push(stateDiagnostic("state.invalidRecord", "Ignoring GuardMe automatic decision record with invalid fields.", scope, path, lineNumber));
+    return undefined;
+  }
+  return {
+    type: "automatic-decision",
+    version: numberOrDefault(parsed.version, POLICY_VERSION),
+    timestamp: stringOrDefault(parsed.timestamp, new Date(0).toISOString()),
+    fingerprint: parsed.fingerprint as string,
+    scope: parsed.scope === "global" ? "global" : "project",
+    cwd: parsed.cwd as string,
+    decision: "allow-once",
+    approvalMode: "agent",
+    persistedTo: "none",
     ...(isString(parsed.reason) ? { reason: redactSensitiveText(parsed.reason) } : {}),
   };
 }

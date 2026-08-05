@@ -29,7 +29,8 @@ async function createApprovalModePolicies(globalMode, localMode) {
 test("approval mode environment resolution defaults to auto and accepts all validated values", () => {
   assert.equal(resolveApprovalModeEnvironment(DEFAULT_APPROVAL_MODE, {}).mode, "auto");
   assert.equal(resolveApprovalModeEnvironment("auto", { [APPROVAL_MODE_ENV]: "interactive" }).mode, "interactive");
-  assert.equal(resolveApprovalModeEnvironment("interactive", { [APPROVAL_MODE_ENV]: "block" }).mode, "block");
+  assert.equal(resolveApprovalModeEnvironment("interactive", { [APPROVAL_MODE_ENV]: "agent" }).mode, "agent");
+  assert.equal(resolveApprovalModeEnvironment("agent", { [APPROVAL_MODE_ENV]: "block" }).mode, "block");
 });
 
 test("invalid approval mode environment values fail closed without echoing the raw value", () => {
@@ -42,7 +43,7 @@ test("invalid approval mode environment values fail closed without echoing the r
 });
 
 test("trusted project approval mode overrides global mode and environment overrides both", async () => {
-  const { cwd, homeDir } = await createApprovalModePolicies("interactive", "block");
+  const { cwd, homeDir } = await createApprovalModePolicies("interactive", "agent");
 
   const trusted = await loadGuardMeConfig({ cwd, homeDir, environment: {} });
   const untrusted = await loadGuardMeConfig({ cwd, homeDir, loadLocalPolicy: false, environment: {} });
@@ -52,7 +53,7 @@ test("trusted project approval mode overrides global mode and environment overri
     environment: { [APPROVAL_MODE_ENV]: "interactive" },
   });
 
-  assert.equal(trusted.config.approvalMode, "block");
+  assert.equal(trusted.config.approvalMode, "agent");
   assert.equal(untrusted.config.approvalMode, "interactive");
   assert.equal(environmentOverride.config.approvalMode, "interactive");
 });

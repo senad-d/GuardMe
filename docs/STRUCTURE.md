@@ -36,7 +36,7 @@ src/
 ## Pi surfaces
 
 - Command: `/guardme` for General settings, setup, status, policies, rules, warning/decision details, diagnostic details, and project trust; `/guardme help` for compact usage.
-- Events: `tool_call`, `before_agent_start`, `session_start`, and `session_shutdown`.
+- Events: `tool_call`, `turn_start`, `before_agent_start`, `session_start`, and `session_shutdown`.
 - UI: framed configuration TUI plus custom in-session approval prompt for repeated dangerous or policy-missing actions.
 - Tools/resources: no new LLM-facing custom tools, skills, prompts, or themes.
 
@@ -52,4 +52,4 @@ src/
 
 ## Implementation boundary
 
-The completed implementation tasks establish constants, registration boundaries, built-in and setup-created policy defaults, Pi-independent policy domain types, config schema/default policy loading, global/local merge/write semantics with rule source metadata, safe path normalization/glob matching, conservative shell command classification, script-content extraction, the pure deny-first/default-deny policy evaluation engine, JSONL warned-once state helpers with reason codes and untrusted-project local-state skipping, project-local runtime settings for GuardMe active/off with trust-gated loading, session lifecycle loading/status cleanup, tool-call guard adapters for the approved built-in tools, first-dangerous/policy-missing-attempt coaching persistence, local script and package-manager script pre-execution inspection, approval UI/fallback handling, YAML rule persistence for saved decisions, model-facing follow-up guidance, a TUI setup wizard for defaults/custom rules, and `/guardme` main/help command UX.
+The completed implementation tasks establish constants, registration boundaries, built-in and setup-created policy defaults, Pi-independent policy domain types, config schema/default policy loading, global/local merge/write semantics with rule source metadata, safe path normalization/glob matching, conservative shell command classification, script-content extraction, the pure deny-first/default-deny policy evaluation engine, JSONL warned-once and automatic-decision audit helpers with reason codes and untrusted-project local-state skipping, project-local runtime settings for GuardMe active/off with trust-gated loading, session lifecycle loading/status cleanup, tool-call guard adapters for the approved built-in tools, first-dangerous/policy-missing-attempt coaching persistence, turn-aware opt-in agent approvals, local script and package-manager script pre-execution inspection, approval UI/fallback handling, YAML rule persistence for saved user decisions, model-facing follow-up guidance, a TUI setup wizard for defaults/custom rules, and `/guardme` main/help command UX.

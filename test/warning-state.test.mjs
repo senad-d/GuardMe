@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  appendAutomaticDecisionRecord,
   appendDecisionRecord,
   appendWarningRecord,
   createWarningRecord,
@@ -157,6 +158,7 @@ test("state records with invalid enum values are ignored", async () => {
       JSON.stringify({ type: "warning", fingerprint: "sha256:bad-action", cwd: root, toolName: "bash", action: "not-real", risk: "dangerous" }),
       JSON.stringify({ type: "warning", fingerprint: "sha256:bad-risk", cwd: root, toolName: "bash", action: "delete", risk: "critical" }),
       JSON.stringify({ type: "decision", fingerprint: "sha256:bad-decision", cwd: root, decision: "approve-forever" }),
+      JSON.stringify({ type: "automatic-decision", fingerprint: "sha256:bad-automatic", cwd: root, decision: "allow-once", approvalMode: "agent", persistedTo: "local-yaml" }),
     ].join("\n") + "\n",
     "utf8",
   );
@@ -164,7 +166,7 @@ test("state records with invalid enum values are ignored", async () => {
   const result = await readStateFile(statePath, "project");
 
   assert.equal(result.records.length, 0);
-  assert.equal(result.diagnostics.filter((diagnostic) => diagnostic.code === "state.invalidRecord").length, 3);
+  assert.equal(result.diagnostics.filter((diagnostic) => diagnostic.code === "state.invalidRecord").length, 4);
 });
 
 test("decision records append without mixing generated state into YAML", async () => {
@@ -185,6 +187,30 @@ test("decision records append without mixing generated state into YAML", async (
   assert.equal(result.records.length, 1);
   assert.equal(result.records[0]?.type, "decision");
   assert.equal(result.records[0]?.reason, "Authorization: Bearer <redacted>");
+});
+
+test("automatic agent approvals append as distinct non-user audit records", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-state-automatic-decision-"));
+  const statePath = join(root, ".pi", "agent", "guardme-state.jsonl");
+
+  const record = await appendAutomaticDecisionRecord(statePath, {
+    fingerprint: "sha256:automatic",
+    scope: "project",
+    cwd: root,
+    reason: "Automatic agent retry approval.",
+    timestamp: "2026-06-21T00:02:00.000Z",
+  });
+  const result = await readStateFile(statePath, "project");
+  const loaded = await loadWarningState({ cwd: root, homeDir: join(root, "home") });
+
+  assert.equal(record.type, "automatic-decision");
+  assert.equal(record.decision, "allow-once");
+  assert.equal(record.approvalMode, "agent");
+  assert.equal(record.persistedTo, "none");
+  assert.deepEqual(result.records, [record]);
+  assert.equal(loaded.records[0]?.type, "automatic-decision");
+  assert.equal(loaded.warnedFingerprints.has(record.fingerprint), false);
+  assert.equal(loaded.warningCounts.has(record.fingerprint), false);
 });
 
 test("global warning state is filtered to the active project cwd", async () => {

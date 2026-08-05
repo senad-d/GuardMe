@@ -29,6 +29,19 @@ export function formatWarningDecisionRecords(records: readonly GuardMeStateRecor
       continue;
     }
 
+    if (record.type === "automatic-decision") {
+      lines.push(
+        `AUTOMATIC DECISION ${record.timestamp}`,
+        `  Scope       ${record.scope}`,
+        `  Mode        ${record.approvalMode}`,
+        `  Decision    ${record.decision}`,
+        `  Persisted   ${record.persistedTo}`,
+        ...(record.reason ? [`  Reason      ${record.reason}`] : []),
+        `  Fingerprint ${record.fingerprint}`,
+      );
+      continue;
+    }
+
     lines.push(
       `DECISION ${record.timestamp}`,
       `  Scope       ${record.scope}`,

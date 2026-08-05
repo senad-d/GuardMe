@@ -150,7 +150,7 @@ See [`docs/POLICY.md`](docs/POLICY.md) for the full policy reference.
 
 Global policy loads first. Project-local policy, runtime settings, and generated state load only after the project is trusted. Missing runtime settings mean GuardMe is active and Insecure edits is off. Turning GuardMe off from `/guardme` writes project-local settings and bypasses GuardMe enforcement for that trusted project until you turn it active again. Turning Insecure edits on writes the same project-local settings file and makes only `write`/`edit` skip proposed content/script scanning; path protections and deny rules still apply, and `bash`, reads, and discovery tools stay guarded.
 
-Policy YAML also accepts the validated top-level key `approvalMode: auto | interactive | block`. Built-in `auto` is the safe default: only TUI sessions can request GuardMe approval UI. Trusted project policy overrides global policy, and the process environment variable `GUARDME_APPROVAL_MODE` overrides both for managed child launches.
+Policy YAML also accepts the validated top-level key `approvalMode: auto | interactive | agent | block`. Built-in `auto` is the safe default: only TUI sessions can request GuardMe approval UI. The explicit `agent` mode keeps that TUI behavior but lets RPC, JSON, and print agents receive one automatic allow-once when an identical blocked fingerprint is retried in a later agent turn. Trusted project policy overrides global policy, and the process environment variable `GUARDME_APPROVAL_MODE` overrides both for managed child launches.
 
 YAML rule sections:
 
@@ -182,6 +182,7 @@ Use the in-session TUI to:
 - turn **Insecure edits** on/off when you need `write`/`edit` to author scripts that contain otherwise blocked commands
 - review or enable Pi project trust
 - inspect warnings and diagnostics
+- review the resolved approval mode in Policies
 - create starter global or project policy files
 - save approval decisions as project or global rules
 
@@ -245,15 +246,18 @@ Approval modes:
 
 - `auto` (default): preserve TUI approval; RPC, JSON, print, and other non-interactive modes fail closed without an approval UI request.
 - `interactive`: allow approval UI when Pi exposes the relevant method, including RPC controllers that implement `extension_ui_request` / `extension_ui_response`.
+- `agent`: preserve TUI approval; in RPC, JSON, and print modes, block the first in-process attempt and same-turn duplicates, then automatically allow-once only an identical fingerprint retried in a later agent turn.
 - `block`: never call an interactive GuardMe approval UI method.
 
-Managed orchestrators can force non-interactive behavior for every child session:
+Managed child processes can explicitly opt into later-turn automatic approval:
 
 ```bash
-GUARDME_APPROVAL_MODE=block pi --mode rpc ...
+GUARDME_APPROVAL_MODE=agent pi --mode json ...
 ```
 
-Use `GUARDME_APPROVAL_MODE=interactive` only when the RPC controller explicitly completes the extension approval round trip. Invalid YAML or environment values report diagnostics and resolve safely to `block` for that source/override.
+`agent` approvals are consumed after one use, never save policy rules, and are recorded as `automatic-decision` audit entries rather than user decisions. Hard denials, explicit command/path deny rules, protected credentials/paths, and outside-project denials are never eligible. Persisted warning state cannot skip the first in-process block, and duplicate calls in one assistant response cannot satisfy the later-turn requirement.
+
+Pi exposes the current run mode but no reliable subagent marker, so GuardMe never auto-detects children or enables `agent` mode for them. Set `GUARDME_APPROVAL_MODE=agent` only in explicitly managed child processes. Use `GUARDME_APPROVAL_MODE=block` to force all children to fail closed, or `GUARDME_APPROVAL_MODE=interactive` only when an RPC controller explicitly completes the extension approval round trip. Invalid YAML or environment values report diagnostics and resolve safely to `block` for that source/override.
 
 Interactive approval choices:
 
@@ -273,7 +277,7 @@ Saved decisions append narrow YAML rules, reload policy for the current session,
 | Problem | Try |
 | --- | --- |
 | Expected command is blocked | Open `/guardme`, inspect the warning, then allow once or save a narrow project/global rule if appropriate. |
-| Approval prompt does not appear | `auto` prompts only in TUI. Use `interactive` only for an RPC controller that handles the extension UI round trip; non-interactive sessions fail closed by design. |
+| Approval prompt does not appear | `auto` prompts only in TUI. Use `agent` for explicit later-turn automatic approval in managed RPC/JSON/print children, or `interactive` only for an RPC controller that handles the extension UI round trip. |
 | Project policy or settings are ignored | Trust the project from `/guardme` and reload/restart pi if needed. |
 | Cloud CLI is blocked | This is a hard protection. Run cloud commands outside Pi or use a separate, intentionally isolated workflow. |
 | A broad command allow still blocks | GuardMe evaluates every executable segment and protected path first; allow `ls *` cannot approve `ls && rm -rf build` or `cat .env`. `find -L` follows symlinks, so it needs an exact reviewed command allow or user approval even when `find *` is allowed. |

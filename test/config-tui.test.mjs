@@ -10,6 +10,7 @@ function snapshotFixture(config = createBuiltInDefaultPolicy()) {
     projectTrusted: true,
     guardMe: "active",
     insecureEdits: false,
+    approvalMode: config.approvalMode ?? "auto",
     policyRules: 46,
     warnedFingerprints: 0,
     warningRecords: [],
@@ -44,6 +45,13 @@ test("Setup pane includes append custom rule actions", () => {
   assert.match(output, /Add custom rule locally/);
   assert.equal(buildGlobalLine, projectDefaultsLine + 2);
   assert.equal(addGlobalLine, buildProjectLine + 2);
+});
+
+test("Policies pane shows the resolved approval mode", () => {
+  const output = renderConfigPane({ ...snapshotFixture(), approvalMode: "agent" }, "Policies", 120);
+
+  assert.match(output, /Approval mode\s+agent/);
+  assert.match(output, /global policy → project policy → environment/);
 });
 
 test("Rules pane labels each count with its meaning", () => {

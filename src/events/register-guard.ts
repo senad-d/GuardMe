@@ -15,7 +15,7 @@ import {
   type LocalScriptExecution,
   type PackageScriptExecution,
 } from "../policy/commands.ts";
-import { createPolicyFingerprint, evaluatePolicyRequest } from "../policy/evaluate.ts";
+import { createPolicyFingerprint, evaluatePolicyRequest, isAgentAutomaticApprovalEligible } from "../policy/evaluate.ts";
 import { normalizePolicyPath, pathTargetFromNormalizedPath } from "../policy/paths.ts";
 import { redactSensitiveText } from "../policy/redact.ts";
 import {
@@ -25,7 +25,7 @@ import {
 } from "../policy/script-content.ts";
 import { loadGuardMeConfig } from "../config/load-config.ts";
 import { persistUserDecisionRule } from "../config/write-policy.ts";
-import { appendDecisionRecord, appendWarningRecord } from "../state/warnings.ts";
+import { appendAutomaticDecisionRecord, appendDecisionRecord, appendWarningRecord } from "../state/warnings.ts";
 import {
   APPROVAL_UNAVAILABLE_NEXT_STEP,
   formatApprovalUnavailableBlockReason,
@@ -33,7 +33,18 @@ import {
   requestApprovalDecision,
   type ApprovalUiContext,
 } from "../ui/approval-modal.ts";
-import { formatGuardMeStatus, getGuardMeSessionState, recordGuardMeGuidance, setGuardMeSessionState, type GuardMeSessionState } from "./session-store.ts";
+import {
+  agentApprovalEligibility,
+  beginGuardMeAgentTurn,
+  consumeAgentApproval,
+  deferAgentApproval,
+  formatGuardMeStatus,
+  getGuardMeSessionState,
+  recordAgentApprovalBlock,
+  recordGuardMeGuidance,
+  setGuardMeSessionState,
+  type GuardMeSessionState,
+} from "./session-store.ts";
 
 export interface GuardedToolCallEvent {
   readonly toolName: string;
@@ -59,6 +70,11 @@ type PersistedPolicyTarget = "none" | "local-yaml" | "global-yaml";
 type StateFileSourceKind = "global" | "local";
 
 const GUARDED_TOOL_NAME_SET: ReadonlySet<string> = new Set(GUARDED_TOOL_NAMES);
+const AGENT_APPROVAL_RUN_MODES: ReadonlySet<string> = new Set(["rpc", "json", "print"]);
+const AGENT_APPROVAL_NEXT_STEP =
+  "If this exact action is still necessary, retry it once in a later agent turn. Duplicate calls in the current assistant response remain blocked, and every automatic approval is consumed after one use.";
+const AGENT_APPROVAL_BLOCK_REASON =
+  "GuardMe approvalMode 'agent' blocks the first attempt in this process and duplicate attempts from the same agent turn. An identical fingerprint may receive one automatic allow-once only in a later agent turn.";
 
 interface ScriptInspectionSource {
   readonly sourceKind: ScriptInspectionSourceKind;
@@ -73,7 +89,12 @@ interface ScriptContentInspectionOptions extends ScriptInspectionSource {
 
 /** Register GuardMe tool-call enforcement handlers. */
 export function registerGuard(pi: ExtensionAPI): void {
+  pi.on("turn_start", handleGuardMeTurnStart);
   pi.on("tool_call", async (event, ctx) => evaluateGuardedToolCall(event, ctx));
+}
+
+function handleGuardMeTurnStart(): void {
+  beginGuardMeAgentTurn();
 }
 
 export async function evaluateGuardedToolCall(
@@ -191,7 +212,23 @@ async function handlePolicyDecision(
   if (decision.outcome === "coach" || decision.outcome === "deny") {
     refreshGuardMeStatus(ctx);
   }
+  if (decision.outcome === "coach" && usesAgentApprovalMode(state, ctx)) {
+    recordAgentApprovalBlock(decision.fingerprint);
+    const guidance = `${decision.guidance} ${AGENT_APPROVAL_NEXT_STEP}`;
+    recordDecisionGuidance(request, decision, guidance);
+    return block(`${decision.reason}\n\nGuardMe coaching: ${guidance}`);
+  }
   if (decision.outcome === "needs-user-decision") {
+    const agentApproval = await resolveAgentModeApproval(state, ctx, decision);
+    if (agentApproval === "allowed") {
+      refreshGuardMeStatus(ctx);
+      return undefined;
+    }
+    if (agentApproval === "blocked") {
+      recordDecisionGuidance(request, decision, AGENT_APPROVAL_NEXT_STEP);
+      return block(formatApprovalUnavailableBlockReason(request, decision, AGENT_APPROVAL_BLOCK_REASON, AGENT_APPROVAL_NEXT_STEP));
+    }
+
     const approval = await requestApprovalDecision(toApprovalContext(ctx, state.config.config.approvalMode), request, decision);
     if (approval.kind === "blocked") {
       recordDecisionGuidance(request, decision, APPROVAL_UNAVAILABLE_NEXT_STEP);
@@ -213,6 +250,39 @@ async function handlePolicyDecision(
     return block(reason);
   }
   return policyDecisionToToolBlock(request, decision);
+}
+
+type AgentModeApprovalResolution = "not-applicable" | "blocked" | "allowed";
+
+async function resolveAgentModeApproval(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  decision: Extract<PolicyDecision, { readonly outcome: "needs-user-decision" }>,
+): Promise<AgentModeApprovalResolution> {
+  if (!usesAgentApprovalMode(state, ctx)) {
+    return "not-applicable";
+  }
+  if (!isAgentAutomaticApprovalEligible(decision)) {
+    return "blocked";
+  }
+
+  const fingerprint = decision.fingerprint;
+  if (agentApprovalEligibility(fingerprint) !== "later-turn") {
+    recordAgentApprovalBlock(fingerprint);
+    return "blocked";
+  }
+
+  if (!(await appendAutomaticApprovalDecisionRecord(state, fingerprint))) {
+    deferAgentApproval(fingerprint);
+    return "blocked";
+  }
+
+  consumeAgentApproval(fingerprint);
+  return "allowed";
+}
+
+function usesAgentApprovalMode(state: GuardMeSessionState, ctx: GuardedToolCallContext): boolean {
+  return state.config.config.approvalMode === "agent" && typeof ctx.mode === "string" && AGENT_APPROVAL_RUN_MODES.has(ctx.mode);
 }
 
 async function inspectWriteEditContentBeforeMutation(
@@ -857,6 +927,37 @@ export async function appendApprovalDecisionRecord(
     });
   } catch (error) {
     recordStateWriteFailure(state, path, globalDecision ? "global" : "local", error);
+  }
+}
+
+export async function appendAutomaticApprovalDecisionRecord(
+  state: GuardMeSessionState,
+  fingerprint: string,
+): Promise<boolean> {
+  const globalDecision = !state.projectTrusted;
+  const path = globalDecision ? state.warnings.paths.globalStatePath : state.warnings.paths.localStatePath;
+  try {
+    const record = await appendAutomaticDecisionRecord(path, {
+      fingerprint,
+      scope: globalDecision ? "global" : "project",
+      cwd: state.cwd,
+      reason: "GuardMe agent mode automatically allowed this identical later-turn retry once.",
+    });
+    const currentState = currentSessionStateFor(state);
+    if (!currentState) {
+      return false;
+    }
+    setGuardMeSessionState({
+      ...currentState,
+      warnings: {
+        ...currentState.warnings,
+        records: [...currentState.warnings.records, record],
+      },
+    });
+    return true;
+  } catch (error) {
+    recordStateWriteFailure(state, path, globalDecision ? "global" : "local", error);
+    return false;
   }
 }
 

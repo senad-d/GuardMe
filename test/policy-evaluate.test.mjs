@@ -7,7 +7,8 @@ import test from "node:test";
 import { mergePolicyConfigs, sourcePolicyConfig } from "../src/config/merge-policy.ts";
 import { createBuiltInDefaultPolicy, createEmptyPolicyConfig } from "../src/config/schema.ts";
 import { classifyShellCommand } from "../src/policy/commands.ts";
-import { commandGlobToRegExp, createPolicyFingerprint, evaluatePolicyRequest } from "../src/policy/evaluate.ts";
+import { USER_DECISIONS } from "../src/policy/action.ts";
+import { commandGlobToRegExp, createPolicyFingerprint, evaluatePolicyRequest, isAgentAutomaticApprovalEligible } from "../src/policy/evaluate.ts";
 import { normalizePolicyPath, pathTargetFromNormalizedPath } from "../src/policy/paths.ts";
 
 function policyFrom(localConfig) {
@@ -38,6 +39,53 @@ function shellRequest(cwd, command) {
     classified,
   };
 }
+
+test("agent automatic approval eligibility rejects synthetic deny and protection decisions", () => {
+  const eligibleDecision = {
+    outcome: "needs-user-decision",
+    action: "delete",
+    risk: "dangerous",
+    reason: "Synthetic coachable decision.",
+    matchedRules: [
+      {
+        category: "dangerousCommands",
+        source: { kind: "builtin", label: "synthetic dangerous command" },
+        pattern: "rm -rf build",
+        actions: ["delete"],
+      },
+    ],
+    fingerprint: "sha256:synthetic",
+    prompt: true,
+    choices: USER_DECISIONS,
+  };
+
+  assert.equal(isAgentAutomaticApprovalEligible(eligibleDecision), true);
+  assert.equal(
+    isAgentAutomaticApprovalEligible({ ...eligibleDecision, outcome: "deny", block: true, hard: false }),
+    false,
+  );
+  assert.equal(isAgentAutomaticApprovalEligible({ ...eligibleDecision, risk: "hard-denied" }), false);
+
+  for (const category of [
+    "denyPaths",
+    "zeroAccessPaths",
+    "readOnlyPaths",
+    "noDeletePaths",
+    "denyCommands",
+    "protectedCredentialPaths",
+    "hardDeny",
+  ]) {
+    const protectedDecision = {
+      ...eligibleDecision,
+      matchedRules: [{ category, source: { kind: "builtin", label: "synthetic protection" } }],
+    };
+    assert.equal(isAgentAutomaticApprovalEligible(protectedDecision), false, category);
+  }
+
+  for (const reasonCode of ["hard-denied-command", "path-protected", "outside-project-path"]) {
+    assert.equal(isAgentAutomaticApprovalEligible({ ...eligibleDecision, reasonCode }), false, reasonCode);
+  }
+});
 
 test("command glob matching supports optional trailing arguments", () => {
   const lsFamily = commandGlobToRegExp("ls *");

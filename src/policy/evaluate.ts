@@ -36,6 +36,20 @@ const PATH_MUTATION_ACTIONS = new Set<PolicyAction>(["write", "edit", "delete", 
 const DELETE_LIKE_ACTIONS = new Set<PolicyAction>(["delete", "move", "rename"]);
 const DEFAULT_ALLOWED_PROJECT_ACTIONS = new Set<PolicyAction>(["read", "list", "write", "edit"]);
 const PATH_RULE_ACTIONS = new Set<PolicyAction>(PATH_POLICY_ACTIONS);
+const AGENT_AUTO_APPROVAL_DENIED_RULE_CATEGORIES: ReadonlySet<MatchedRule["category"]> = new Set([
+  "denyPaths",
+  "zeroAccessPaths",
+  "readOnlyPaths",
+  "noDeletePaths",
+  "denyCommands",
+  "protectedCredentialPaths",
+  "hardDeny",
+]);
+const AGENT_AUTO_APPROVAL_DENIED_REASON_CODES: ReadonlySet<string> = new Set([
+  "hard-denied-command",
+  "path-protected",
+  "outside-project-path",
+]);
 
 export function evaluatePolicyRequest(options: EvaluatePolicyRequestOptions): PolicyDecision {
   const { policy, request } = options;
@@ -81,6 +95,15 @@ export function evaluatePolicyRequest(options: EvaluatePolicyRequestOptions): Po
   }
 
   return allowDecision(request, "No GuardMe deny rule matched this request.", []);
+}
+
+export function isAgentAutomaticApprovalEligible(decision: PolicyDecision): boolean {
+  return (
+    decision.outcome === "needs-user-decision" &&
+    decision.risk !== "hard-denied" &&
+    !decision.matchedRules.some((rule) => AGENT_AUTO_APPROVAL_DENIED_RULE_CATEGORIES.has(rule.category)) &&
+    !(decision.reasonCode && AGENT_AUTO_APPROVAL_DENIED_REASON_CODES.has(decision.reasonCode))
+  );
 }
 
 export function createPolicyFingerprint(request: PolicyRequest): string {

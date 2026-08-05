@@ -81,6 +81,49 @@ test("auto mode suppresses approval UI in RPC even when UI methods exist", async
   assert.equal(interactiveCalls, 0);
 });
 
+test("agent mode suppresses approval UI outside TUI", async () => {
+  const { request, decision } = needsDecisionFixture();
+  let interactiveCalls = 0;
+  const result = await requestApprovalDecision(
+    {
+      cwd: request.cwd,
+      hasUI: true,
+      mode: "rpc",
+      approvalMode: "agent",
+      ui: {
+        select: async () => {
+          interactiveCalls += 1;
+          return undefined;
+        },
+      },
+    },
+    request,
+    decision,
+  );
+
+  assert.equal(result.kind, "blocked");
+  assert.match(result.reason, /agent.*never invokes approval UI outside TUI/i);
+  assert.equal(interactiveCalls, 0);
+});
+
+test("agent mode retains the existing approval prompt in TUI", async () => {
+  const { request, decision } = needsDecisionFixture();
+  const allowLabel = `${APPROVAL_CHOICES[0].label} — ${APPROVAL_CHOICES[0].description}`;
+  const result = await requestApprovalDecision(
+    {
+      cwd: request.cwd,
+      hasUI: true,
+      mode: "tui",
+      approvalMode: "agent",
+      ui: { select: async () => allowLabel },
+    },
+    request,
+    decision,
+  );
+
+  assert.deepEqual(result, { kind: "decision", decision: "allow-once" });
+});
+
 test("block mode suppresses every approval UI method in TUI", async () => {
   const { request, decision } = needsDecisionFixture();
   let interactiveCalls = 0;

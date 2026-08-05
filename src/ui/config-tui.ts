@@ -1,3 +1,4 @@
+import type { ApprovalMode } from "../config/approval-mode.ts";
 import type { GuardMePolicyConfig } from "../config/schema.ts";
 import type { PolicyDiagnostic } from "../policy/action.ts";
 import type { GuardMeStateRecord } from "../state/warnings.ts";
@@ -53,6 +54,7 @@ export interface ConfigSnapshot {
   readonly projectTrusted: boolean;
   readonly guardMe: "active" | "off" | "inactive" | "degraded";
   readonly insecureEdits: boolean;
+  readonly approvalMode: ApprovalMode;
   readonly policyRules: number;
   readonly warnedFingerprints: number;
   readonly warningRecords: readonly GuardMeStateRecord[];
@@ -217,7 +219,7 @@ type ConfigTheme = ConfigFrameTheme;
 const CONFIG_PANES: readonly ConfigPane[] = ["General", "Policies", "Rules", "Setup"];
 const CONFIG_FRAME_BODY_ROWS = 11;
 const DETAIL_ROW_MARKER_WIDTH = 2;
-const DETAIL_FIELD_LABELS = ["Reason code", "Fingerprint", "Persisted", "Decision", "Message", "Source line", "Source", "Action", "Target", "Reason", "Scope", "Tool", "Risk", "Rule", "Count"] as const;
+const DETAIL_FIELD_LABELS = ["Reason code", "Fingerprint", "Persisted", "Decision", "Message", "Source line", "Source", "Action", "Target", "Reason", "Scope", "Mode", "Tool", "Risk", "Rule", "Count"] as const;
 const SETUP_PANE_INDEX = CONFIG_PANES.indexOf("Setup");
 const POLICY_WRITE_CONFIRM_CHOICES = ["Write policy", "Go back", "Cancel"] as const;
 const GUARDME_OFF_CONFIRM_CHOICES = ["Turn off GuardMe", "Go back"] as const;
@@ -1595,8 +1597,9 @@ function rowsForPane(snapshot: ConfigSnapshot, pane: ConfigPane, selectedIndex: 
         { kind: "value", label: "Global state", value: snapshot.globalStatePath, valueKind: "path" },
         { kind: "value", label: "Project state", value: snapshot.localStatePath, valueKind: "path" },
         { kind: "blank" },
-        { kind: "heading", label: "LOAD ORDER" },
-        { kind: "text", text: "global policy → project policy" },
+        { kind: "heading", label: "LOAD ORDER / APPROVAL" },
+        { kind: "value", label: "Approval mode", value: snapshot.approvalMode, valueKind: "text" },
+        { kind: "text", text: "global policy → project policy → environment" },
       ];
     case "Rules": {
       return [
@@ -1863,7 +1866,7 @@ function defaultStatusFooter(snapshot: ConfigSnapshot): string {
 }
 
 function policiesFooter(_selectedIndex: number): string {
-  return footerSegments("2/4", "Global policy applies across projects", "project policy applies only here when trusted");
+  return footerSegments("2/4", "Approval mode follows policy and environment overrides", "project policy applies only here when trusted");
 }
 
 function rulesFooter(snapshot: ConfigSnapshot, _selectedIndex: number): string {

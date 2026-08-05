@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,7 @@ import { writeGuardMeRuntimeSettings } from "../src/config/runtime-settings.ts";
 import { registerGuard, evaluateGuardedToolCall, mapToolCallToPolicyRequest } from "../src/events/register-guard.ts";
 import { registerGuidance } from "../src/events/register-guidance.ts";
 import { getGuardMeSessionState, startGuardMeSession, stopGuardMeSession } from "../src/events/register-lifecycle.ts";
+import { beginGuardMeAgentTurn } from "../src/events/session-store.ts";
 import { resolveStatePaths } from "../src/state/warnings.ts";
 
 async function createGuardContext(options = {}) {
@@ -549,6 +550,125 @@ test("first dangerous attempt records coaching state and repeated attempt asks f
   stopGuardMeSession(ctx);
 });
 
+test("agent mode allows one identical retry only in a later agent turn and consumes it", async () => {
+  const { home, cwd, ctx } = await createGuardContext({ environment: { GUARDME_APPROVAL_MODE: "agent" } });
+  const statePaths = resolveStatePaths(cwd, home);
+  const call = { toolName: "bash", input: { command: "rm -rf build" } };
+
+  const first = await evaluateGuardedToolCall(call, ctx);
+  const duplicate = await evaluateGuardedToolCall(call, ctx);
+  beginGuardMeAgentTurn();
+  const automatic = await evaluateGuardedToolCall(call, ctx);
+  const afterConsumption = await evaluateGuardedToolCall(call, ctx);
+  beginGuardMeAgentTurn();
+  const nextAutomatic = await evaluateGuardedToolCall(call, ctx);
+
+  assert.equal(first?.block, true);
+  assert.match(first?.reason ?? "", /GuardMe coaching|later agent turn/i);
+  assert.equal(duplicate?.block, true);
+  assert.match(duplicate?.reason ?? "", /first attempt in this process|same agent turn/i);
+  assert.equal(automatic, undefined);
+  assert.equal(afterConsumption?.block, true);
+  assert.equal(nextAutomatic, undefined);
+
+  const records = (await readFile(statePaths.localStatePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  const automaticRecords = records.filter((record) => record.type === "automatic-decision");
+  assert.equal(automaticRecords.length, 2);
+  assert.ok(automaticRecords.every((record) => record.decision === "allow-once" && record.approvalMode === "agent" && record.persistedTo === "none"));
+  assert.equal(records.some((record) => record.type === "decision"), false);
+  await assert.rejects(access(join(cwd, ".pi", "agent", "guardme.yaml")));
+  stopGuardMeSession(ctx);
+});
+
+test("agent mode audit-write failure blocks same-turn retries and defers approval", async () => {
+  const { root, home, cwd, ctx } = await createGuardContext({ environment: { GUARDME_APPROVAL_MODE: "agent" } });
+  const statePaths = resolveStatePaths(cwd, home);
+  const call = { toolName: "bash", input: { command: "rm -rf build" } };
+
+  assert.equal((await evaluateGuardedToolCall(call, ctx))?.block, true);
+  const warningState = await readFile(statePaths.localStatePath, "utf8");
+  const outsideStatePath = join(root, "outside-state.jsonl");
+  await writeFile(outsideStatePath, "outside state must remain unchanged\n", "utf8");
+  await rm(statePaths.localStatePath);
+  try {
+    await symlink(outsideStatePath, statePaths.localStatePath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && ["EACCES", "EPERM"].includes(String(error.code))) {
+      stopGuardMeSession(ctx);
+      return;
+    }
+    throw error;
+  }
+
+  beginGuardMeAgentTurn();
+  const failedAudit = await evaluateGuardedToolCall(call, ctx);
+  await rm(statePaths.localStatePath);
+  await writeFile(statePaths.localStatePath, warningState, "utf8");
+  const sameTurnRetry = await evaluateGuardedToolCall(call, ctx);
+
+  assert.equal(failedAudit?.block, true);
+  assert.equal(sameTurnRetry?.block, true);
+  assert.match(sameTurnRetry?.reason ?? "", /same agent turn|later agent turn/i);
+  assert.equal(await readFile(outsideStatePath, "utf8"), "outside state must remain unchanged\n");
+  assert.equal(getGuardMeSessionState()?.degraded, true);
+  assert.ok(getGuardMeSessionState()?.diagnostics.some((diagnostic) => diagnostic.code === "state.writeFailed"));
+  assert.equal(getGuardMeSessionState()?.warnings.records.some((record) => record.type === "automatic-decision"), false);
+
+  beginGuardMeAgentTurn();
+  const laterTurnRetry = await evaluateGuardedToolCall(call, ctx);
+  const records = (await readFile(statePaths.localStatePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+
+  assert.equal(laterTurnRetry, undefined);
+  assert.equal(records.filter((record) => record.type === "automatic-decision").length, 1);
+  stopGuardMeSession(ctx);
+});
+
+test("agent mode ignores persisted warnings until the first attempt in the new process is blocked", async () => {
+  const { home, cwd, ctx } = await createGuardContext();
+  const call = { toolName: "bash", input: { command: "rm -rf build" } };
+
+  assert.equal((await evaluateGuardedToolCall(call, ctx))?.block, true);
+  stopGuardMeSession(ctx);
+  await startGuardMeSession(ctx, { homeDir: home, environment: { GUARDME_APPROVAL_MODE: "agent" } });
+
+  const firstInNewProcess = await evaluateGuardedToolCall(call, ctx);
+  beginGuardMeAgentTurn();
+  const laterTurnRetry = await evaluateGuardedToolCall(call, ctx);
+
+  assert.equal(firstInNewProcess?.block, true);
+  assert.match(firstInNewProcess?.reason ?? "", /first attempt in this process/i);
+  assert.equal(laterTurnRetry, undefined);
+  stopGuardMeSession(ctx);
+});
+
+test("agent mode never auto-allows hard denials, explicit denies, protected paths, or outside-project denials", async () => {
+  const { root, cwd, ctx } = await createGuardContext({
+    environment: { GUARDME_APPROVAL_MODE: "agent" },
+    localPolicy: 'version: 1\ndenyCommands:\n  - pattern: "blocked-agent *"\n',
+  });
+  const outsidePath = join(root, "outside.txt");
+  await writeFile(join(cwd, ".env"), "SECRET=redacted\n", "utf8");
+  await writeFile(outsidePath, "outside\n", "utf8");
+  const calls = [
+    { toolName: "bash", input: { command: "aws sts get-caller-identity" } },
+    { toolName: "bash", input: { command: "blocked-agent run" } },
+    { toolName: "read", input: { path: ".env" } },
+    { toolName: "read", input: { path: outsidePath } },
+  ];
+
+  for (const call of calls) {
+    const first = await evaluateGuardedToolCall(call, ctx);
+    beginGuardMeAgentTurn();
+    const retried = await evaluateGuardedToolCall(call, ctx);
+    assert.equal(first?.block, true);
+    assert.equal(retried?.block, true);
+  }
+
+  assert.equal(getGuardMeSessionState()?.agentApprovals.blockedTurnByFingerprint.size, 0);
+  assert.equal(getGuardMeSessionState()?.warnings.records.some((record) => record.type === "automatic-decision"), false);
+  stopGuardMeSession(ctx);
+});
+
 test("persisted warnings fail closed with bounded guidance in auto RPC mode without calling UI", async () => {
   const { home, cwd, ctx } = await createGuardContext({ environment: {} });
   const statePaths = resolveStatePaths(cwd, home);
@@ -731,5 +851,6 @@ test("mapper covers every guarded built-in tool and ignores non-guarded shell es
 test("registerGuard wires a tool_call handler", () => {
   const handlers = new Map();
   registerGuard({ on: (name, handler) => handlers.set(name, handler) });
+  assert.equal(typeof handlers.get("turn_start"), "function");
   assert.equal(typeof handlers.get("tool_call"), "function");
 });
