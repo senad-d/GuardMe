@@ -77,7 +77,11 @@ function formatMatchedRuleLines(record: WarningStateRecord): readonly string[] {
     return [];
   }
 
-  return renderMatchedRules(record.matchedRules).map(formatMatchedRuleLine);
+  const lines: string[] = [];
+  for (const [index, rule] of renderMatchedRules(record.matchedRules).entries()) {
+    lines.push(formatMatchedRuleLine(rule, index));
+  }
+  return lines;
 }
 
 function formatMatchedRuleLine(rule: string, index: number): string {
