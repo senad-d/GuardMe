@@ -118,7 +118,8 @@ test("GuardMe RPC agent mode uses real turn boundaries without approval UI", { t
     assert.match(resultText(bashEnds[1]), /same agent turn|first attempt in this process/i);
     assert.match(resultText(bashEnds[2]), /guardme agent automatic/i);
     assert.ok(turnStartCount >= 3, "Pi should emit turns for the duplicate response, retry, and final text");
-    assert.ok(bashEndIndexes[0] < turnEndIndexes[0] && bashEndIndexes[1] < turnEndIndexes[0]);
+    assert.ok(bashEndIndexes[0] < turnEndIndexes[0]);
+    assert.ok(bashEndIndexes[1] < turnEndIndexes[0]);
     assert.ok(bashEndIndexes[2] > turnEndIndexes[0], "automatic approval must occur after the first real turn ends");
     assert.equal(
       run.uiRequests.some((request) => ["select", "confirm", "input", "editor"].includes(request.method)),

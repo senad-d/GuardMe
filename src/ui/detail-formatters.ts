@@ -1,5 +1,10 @@
 import type { PolicyDiagnostic } from "../policy/action.ts";
-import type { GuardMeStateRecord } from "../state/warnings.ts";
+import type {
+  AutomaticDecisionStateRecord,
+  GuardMeStateRecord,
+  UserDecisionStateRecord,
+  WarningStateRecord,
+} from "../state/warnings.ts";
 import { renderMatchedRules } from "./render-policy-summary.ts";
 
 export function formatWarningDecisionRecords(records: readonly GuardMeStateRecord[]): readonly string[] {
@@ -12,55 +17,71 @@ export function formatWarningDecisionRecords(records: readonly GuardMeStateRecor
     if (index > 0) {
       lines.push("");
     }
-    if (record.type === "warning") {
-      lines.push(
-        `WARNING ${record.timestamp}`,
-        `  Scope       ${record.scope}`,
-        `  Tool        ${record.toolName}`,
-        `  Action      ${record.action}`,
-        `  Risk        ${record.risk}`,
-        ...(record.reasonCode ? [`  Reason code ${record.reasonCode}`] : []),
-        `  Target      ${record.target}`,
-        ...(record.reason ? [`  Reason      ${record.reason}`] : []),
-        ...formatMatchedRuleLines(record),
-        `  Fingerprint ${record.fingerprint}`,
-        `  Count       ${record.count}`,
-      );
-      continue;
-    }
-
-    if (record.type === "automatic-decision") {
-      lines.push(
-        `AUTOMATIC DECISION ${record.timestamp}`,
-        `  Scope       ${record.scope}`,
-        `  Mode        ${record.approvalMode}`,
-        `  Decision    ${record.decision}`,
-        `  Persisted   ${record.persistedTo}`,
-        ...(record.reason ? [`  Reason      ${record.reason}`] : []),
-        `  Fingerprint ${record.fingerprint}`,
-      );
-      continue;
-    }
-
-    lines.push(
-      `DECISION ${record.timestamp}`,
-      `  Scope       ${record.scope}`,
-      `  Decision    ${record.decision}`,
-      `  Persisted   ${record.persistedTo}`,
-      ...(record.reason ? [`  Reason      ${record.reason}`] : []),
-      `  Fingerprint ${record.fingerprint}`,
-    );
+    lines.push(...formatWarningDecisionRecord(record));
   }
 
   return lines;
 }
 
-function formatMatchedRuleLines(record: GuardMeStateRecord): readonly string[] {
-  if (record.type !== "warning" || !record.matchedRules || record.matchedRules.length === 0) {
+function formatWarningDecisionRecord(record: GuardMeStateRecord): readonly string[] {
+  if (record.type === "warning") {
+    return formatWarningRecord(record);
+  }
+  if (record.type === "automatic-decision") {
+    return formatAutomaticDecisionRecord(record);
+  }
+  return formatUserDecisionRecord(record);
+}
+
+function formatWarningRecord(record: WarningStateRecord): readonly string[] {
+  return [
+    `WARNING ${record.timestamp}`,
+    `  Scope       ${record.scope}`,
+    `  Tool        ${record.toolName}`,
+    `  Action      ${record.action}`,
+    `  Risk        ${record.risk}`,
+    ...(record.reasonCode ? [`  Reason code ${record.reasonCode}`] : []),
+    `  Target      ${record.target}`,
+    ...(record.reason ? [`  Reason      ${record.reason}`] : []),
+    ...formatMatchedRuleLines(record),
+    `  Fingerprint ${record.fingerprint}`,
+    `  Count       ${record.count}`,
+  ];
+}
+
+function formatAutomaticDecisionRecord(record: AutomaticDecisionStateRecord): readonly string[] {
+  return [
+    `AUTOMATIC DECISION ${record.timestamp}`,
+    `  Scope       ${record.scope}`,
+    `  Mode        ${record.approvalMode}`,
+    `  Decision    ${record.decision}`,
+    `  Persisted   ${record.persistedTo}`,
+    ...(record.reason ? [`  Reason      ${record.reason}`] : []),
+    `  Fingerprint ${record.fingerprint}`,
+  ];
+}
+
+function formatUserDecisionRecord(record: UserDecisionStateRecord): readonly string[] {
+  return [
+    `DECISION ${record.timestamp}`,
+    `  Scope       ${record.scope}`,
+    `  Decision    ${record.decision}`,
+    `  Persisted   ${record.persistedTo}`,
+    ...(record.reason ? [`  Reason      ${record.reason}`] : []),
+    `  Fingerprint ${record.fingerprint}`,
+  ];
+}
+
+function formatMatchedRuleLines(record: WarningStateRecord): readonly string[] {
+  if (!record.matchedRules?.length) {
     return [];
   }
 
-  return renderMatchedRules(record.matchedRules).map((rule, index) => `  ${index === 0 ? "Rule        " : "            "}${rule}`);
+  return renderMatchedRules(record.matchedRules).map(formatMatchedRuleLine);
+}
+
+function formatMatchedRuleLine(rule: string, index: number): string {
+  return `  ${index === 0 ? "Rule        " : "            "}${rule}`;
 }
 
 export function formatDiagnostics(diagnostics: readonly PolicyDiagnostic[]): readonly string[] {
