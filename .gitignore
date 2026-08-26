@@ -21,6 +21,7 @@ coverage/
 # Local caches and generated reports
 .cache/
 .local/
+.scannerwork/
 .trivycache/
 trivy-reports/
 odc-reports/
