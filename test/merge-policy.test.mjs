@@ -8,6 +8,50 @@ import { loadGuardMeConfig } from "../src/config/load-config.ts";
 import { mergePolicyConfigs, sourcePolicyConfig } from "../src/config/merge-policy.ts";
 import { createEmptyPolicyConfig } from "../src/config/schema.ts";
 
+test("merge always seeds built-in guarded tool mappings", () => {
+  const merged = mergePolicyConfigs([]);
+
+  assert.deepEqual(merged.config.guardedTools, {
+    bash: "bash",
+    read: "read",
+    write: "write",
+    edit: "edit",
+    grep: "grep",
+    find: "find",
+    ls: "ls",
+  });
+});
+
+test("merge combines global and local guarded aliases and deduplicates identical mappings", () => {
+  const globalConfig = { ...createEmptyPolicyConfig(), guardedTools: { pwsh: "bash", reader: "read" } };
+  const localConfig = { ...createEmptyPolicyConfig(), guardedTools: { pwsh: "bash", patcher: "edit" } };
+
+  const merged = mergePolicyConfigs([
+    sourcePolicyConfig("global", globalConfig, "/global.yaml"),
+    sourcePolicyConfig("local", localConfig, "/local.yaml"),
+  ]);
+
+  assert.equal(merged.config.guardedTools.pwsh, "bash");
+  assert.equal(merged.config.guardedTools.reader, "read");
+  assert.equal(merged.config.guardedTools.patcher, "edit");
+  assert.equal(merged.diagnostics.length, 0);
+});
+
+test("merge rejects conflicting guarded aliases and keeps the earlier mapping", () => {
+  const globalConfig = { ...createEmptyPolicyConfig(), guardedTools: { runner: "bash" } };
+  const localConfig = { ...createEmptyPolicyConfig(), guardedTools: { runner: "write" } };
+
+  const merged = mergePolicyConfigs([
+    sourcePolicyConfig("global", globalConfig, "/global.yaml"),
+    sourcePolicyConfig("local", localConfig, "/local.yaml"),
+  ]);
+
+  assert.equal(merged.config.guardedTools.runner, "bash");
+  assert.equal(merged.diagnostics[0]?.code, "merge.guardedToolConflict");
+  assert.equal(merged.diagnostics[0]?.source.kind, "local");
+  assert.equal(merged.diagnostics[0]?.path, "guardedTools.runner");
+});
+
 test("merge loads global rules before local overlay rules with source metadata", () => {
   const globalConfig = {
     ...createEmptyPolicyConfig(),
@@ -102,6 +146,22 @@ test("merge deduplicates path rules with actions in different input orders", () 
 
   assert.equal(merged.config.allowPaths.length, 1);
   assert.equal(merged.config.allowPaths[0]?.source.kind, "global");
+});
+
+test("untrusted local policy cannot add guarded tool mappings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-merge-untrusted-"));
+  const home = join(root, "home");
+  const cwd = join(root, "project");
+  await mkdir(join(home, ".pi", "agent"), { recursive: true });
+  await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
+  await writeFile(join(home, ".pi", "agent", "guardme.yaml"), "version: 1\nguardedTools:\n  pwsh: bash\n", "utf8");
+  await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), "version: 1\nguardedTools:\n  patcher: edit\n", "utf8");
+
+  const loaded = await loadGuardMeConfig({ cwd, homeDir: home, loadLocalPolicy: false });
+
+  assert.equal(loaded.config.guardedTools.pwsh, "bash");
+  assert.equal(loaded.config.guardedTools.patcher, undefined);
+  assert.ok(loaded.diagnostics.some((diagnostic) => diagnostic.code === "config.localPolicySkippedUntrustedProject"));
 });
 
 test("loadGuardMeConfig returns merged built-in, global, and local policy sources", async () => {

@@ -1,4 +1,4 @@
-import { POLICY_VERSION } from "../constants.ts";
+import { BUILT_IN_GUARDED_TOOLS, GUARDED_TOOL_NAMES, POLICY_VERSION, type GuardedToolContract } from "../constants.ts";
 import { type ApprovalMode, isApprovalMode } from "./approval-mode.ts";
 import {
   PATH_POLICY_ACTIONS,
@@ -43,6 +43,7 @@ export interface GuardMePathRule extends GuardMeRule {
 export interface GuardMePolicyConfig {
   readonly version: number;
   readonly approvalMode?: ApprovalMode;
+  readonly guardedTools?: Readonly<Record<string, GuardedToolContract>>;
   readonly allowPaths: readonly GuardMePathRule[];
   readonly denyPaths: readonly GuardMePathRule[];
   readonly zeroAccessPaths: readonly GuardMePathRule[];
@@ -69,6 +70,7 @@ const ALL_PATH_ACTIONS: readonly PathPolicyAction[] = PATH_POLICY_ACTIONS;
 export function createEmptyPolicyConfig(version = POLICY_VERSION): GuardMePolicyConfig {
   return {
     version,
+    guardedTools: {},
     allowPaths: [],
     denyPaths: [],
     zeroAccessPaths: [],
@@ -349,12 +351,13 @@ export function validateGuardMeConfig(input: unknown, source: RuleSource): Confi
   }
 
   const approvalMode = validateApprovalMode(input.approvalMode, source, diagnostics);
+  const guardedTools = validateGuardedTools(input.guardedTools, source, diagnostics);
   const normalized: Record<PolicyConfigSection, readonly GuardMeRule[]> = Object.fromEntries(
     POLICY_CONFIG_SECTIONS.map((section) => [section, validateRuleSection(section, input[section], source, diagnostics)]),
   ) as Record<PolicyConfigSection, readonly GuardMeRule[]>;
 
   for (const key of Object.keys(input)) {
-    if (key !== "version" && key !== "approvalMode" && !POLICY_CONFIG_SECTION_SET.has(key)) {
+    if (key !== "version" && key !== "approvalMode" && key !== "guardedTools" && !POLICY_CONFIG_SECTION_SET.has(key)) {
       diagnostics.push(configDiagnostic("warning", "config.unknownKey", `Unknown GuardMe policy key '${key}' ignored.`, source));
     }
   }
@@ -367,6 +370,7 @@ export function validateGuardMeConfig(input: unknown, source: RuleSource): Confi
     config: {
       ...config,
       ...(approvalMode ? { approvalMode } : {}),
+      guardedTools,
       allowPaths: normalized.allowPaths as readonly GuardMePathRule[],
       denyPaths: normalized.denyPaths as readonly GuardMePathRule[],
       zeroAccessPaths: normalized.zeroAccessPaths as readonly GuardMePathRule[],
@@ -410,7 +414,7 @@ interface PolicyYamlParseState {
   readonly data: Record<string, unknown>;
   readonly diagnostics: PolicyDiagnostic[];
   readonly source: RuleSource;
-  currentSection?: PolicyConfigSection;
+  currentSection?: PolicyConfigSection | "guardedTools";
   currentItem?: Record<string, unknown>;
 }
 
@@ -454,6 +458,16 @@ function parsePolicyYamlTopLevelLine(line: ParsedYamlLine, state: PolicyYamlPars
     state.data.approvalMode = parseScalar(valueText);
     return;
   }
+  if (key === "guardedTools") {
+    if (valueText.trim() !== "") {
+      state.diagnostics.push(lineDiagnostic("error", "yaml.guardedToolsMustBeMap", "Section 'guardedTools' must be written as a YAML mapping.", state.source, line.lineNumber));
+      state.data.guardedTools = parseScalar(valueText);
+      return;
+    }
+    state.currentSection = "guardedTools";
+    state.data.guardedTools = {};
+    return;
+  }
   if (!isPolicyConfigSection(key)) {
     state.data[key] = parseScalar(valueText);
     return;
@@ -474,6 +488,10 @@ function parsePolicyYamlNestedLine(line: ParsedYamlLine, state: PolicyYamlParseS
     state.diagnostics.push(lineDiagnostic("error", "yaml.unexpectedIndent", "Unexpected indented line outside a section.", state.source, line.lineNumber));
     return;
   }
+  if (state.currentSection === "guardedTools") {
+    parseGuardedToolMappingLine(line, state);
+    return;
+  }
   if (line.indent === 2 && line.trimmed.startsWith("-")) {
     parsePolicyYamlListItem(line, state, state.currentSection);
     return;
@@ -483,6 +501,21 @@ function parsePolicyYamlNestedLine(line: ParsedYamlLine, state: PolicyYamlParseS
     return;
   }
   state.diagnostics.push(lineDiagnostic("error", "yaml.invalidIndent", "Invalid indentation for GuardMe policy YAML.", state.source, line.lineNumber));
+}
+
+function parseGuardedToolMappingLine(line: ParsedYamlLine, state: PolicyYamlParseState): void {
+  const parsed = line.indent === 2 ? parseKeyValue(line.trimmed) : undefined;
+  const parsedName = parsed ? parseScalar(parsed[0]) : undefined;
+  if (!parsed || typeof parsedName !== "string" || parsedName === "") {
+    state.diagnostics.push(lineDiagnostic("error", "yaml.invalidGuardedToolMapping", "Guarded tool mappings must use 'toolName: builtInContract' entries.", state.source, line.lineNumber));
+    return;
+  }
+  const mappings = state.data.guardedTools as Record<string, unknown>;
+  if (Object.hasOwn(mappings, parsedName)) {
+    state.diagnostics.push(lineDiagnostic("error", "yaml.duplicateGuardedTool", `Duplicate guarded tool mapping '${parsedName}'.`, state.source, line.lineNumber));
+    return;
+  }
+  mappings[parsedName] = parseScalar(parsed[1]);
 }
 
 function parsePolicyYamlListItem(line: ParsedYamlLine, state: PolicyYamlParseState, section: PolicyConfigSection): void {
@@ -534,6 +567,38 @@ function validateApprovalMode(
     ),
   );
   return "block";
+}
+
+function validateGuardedTools(
+  value: unknown,
+  source: RuleSource,
+  diagnostics: PolicyDiagnostic[],
+): Readonly<Record<string, GuardedToolContract>> {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    diagnostics.push(configDiagnostic("error", "config.guardedToolsNotMap", "GuardMe guardedTools must be a mapping of custom tool names to built-in contracts.", source));
+    return {};
+  }
+  const mappings: Record<string, GuardedToolContract> = {};
+  for (const [rawName, rawContract] of Object.entries(value)) {
+    const name = rawName.trim();
+    if (name === "") {
+      diagnostics.push(configDiagnostic("error", "config.emptyGuardedToolName", "Guarded tool names must not be empty.", source));
+      continue;
+    }
+    if (Object.hasOwn(BUILT_IN_GUARDED_TOOLS, name)) {
+      diagnostics.push(configDiagnostic("error", "config.reservedGuardedTool", `Built-in guarded tool '${name}' cannot be remapped.`, source));
+      continue;
+    }
+    if (typeof rawContract !== "string" || !(GUARDED_TOOL_NAMES as readonly string[]).includes(rawContract)) {
+      diagnostics.push(configDiagnostic("error", "config.invalidGuardedToolContract", `Guarded tool '${name}' must map to one of: ${GUARDED_TOOL_NAMES.join(", ")}.`, source));
+      continue;
+    }
+    mappings[name] = rawContract as GuardedToolContract;
+  }
+  return mappings;
 }
 
 function validateRuleSection(

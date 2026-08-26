@@ -40,6 +40,44 @@ async function createGuardContext(options = {}) {
   return { root, home, cwd, ctx, statuses };
 }
 
+test("configured shell and path aliases use their canonical enforcement contracts", async () => {
+  const { cwd, ctx } = await createGuardContext({
+    globalPolicy: "version: 1\nguardedTools:\n  pwsh: bash\n  file_put: write\n  file_scan: find\n",
+  });
+
+  const shellBlocked = await evaluateGuardedToolCall({ toolName: "pwsh", input: { command: "cat .env" } }, ctx);
+  const shellAllowed = await evaluateGuardedToolCall({ toolName: "pwsh", input: { command: "ls ." } }, ctx);
+  await writeFile(join(cwd, "cloud-audit.sh"), "#!/bin/sh\naws sts get-caller-identity\n", "utf8");
+  const scriptBlocked = await evaluateGuardedToolCall({ toolName: "pwsh", input: { command: "bash cloud-audit.sh" } }, ctx);
+  const writeBlocked = await evaluateGuardedToolCall({
+    toolName: "file_put",
+    input: { path: "audit.sh", content: "#!/bin/sh\ncat ~/.aws/credentials\n" },
+  }, ctx);
+  const malformed = await evaluateGuardedToolCall({ toolName: "pwsh", input: { script: "cat .env" } }, ctx);
+  const unknown = await evaluateGuardedToolCall({ toolName: "unknown_shell", input: { command: "cat .env" } }, ctx);
+  const inheritedObjectName = await evaluateGuardedToolCall({ toolName: "toString", input: { command: "cat .env" } }, ctx);
+  const mapped = await mapToolCallToPolicyRequest({ toolName: "file_scan", input: { pattern: "*" } }, cwd, undefined, "find");
+
+  assert.equal(shellBlocked?.block, true);
+  assert.match(shellBlocked?.reason ?? "", /Environment files|denyPaths|Credential-like/i);
+  assert.equal(shellAllowed, undefined);
+  assert.equal(scriptBlocked?.block, true);
+  assert.match(scriptBlocked?.reason ?? "", /local script|Cloud CLI|aws/i);
+  assert.equal(writeBlocked?.block, true);
+  assert.match(writeBlocked?.reason ?? "", /proposed file content|Credential/i);
+  assert.equal(malformed?.block, true);
+  assert.match(malformed?.reason ?? "", /pwsh as bash.*input\.command is missing/i);
+  assert.equal(unknown, undefined);
+  assert.equal(inheritedObjectName, undefined);
+  assert.ok("request" in mapped);
+  if ("request" in mapped) {
+    assert.equal(mapped.request.toolName, "file_scan");
+    assert.equal(mapped.request.action, "list");
+    assert.equal(mapped.request.targets[0]?.raw, ".");
+  }
+  stopGuardMeSession(ctx);
+});
+
 test("read tool calls inside the project are allowed unless protected", async () => {
   const { cwd, ctx } = await createGuardContext();
   await writeFile(join(cwd, "README.md"), "readme", "utf8");

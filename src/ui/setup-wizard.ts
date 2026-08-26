@@ -793,6 +793,7 @@ function clonePolicyConfig(config: GuardMePolicyConfig): GuardMePolicyConfig {
   return {
     version: config.version,
     ...(config.approvalMode ? { approvalMode: config.approvalMode } : {}),
+    ...(config.guardedTools ? { guardedTools: { ...config.guardedTools } } : {}),
     allowPaths: config.allowPaths.map((rule) => ({ ...rule })),
     denyPaths: config.denyPaths.map((rule) => ({ ...rule })),
     zeroAccessPaths: config.zeroAccessPaths.map((rule) => ({ ...rule })),

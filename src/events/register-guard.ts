@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 
-import { EXTENSION_STATUS_KEY, GUARDED_TOOL_NAMES } from "../constants.ts";
+import { BUILT_IN_GUARDED_TOOLS, EXTENSION_STATUS_KEY, type GuardedToolContract } from "../constants.ts";
 import type { PathTarget, PolicyAction, PolicyDecision, PolicyDiagnostic, PolicyRequest, PolicyTarget, UserDecision } from "../policy/action.ts";
 import {
   classifyShellCommand,
@@ -69,7 +69,6 @@ type ScriptInspectionSourceKind = "script-content" | "local-script";
 type PersistedPolicyTarget = "none" | "local-yaml" | "global-yaml";
 type StateFileSourceKind = "global" | "local";
 
-const GUARDED_TOOL_NAME_SET: ReadonlySet<string> = new Set(GUARDED_TOOL_NAMES);
 const AGENT_APPROVAL_RUN_MODES: ReadonlySet<string> = new Set(["rpc", "json", "print"]);
 const AGENT_APPROVAL_NEXT_STEP =
   "If this exact action is still necessary, retry it once in a later agent turn. Duplicate calls in the current assistant response remain blocked, and every automatic approval is consumed after one use.";
@@ -101,20 +100,22 @@ export async function evaluateGuardedToolCall(
   event: GuardedToolCallEvent,
   ctx: GuardedToolCallContext,
 ): Promise<ToolCallBlockResult | undefined> {
-  if (!isGuardedToolName(event.toolName)) {
+  const state = getGuardMeSessionState();
+  const guardedTools: Readonly<Record<string, GuardedToolContract>> = state?.config.config.guardedTools ?? BUILT_IN_GUARDED_TOOLS;
+  const contract = Object.hasOwn(guardedTools, event.toolName)
+    ? guardedTools[event.toolName]
+    : undefined;
+  if (!contract) {
     return undefined;
   }
-
-  const state = getGuardMeSessionState();
   if (!state) {
     return block("GuardMe blocked the tool call because policy state is not initialized.");
   }
-
   if (!state.enabled) {
     return undefined;
   }
 
-  const mapped = await mapToolCallToPolicyRequest(event, ctx.cwd, state.homeDir);
+  const mapped = await mapToolCallToPolicyRequest(event, ctx.cwd, state.homeDir, contract);
   if ("error" in mapped) {
     return block(mapped.error);
   }
@@ -126,7 +127,7 @@ export async function evaluateGuardedToolCall(
     warnedFingerprints: state.warnings.warnedFingerprints,
   });
 
-  if (event.toolName === "bash" && decision.outcome !== "deny") {
+  if (contract === "bash" && decision.outcome !== "deny") {
     const scriptBlock = await inspectLocalScriptsBeforeExecution(state, ctx, mapped.request);
     if (scriptBlock) {
       return scriptBlock;
@@ -138,8 +139,8 @@ export async function evaluateGuardedToolCall(
     return directBlock;
   }
 
-  if (isEditMutationToolName(event.toolName) && !state.insecureEdits) {
-    return inspectWriteEditContentBeforeMutation(state, ctx, event, mapped.request);
+  if (isEditMutationContract(contract) && !state.insecureEdits) {
+    return inspectWriteEditContentBeforeMutation(state, ctx, event, mapped.request, contract);
   }
 
   return undefined;
@@ -149,14 +150,15 @@ export async function mapToolCallToPolicyRequest(
   event: GuardedToolCallEvent,
   cwd: string,
   homeDir?: string,
+  contract: GuardedToolContract = BUILT_IN_GUARDED_TOOLS[event.toolName as GuardedToolContract] ?? "read",
 ): Promise<
   | { readonly request: PolicyRequest; readonly commandClassification?: ReturnType<typeof classifyShellCommand> }
   | { readonly error: string }
 > {
-  if (event.toolName === "bash") {
+  if (contract === "bash") {
     const command = readStringProperty(event.input, "command");
     if (!command) {
-      return { error: "GuardMe could not evaluate bash because input.command is missing." };
+      return { error: `GuardMe could not evaluate ${event.toolName} as bash because input.command is missing.` };
     }
     const commandClassification = classifyShellCommand(command);
     const normalized = await normalizeTargets(commandClassification.targetPaths, cwd, homeDir);
@@ -181,8 +183,8 @@ export async function mapToolCallToPolicyRequest(
     };
   }
 
-  const action = toolNameToAction(event.toolName);
-  const pathValues = extractToolPathValues(event.toolName, event.input);
+  const action = toolContractToAction(contract);
+  const pathValues = extractToolPathValues(contract, event.input);
   if (pathValues.length === 0) {
     return { error: `GuardMe could not evaluate ${event.toolName} because no path input was found.` };
   }
@@ -191,7 +193,7 @@ export async function mapToolCallToPolicyRequest(
   if ("error" in normalized) {
     return { error: normalized.error };
   }
-  const discoveryTargets = await protectedDiscoveryTargets(event.toolName, event.input, normalized.targets);
+  const discoveryTargets = await protectedDiscoveryTargets(contract, event.input, normalized.targets);
   return {
     request: {
       toolName: event.toolName,
@@ -290,8 +292,9 @@ async function inspectWriteEditContentBeforeMutation(
   ctx: GuardedToolCallContext,
   event: GuardedToolCallEvent,
   request: PolicyRequest,
+  contract: GuardedToolContract,
 ): Promise<ToolCallBlockResult | undefined> {
-  const snippets = await proposedContentSnippets(event, request);
+  const snippets = await proposedContentSnippets(event, request, contract);
   for (const snippet of snippets) {
     const inspection = extractScriptCommandsFromContent({ path: snippet.path, content: snippet.content });
     const blockResult = await evaluateScriptContentInspection(state, ctx, request, inspection, {
@@ -333,7 +336,7 @@ async function inspectLocalScriptsBeforeExecution(
     }
 
     const readRequest: PolicyRequest = {
-      toolName: "bash",
+      toolName: request.toolName,
       action: "read",
       cwd: request.cwd,
       targets: [scriptTarget],
@@ -445,16 +448,20 @@ interface ProposedContentSnippet {
   readonly label: string;
 }
 
-async function proposedContentSnippets(event: GuardedToolCallEvent, request: PolicyRequest): Promise<readonly ProposedContentSnippet[]> {
+async function proposedContentSnippets(
+  event: GuardedToolCallEvent,
+  request: PolicyRequest,
+  contract: GuardedToolContract,
+): Promise<readonly ProposedContentSnippet[]> {
   const record = isRecord(event.input) ? event.input : {};
   const targetPath = request.targets.find((target): target is PathTarget => target.kind === "path")?.raw;
 
-  if (event.toolName === "write") {
+  if (contract === "write") {
     const content = readStringProperty(record, "content");
     return content ? [{ path: targetPath, content, label: "write content" }] : [];
   }
 
-  if (event.toolName !== "edit") {
+  if (contract !== "edit") {
     return [];
   }
 
@@ -601,7 +608,7 @@ async function inspectPackageScriptBeforeExecution(
   }
 
   const readRequest: PolicyRequest = {
-    toolName: "bash",
+    toolName: request.toolName,
     action: "read",
     cwd: request.cwd,
     targets: [packageJsonTarget],
@@ -792,7 +799,7 @@ function localScriptUninspectableRequest(
   reason: string,
 ): PolicyRequest {
   return {
-    toolName: "bash",
+    toolName: parentRequest.toolName,
     action: "shell",
     cwd: parentRequest.cwd,
     command: script.invocation,
@@ -813,7 +820,7 @@ function packageScriptUninspectableRequest(
   reason: string,
 ): PolicyRequest {
   return {
-    toolName: "bash",
+    toolName: parentRequest.toolName,
     action: "shell",
     cwd: parentRequest.cwd,
     command: script.invocation,
@@ -1086,28 +1093,24 @@ function isPersistentUserDecision(decision: UserDecision): boolean {
   return decision === "allow-local" || decision === "deny-local" || decision === "allow-global" || decision === "deny-global";
 }
 
-function isGuardedToolName(toolName: string): boolean {
-  return GUARDED_TOOL_NAME_SET.has(toolName);
+function isEditMutationContract(contract: GuardedToolContract): boolean {
+  return contract === "write" || contract === "edit";
 }
 
-function isEditMutationToolName(toolName: string): boolean {
-  return toolName === "write" || toolName === "edit";
-}
-
-function toolNameToAction(toolName: string): PolicyAction {
-  if (toolName === "write") {
+function toolContractToAction(contract: GuardedToolContract): PolicyAction {
+  if (contract === "write") {
     return "write";
   }
-  if (toolName === "edit") {
+  if (contract === "edit") {
     return "edit";
   }
-  if (toolName === "find" || toolName === "ls") {
+  if (contract === "find" || contract === "ls") {
     return "list";
   }
   return "read";
 }
 
-function extractToolPathValues(toolName: string, input: unknown): readonly string[] {
+function extractToolPathValues(contract: GuardedToolContract, input: unknown): readonly string[] {
   const record = isRecord(input) ? input : {};
   const candidates: string[] = [];
 
@@ -1125,7 +1128,7 @@ function extractToolPathValues(toolName: string, input: unknown): readonly strin
     }
   }
 
-  if (candidates.length === 0 && (toolName === "find" || toolName === "ls" || toolName === "grep")) {
+  if (candidates.length === 0 && (contract === "find" || contract === "ls" || contract === "grep")) {
     candidates.push(".");
   }
 

@@ -87,6 +87,25 @@ test("policy writes use owner-only file permissions", async () => {
   assert.match(await readFile(paths.localPolicyPath, "utf8"), /^version: 1\napprovalMode: block\n/u);
 });
 
+test("guarded tool mappings survive policy write and parse round trips", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-write-tool-mappings-"));
+  const home = join(root, "home");
+  const cwd = join(root, "project");
+  await mkdir(cwd, { recursive: true });
+  const paths = resolvePolicyConfigPaths(cwd, home);
+
+  await writePolicyConfigFile(
+    paths.localPolicyPath,
+    { ...createEmptyPolicyConfig(), guardedTools: { pwsh: "bash", reader: "read", patcher: "edit" } },
+    { cwd, homeDir: home, scope: "local" },
+  );
+  const loaded = await loadPolicyConfigFile(paths.localPolicyPath, "local");
+  const yaml = await readFile(paths.localPolicyPath, "utf8");
+
+  assert.deepEqual(loaded.config.guardedTools, { patcher: "edit", pwsh: "bash", reader: "read" });
+  assert.match(yaml, /guardedTools:\n  "patcher": edit\n  "pwsh": bash\n  "reader": read/u);
+});
+
 test("direct policy writes refuse secret-like command rules", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-write-direct-secret-command-"));
   const home = join(root, "home");

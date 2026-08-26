@@ -161,6 +161,44 @@ protectedCredentialPaths:
   assert.equal(loaded.config.protectedCredentialPaths[0]?.pattern, "~/.aws/**");
 });
 
+test("guarded tool mappings validate shell and path aliases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-tool-mappings-"));
+  const policyPath = join(root, "guardme.yaml");
+  await writeFile(policyPath, `version: 1
+guardedTools:
+  pwsh: bash
+  reader: read
+  patcher: edit
+`, "utf8");
+
+  const loaded = await loadPolicyConfigFile(policyPath, "global");
+
+  assert.deepEqual(loaded.diagnostics.filter((diagnostic) => diagnostic.severity === "error"), []);
+  assert.deepEqual(loaded.config.guardedTools, { pwsh: "bash", reader: "read", patcher: "edit" });
+});
+
+test("invalid guarded tool mappings are rejected with source-aware diagnostics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-invalid-tool-mappings-"));
+  const policyPath = join(root, "guardme.yaml");
+  await writeFile(policyPath, `version: 1
+guardedTools:
+  bash: read
+  pwsh: unsupported
+  duplicate: bash
+  duplicate: read
+`, "utf8");
+
+  const loaded = await loadPolicyConfigFile(policyPath, "local");
+  const errors = loaded.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
+
+  assert.deepEqual(loaded.config.guardedTools, { duplicate: "bash" });
+  assert.ok(errors.some((diagnostic) => diagnostic.code === "config.reservedGuardedTool"));
+  assert.ok(errors.some((diagnostic) => diagnostic.code === "config.invalidGuardedToolContract"));
+  assert.ok(errors.some((diagnostic) => diagnostic.code === "yaml.duplicateGuardedTool"));
+  assert.ok(errors.every((diagnostic) => diagnostic.source?.kind === "local"));
+  assert.ok(errors.every((diagnostic) => diagnostic.source?.path === policyPath));
+});
+
 test("quoted YAML scalars round-trip generated escapes", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-quoted-config-"));
   const policyPath = join(root, "guardme.yaml");

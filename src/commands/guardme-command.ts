@@ -3,7 +3,7 @@ import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { GUARDME_COMMAND_NAME } from "../constants.ts";
+import { BUILT_IN_GUARDED_TOOLS, GUARDME_COMMAND_NAME } from "../constants.ts";
 import { resolvePolicyConfigPaths } from "../config/load-config.ts";
 import { resolveRuntimeSettingsPath, writeGuardMeRuntimeSettings } from "../config/runtime-settings.ts";
 import type { MergedGuardMePolicyConfig } from "../config/merge-policy.ts";
@@ -29,6 +29,7 @@ import {
 } from "../ui/setup-wizard.ts";
 import {
   createRuleGroups,
+  formatGuardedToolMappings,
   renderConfigPane,
   renderGuardMeHelp,
   requestGuardMeConfigAction,
@@ -137,7 +138,14 @@ export function renderStatus(ctx: GuardMeStatusContext): string {
 }
 
 export function renderDiagnostics(ctx: GuardMeStatusContext): string {
-  return formatDiagnostics(createConfigSnapshot(ctx).diagnostics).join("\n");
+  const snapshot = createConfigSnapshot(ctx);
+  return [
+    "Effective guarded tools:",
+    ...formatGuardedToolMappings(snapshot.guardedTools).map((mapping) => `- ${mapping}`),
+    "- Unknown tools are unguarded until explicitly mapped.",
+    "",
+    ...formatDiagnostics(snapshot.diagnostics),
+  ].join("\n");
 }
 
 export function renderHelp(): string {
@@ -640,6 +648,7 @@ function createConfigSnapshot(ctx: GuardMeStatusContext): ConfigSnapshot {
     guardMe: snapshotGuardMeStatus(state),
     insecureEdits: state?.insecureEdits ?? false,
     approvalMode: config.approvalMode ?? "auto",
+    guardedTools: { ...BUILT_IN_GUARDED_TOOLS, ...config.guardedTools },
     policyRules: countPolicyRules(config),
     warnedFingerprints: state?.warnings.warnedFingerprints.size ?? 0,
     warningRecords: state?.warnings.records ?? [],
@@ -666,6 +675,8 @@ function renderLegacyStatusSummary(snapshot: ConfigSnapshot): string {
     `GuardMe: ${snapshot.guardMe}`,
     `Insecure edits: ${snapshot.insecureEdits ? "on" : "off"}`,
     `Approval mode: ${snapshot.approvalMode}`,
+    "Effective guarded tools:",
+    ...formatGuardedToolMappings(snapshot.guardedTools).map((mapping) => `- ${mapping}`),
     `Project: ${snapshot.cwd}`,
     `Pi project trust: ${snapshot.projectTrusted ? "yes" : "no"}`,
     `Policy rules: ${snapshot.policyRules}`,
