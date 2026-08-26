@@ -1,0 +1,7 @@
+organization=senad-d
+projectKey=senad-d_GuardMe
+serverUrl=https://sonarcloud.io
+serverVersion=8.0.0.102554
+dashboardUrl=https://sonarcloud.io/dashboard?id=senad-d_GuardMe
+ceTaskId=AaA-vAD7o5WpOr9mac5z
+ceTaskUrl=https://sonarcloud.io/api/ce/task?id=AaA-vAD7o5WpOr9mac5z

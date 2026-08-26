@@ -150,6 +150,16 @@ See [`docs/POLICY.md`](docs/POLICY.md) for the full policy reference.
 
 Global policy loads first. Project-local policy, runtime settings, and generated state load only after the project is trusted. Missing runtime settings mean GuardMe is active and Insecure edits is off. Turning GuardMe off from `/guardme` writes project-local settings and bypasses GuardMe enforcement for that trusted project until you turn it active again. Turning Insecure edits on writes the same project-local settings file and makes only `write`/`edit` skip proposed content/script scanning; path protections and deny rules still apply, and `bash`, reads, and discovery tools stay guarded.
 
+Policy YAML also accepts `guardedTools`, a mapping from third-party tool names to the built-in contract GuardMe should use. For example, a PowerShell replacement and a read-tool alias can be protected with:
+
+```yaml
+guardedTools:
+  pwsh: bash
+  file_viewer: read
+```
+
+The built-ins `bash`, `read`, `write`, `edit`, `grep`, `find`, and `ls` are always guarded and cannot be remapped. Global aliases load before aliases from trusted project policy; identical mappings are deduplicated, while a conflicting later mapping reports an error and leaves the earlier mapping effective. Untrusted project aliases are not loaded. Unknown third-party tools are not inferred and remain outside GuardMe enforcement until explicitly mapped. Inspect the effective built-ins and aliases in `/guardme diagnostics` or the Policies pane.
+
 Policy YAML also accepts the validated top-level key `approvalMode: auto | interactive | agent | block`. Built-in `auto` is the safe default: only TUI sessions can request GuardMe approval UI. The explicit `agent` mode keeps that TUI behavior but lets RPC, JSON, and print agents receive one automatic allow-once when an identical blocked fingerprint is retried in a later agent turn. Trusted project policy overrides global policy, and the process environment variable `GUARDME_APPROVAL_MODE` overrides both for managed child launches.
 
 YAML rule sections:
@@ -182,7 +192,7 @@ Use the in-session TUI to:
 - turn **Insecure edits** on/off when you need `write`/`edit` to author scripts that contain otherwise blocked commands
 - review or enable Pi project trust
 - inspect warnings and diagnostics
-- review the resolved approval mode in Policies
+- review the resolved approval mode and effective guarded tool mappings in Policies
 - create starter global or project policy files
 - save approval decisions as project or global rules
 

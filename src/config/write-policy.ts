@@ -374,6 +374,23 @@ export function renderPolicyConfigYaml(config: GuardMePolicyConfig): string {
   if (config.approvalMode) {
     lines.push(`approvalMode: ${config.approvalMode}`);
   }
+  appendGuardedToolsYaml(lines, config);
+  appendRuleSectionsYaml(lines, config);
+  return `${lines.join("\n")}\n`;
+}
+
+function appendGuardedToolsYaml(lines: string[], config: GuardMePolicyConfig): void {
+  const entries = Object.entries(config.guardedTools ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  if (entries.length === 0) {
+    return;
+  }
+  lines.push("", "guardedTools:");
+  for (const [name, contract] of entries) {
+    lines.push(`  ${quoteYaml(name)}: ${contract}`);
+  }
+}
+
+function appendRuleSectionsYaml(lines: string[], config: GuardMePolicyConfig): void {
   for (const section of [...PATH_RULE_SECTIONS, ...COMMAND_RULE_SECTIONS]) {
     const rules = config[section];
     if (rules.length === 0) {
@@ -381,16 +398,19 @@ export function renderPolicyConfigYaml(config: GuardMePolicyConfig): string {
     }
     lines.push("", `${section}:`);
     for (const rule of rules) {
-      lines.push(`  - pattern: ${quoteYaml(rule.pattern)}`);
-      if (rule.actions && rule.actions.length > 0) {
-        lines.push(`    actions: [${rule.actions.join(", ")}]`);
-      }
-      if (rule.reason) {
-        lines.push(`    reason: ${quoteYaml(rule.reason)}`);
-      }
+      appendRuleYaml(lines, rule);
     }
   }
-  return `${lines.join("\n")}\n`;
+}
+
+function appendRuleYaml(lines: string[], rule: GuardMeRule): void {
+  lines.push(`  - pattern: ${quoteYaml(rule.pattern)}`);
+  if (rule.actions && rule.actions.length > 0) {
+    lines.push(`    actions: [${rule.actions.join(", ")}]`);
+  }
+  if (rule.reason) {
+    lines.push(`    reason: ${quoteYaml(rule.reason)}`);
+  }
 }
 
 function appendRulesToPolicyYamlText(text: string, rules: readonly AppendPolicyConfigRule[]): string {

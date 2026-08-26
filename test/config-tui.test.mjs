@@ -11,6 +11,9 @@ function snapshotFixture(config = createBuiltInDefaultPolicy()) {
     guardMe: "active",
     insecureEdits: false,
     approvalMode: config.approvalMode ?? "auto",
+    guardedTools: {
+      bash: "bash", read: "read", write: "write", edit: "edit", grep: "grep", find: "find", ls: "ls",
+    },
     policyRules: 46,
     warnedFingerprints: 0,
     warningRecords: [],
@@ -47,11 +50,20 @@ test("Setup pane includes append custom rule actions", () => {
   assert.equal(addGlobalLine, buildProjectLine + 2);
 });
 
-test("Policies pane shows the resolved approval mode", () => {
-  const output = renderConfigPane({ ...snapshotFixture(), approvalMode: "agent" }, "Policies", 120);
+test("Policies pane shows approval mode and effective guarded tool classifications", () => {
+  const output = renderConfigPane({
+    ...snapshotFixture(),
+    approvalMode: "agent",
+    guardedTools: { ...snapshotFixture().guardedTools, pwsh: "bash", viewer: "read" },
+  }, "Policies", 120);
 
   assert.match(output, /Approval mode\s+agent/);
   assert.match(output, /global policy → project policy → environment/);
+  assert.match(output, /Built-ins: bash, read, write, edit, grep, find, ls/);
+  assert.match(output, /pwsh → bash \(configured alias\)/);
+  assert.match(output, /viewer → read \(configured alias\)/);
+  assert.match(output, /Unknown tools are unguarded until mapped/);
+  assert.equal(output.split("\n").every((line) => line.length <= 120), true);
 });
 
 test("Rules pane labels each count with its meaning", () => {

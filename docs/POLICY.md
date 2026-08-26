@@ -32,9 +32,15 @@ Shell commands are evaluated by executable segment. A compound such as `pwd && l
 
 ## YAML shape
 
+`guardedTools` maps a third-party tool name to one of GuardMe's built-in input contracts. A `bash` contract is shell-classified; the other contracts reuse that path tool's target extraction, action, discovery, and content checks.
+
 ```yaml
 version: 1
 approvalMode: auto
+
+guardedTools:
+  pwsh: bash
+  file_viewer: read
 
 allowPaths:
   - pattern: "src/**"
@@ -85,6 +91,8 @@ protectedCredentialPaths:
   - pattern: "~/.aws/**"
     reason: "Cloud credentials are protected"
 ```
+
+The built-in mappings `bash`, `read`, `write`, `edit`, `grep`, `find`, and `ls` always map to themselves and cannot be remapped. Global aliases load first, then aliases from a trusted project policy are added. Repeating the same alias-to-contract mapping is deduplicated; a conflicting later mapping reports an error and the earlier mapping remains effective. Project aliases are ignored when the project is untrusted. GuardMe does not infer third-party tool semantics: an unknown or unmapped tool remains outside enforcement. Use `/guardme diagnostics` or the Policies pane to inspect every effective mapping and distinguish built-ins from configured aliases.
 
 Supported path actions are `read`, `list`, `write`, `edit`, `delete`, `move`, and `rename`. Command rules match normalized executable shell segments with simple glob syntax where `*` and `?` can match path separators inside command arguments. A trailing argument wildcard ending in ` *` is optional, so `ls *` matches both `ls` and `ls -lh`, and basename candidates allow `ls *` to match `/bin/ls -lh` during policy evaluation. Redirection operators are syntax within an executable segment, not standalone commands, so a pattern such as `2>*` does not independently allow stderr redirection. GuardMe recognizes the exact `/dev/null` path as a built-in sink, so that redirection leaves the underlying command classification intact; redirects to regular files remain write operations. Command rules do not support `actions`; command rules that include `actions` are rejected instead of being applied with surprising scope. Deny and dangerous command rules are also checked against executable shell segments, absolute executable paths, and common wrapper/subcommand forms, so `sudo`, `sudoedit`, `chmod 777`, or `rm -rf` appended after another command is still governed by the matching rule. Unsupported policy `version` values are reported as errors and their rules are ignored. Rules with malformed, empty, or path-incompatible `actions` lists are reported and are not broadened into all-action allow rules.
 

@@ -1,5 +1,6 @@
 import type { ApprovalMode } from "../config/approval-mode.ts";
 import type { GuardMePolicyConfig } from "../config/schema.ts";
+import { BUILT_IN_GUARDED_TOOLS, type GuardedToolContract } from "../constants.ts";
 import type { PolicyDiagnostic } from "../policy/action.ts";
 import type { GuardMeStateRecord } from "../state/warnings.ts";
 import { SETUP_MODE_CHOICES, type SetupMode, type SetupScope, type SetupWizardConfig, setupConfigForMode, setupModeRows, setupScopeLabel } from "./setup-wizard.ts";
@@ -55,6 +56,7 @@ export interface ConfigSnapshot {
   readonly guardMe: "active" | "off" | "inactive" | "degraded";
   readonly insecureEdits: boolean;
   readonly approvalMode: ApprovalMode;
+  readonly guardedTools: Readonly<Record<string, GuardedToolContract>>;
   readonly policyRules: number;
   readonly warnedFingerprints: number;
   readonly warningRecords: readonly GuardMeStateRecord[];
@@ -1567,6 +1569,22 @@ function pluralize(singular: string, count: number, plural = `${singular}s`): st
   return count === 1 ? singular : plural;
 }
 
+export function formatGuardedToolMappings(guardedTools: Readonly<Record<string, GuardedToolContract>>): readonly string[] {
+  return Object.entries(guardedTools)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, contract]) => BUILT_IN_GUARDED_TOOLS[name as GuardedToolContract] === contract
+      ? `${name} (built-in ${contract})`
+      : `${name} → ${contract} (configured alias)`);
+}
+
+function configuredGuardedToolRow(guardedTools: Readonly<Record<string, GuardedToolContract>>): FrameMainRow {
+  const aliases = formatGuardedToolMappings(guardedTools).filter((mapping) => mapping.includes("configured alias"));
+  return {
+    kind: "text",
+    text: aliases.length > 0 ? `Aliases: ${aliases.join(", ")}` : "Configured aliases: none",
+  };
+}
+
 function rowsForPane(snapshot: ConfigSnapshot, pane: ConfigPane, selectedIndex: number, contentWidth?: number): readonly FrameMainRow[] {
   switch (pane) {
     case "Setup": {
@@ -1592,14 +1610,13 @@ function rowsForPane(snapshot: ConfigSnapshot, pane: ConfigPane, selectedIndex: 
         { kind: "heading", label: "POLICIES", value: "2/4" },
         { kind: "value", label: "Global policy", value: snapshot.globalPolicyPath, valueKind: "path" },
         { kind: "value", label: "Project policy", value: snapshot.localPolicyPath, valueKind: "path" },
-        { kind: "blank" },
-        { kind: "heading", label: "STATE FILES" },
         { kind: "value", label: "Global state", value: snapshot.globalStatePath, valueKind: "path" },
         { kind: "value", label: "Project state", value: snapshot.localStatePath, valueKind: "path" },
-        { kind: "blank" },
-        { kind: "heading", label: "LOAD ORDER / APPROVAL" },
         { kind: "value", label: "Approval mode", value: snapshot.approvalMode, valueKind: "text" },
         { kind: "text", text: "global policy → project policy → environment" },
+        { kind: "text", text: "Built-ins: bash, read, write, edit, grep, find, ls" },
+        configuredGuardedToolRow(snapshot.guardedTools),
+        { kind: "text", text: "Unknown tools are unguarded until mapped.", tone: "warning" },
       ];
     case "Rules": {
       return [
