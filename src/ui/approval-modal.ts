@@ -65,10 +65,10 @@ export function resolveApprovalUi(ctx: ApprovalUiContext): ApprovalUiResolution 
       reason: `GuardMe requires user approval for this action, but interactive approval is unavailable because approvalMode is 'auto' and Pi mode is '${ctx.mode ?? "unknown"}', not 'tui'. Blocking by default.`,
     };
   }
-  if (ctx.approvalMode === "agent" && ctx.mode !== "tui") {
+  if (ctx.approvalMode === "agent") {
     return {
       kind: "blocked",
-      reason: `GuardMe approvalMode 'agent' never invokes approval UI outside TUI. The in-process retry gate must authorize an identical request from a later agent turn. Blocking by default.`,
+      reason: "GuardMe approvalMode 'agent' never invokes interactive approval UI in any run mode. The in-process retry gate must authorize an identical request from a later agent turn. Blocking by default.",
     };
   }
   if (!ctx.hasUI) {
@@ -115,6 +115,27 @@ export async function requestApprovalDecision(
   } catch {
     return { kind: "decision", decision: "deny-once" };
   }
+}
+
+/**
+ * Compact agent-facing block notification for approvalMode 'agent': what was
+ * blocked, why, and what to do instead — no interactive approval involved.
+ */
+export function formatAgentModeBlockReason(
+  request: PolicyRequest,
+  decision: PolicyDecision,
+  note: string,
+  nextStep: string,
+): string {
+  const summary = renderPolicySummary(request, decision);
+  const toolAction = `${request.toolName}:${request.action}`;
+  const lines = [
+    `GuardMe blocked ${boundedApprovalValue(summaryValue(summary, "Action", toolAction), 128)} (${decision.risk}): ${boundedApprovalValue(summaryValue(summary, "Target", "<unknown>"), MAX_APPROVAL_TARGET_WIDTH)}`,
+    `Reason: ${boundedApprovalValue(summaryValue(summary, "Reason", decision.reason), MAX_APPROVAL_REASON_WIDTH)}`,
+    boundedApprovalValue(note, MAX_APPROVAL_REASON_WIDTH),
+    `Next step: ${boundedApprovalValue(nextStep, MAX_APPROVAL_REASON_WIDTH)}`,
+  ];
+  return boundApprovalBlock(lines.join("\n"));
 }
 
 export function formatApprovalUnavailableBlockReason(

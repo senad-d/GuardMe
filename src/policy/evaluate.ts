@@ -460,12 +460,12 @@ function firstPathAllow(
   path: NormalizedPolicyPath,
   action: PolicyAction,
 ): SourcedGuardMePathRule | undefined {
-  const allow = firstMatchingPathRule(policy.allowPaths, [path], action);
+  const allow = firstMatchingPathRule(policy.allowPaths, [path], action, false, "resolved");
   if (allow) {
     return allow;
   }
   if (action === "read" || action === "list") {
-    return firstMatchingPathRule(policy.readOnlyPaths, [path], action, true);
+    return firstMatchingPathRule(policy.readOnlyPaths, [path], action, true, "resolved");
   }
   return undefined;
 }
@@ -475,6 +475,7 @@ function firstMatchingPathRule(
   paths: readonly NormalizedPolicyPath[],
   action: PolicyAction,
   ignoreRuleActions = false,
+  candidateScope: "all" | "resolved" = "all",
 ): SourcedGuardMePathRule | undefined {
   return rules.find((rule) => {
     if (!ignoreRuleActions && rule.actions && rule.actions.length > 0) {
@@ -482,7 +483,7 @@ function firstMatchingPathRule(
         return false;
       }
     }
-    return paths.some((path) => matchPolicyPathPattern(rule.pattern, path).matched);
+    return paths.some((path) => matchPolicyPathPattern(rule.pattern, path, { candidateScope }).matched);
   });
 }
 
@@ -513,8 +514,10 @@ function firstMatchingExactWholeCommandAllowRule(
   rules: readonly SourcedGuardMeRule[],
   command: string,
 ): SourcedGuardMeRule | undefined {
-  const candidates = [normalizeCommandText(command), ...commandSegmentRuleMatchCandidates(command).filter((candidate) => !commandHasMultipleShellSegments(command))];
-  return firstMatchingExactCommandRuleForCandidates(rules, uniqueStrings(candidates));
+  const segmentCandidates = commandHasMultipleShellSegments(command)
+    ? []
+    : commandSegmentRuleMatchCandidates(command).filter((candidate) => !commandHasMultipleShellSegments(candidate));
+  return firstMatchingExactCommandRuleForCandidates(rules, uniqueStrings([normalizeCommandText(command), ...segmentCandidates]));
 }
 
 function firstMatchingCommandRuleForCandidates(
@@ -651,7 +654,7 @@ function uniqueStrings(values: readonly string[]): readonly string[] {
 }
 
 function commandHasMultipleShellSegments(command: string): boolean {
-  return /(?:\n|\r|;|&&|\|\||(?<![<>])\|(?![|&]))/u.test(command);
+  return /(?:\n|\r|;|&&|\|\||\|&|(?<![<>])\|(?![|&])|(?<![&<>|])&(?![&>|]))/u.test(command);
 }
 
 function hasCommandGlob(pattern: string): boolean {
@@ -852,7 +855,7 @@ function cloudConfigCredentialPattern(candidate: string): string | undefined {
 }
 
 function keywordCredentialPattern(basename: string): string | undefined {
-  return /(credential|secret|token)/u.test(basename) ? "credential-like filename" : undefined;
+  return /(?:credential|secret|token)s?(?![a-z0-9])/u.test(basename) ? "credential-like filename" : undefined;
 }
 
 function credentialPathCandidates(path: NormalizedPolicyPath): readonly string[] {

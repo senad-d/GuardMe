@@ -349,3 +349,79 @@ denyPaths:
   assert.ok(errors.some((diagnostic) => diagnostic.code === "config.sectionNotArray"));
   assert.ok(errors.some((diagnostic) => diagnostic.code === "config.missingPattern"));
 });
+
+test("unknown rule keys report warnings including the actions typo", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-schema-unknown-key-"));
+  const cwd = join(root, "project");
+  await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
+  const paths = resolvePolicyConfigPaths(cwd, join(root, "home"));
+  await writeFile(
+    paths.localPolicyPath,
+    ["version: 1", "", "allowPaths:", "  - pattern: \"docs/**\"", "    action: [read]", ""].join("\n"),
+    "utf8",
+  );
+
+  const loaded = await loadPolicyConfigFile(paths.localPolicyPath, "local");
+
+  const warning = loaded.diagnostics.find((diagnostic) => diagnostic.code === "config.unknownRuleKey");
+  assert.ok(warning);
+  assert.match(warning.message, /Did you mean 'actions'/);
+  assert.equal(loaded.config.allowPaths.length, 1);
+});
+
+test("duplicate top-level sections merge instead of replacing earlier rules", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-schema-duplicate-section-"));
+  const cwd = join(root, "project");
+  await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
+  const paths = resolvePolicyConfigPaths(cwd, join(root, "home"));
+  await writeFile(
+    paths.localPolicyPath,
+    [
+      "version: 1",
+      "",
+      "denyPaths:",
+      "  - pattern: \"**/.env\"",
+      "",
+      "denyPaths:",
+      "  - pattern: \"secrets/**\"",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const loaded = await loadPolicyConfigFile(paths.localPolicyPath, "local");
+
+  assert.ok(loaded.diagnostics.some((diagnostic) => diagnostic.code === "yaml.duplicateSection"));
+  assert.ok(loaded.config.denyPaths.some((rule) => rule.pattern === "**/.env"));
+  assert.ok(loaded.config.denyPaths.some((rule) => rule.pattern === "secrets/**"));
+});
+
+test("deny-direction rules with invalid actions fail safe to all actions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-schema-deny-actions-"));
+  const cwd = join(root, "project");
+  await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
+  const paths = resolvePolicyConfigPaths(cwd, join(root, "home"));
+  await writeFile(
+    paths.localPolicyPath,
+    [
+      "version: 1",
+      "",
+      "denyPaths:",
+      "  - pattern: \"**/.env.local\"",
+      "    actions: [reed]",
+      "",
+      "allowPaths:",
+      "  - pattern: \"docs/**\"",
+      "    actions: [reed]",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const loaded = await loadPolicyConfigFile(paths.localPolicyPath, "local");
+
+  assert.ok(loaded.diagnostics.some((diagnostic) => diagnostic.code === "config.denyRuleActionsFallback"));
+  assert.equal(loaded.config.denyPaths.length, 1);
+  assert.equal(loaded.config.denyPaths[0]?.actions, undefined);
+  assert.equal(loaded.config.allowPaths.length, 0);
+});

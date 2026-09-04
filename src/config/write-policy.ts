@@ -160,8 +160,23 @@ export async function persistUserDecisionRule(
     };
   }
 
-  const config = appendRule(loaded.found ? loaded.config : createEmptyPolicyConfig(POLICY_VERSION), rule.section, rule.rule);
-  await writePolicyConfigFile(path, config, { cwd: options.cwd, homeDir: options.homeDir, scope: options.scope });
+  const baseConfig = loaded.found ? loaded.config : createEmptyPolicyConfig(POLICY_VERSION);
+  const config = appendRule(baseConfig, rule.section, rule.rule);
+  if (config === baseConfig) {
+    return {
+      saved: true,
+      path,
+      section: rule.section,
+      diagnostics: loaded.diagnostics,
+      reason: "An identical GuardMe policy rule already exists; nothing was written.",
+    };
+  }
+
+  const text = loaded.found ? await readFile(path, "utf8") : "";
+  const nextText = loaded.found && text.trim().length > 0
+    ? appendRulesToPolicyYamlText(text, [{ section: rule.section, rule: rule.rule }])
+    : renderPolicyConfigYaml(config);
+  await writePolicyTextAtomically(path, nextText, { cwd: options.cwd, homeDir: options.homeDir, scope: options.scope });
 
   return {
     saved: true,
@@ -475,9 +490,11 @@ function renderRuleYamlLines(rule: GuardMeRule): string[] {
 
 function findLastSectionIndex(lines: readonly string[], section: WritableRuleSection): number {
   let foundIndex = -1;
+  // Match only top-level (column-0) section headers: an indented rule property
+  // whose key equals a section name must not become an append target.
   const sectionPattern = new RegExp(String.raw`^${section}:\s*(?:#.*)?$`);
   for (const [index, line] of lines.entries()) {
-    if (sectionPattern.test(line.trim())) {
+    if (sectionPattern.test(line)) {
       foundIndex = index;
     }
   }

@@ -357,3 +357,75 @@ test("ambiguous destructive commands require user decision", () => {
     assert.equal(classified.requiresUserDecision, true, command);
   }
 });
+
+test("shell wrapper unwrapping preserves outer redirection targets", () => {
+  const credentialRead = classifyShellCommand("bash -c 'cat' < ~/.ssh/id_rsa");
+  assert.equal(credentialRead.hardDenied, true);
+  assert.equal(credentialRead.credentialAccess, true);
+  assert.ok(credentialRead.targetPaths.includes("~/.ssh/id_rsa"));
+
+  const envRead = classifyShellCommand("env -S 'cat' < .env");
+  assert.equal(envRead.hardDenied, true);
+  assert.equal(envRead.credentialAccess, true);
+
+  const redirectedWrite = classifyShellCommand("bash -c 'ls' > /etc/cron.d/evil");
+  assert.equal(redirectedWrite.primaryAction, "write");
+  assert.equal(redirectedWrite.risk, "dangerous");
+  assert.equal(redirectedWrite.requiresUserDecision, true);
+  assert.ok(redirectedWrite.targetPaths.includes("/etc/cron.d/evil"));
+
+  const insideWrite = classifyShellCommand("bash -c 'ls' > out.txt");
+  assert.ok(insideWrite.targetPaths.includes("out.txt"));
+});
+
+test("clobber redirection operators are tokenized and classified like plain redirections", () => {
+  assert.deepEqual(tokenizeShellCommand("echo x >| out.txt"), ["echo", "x", ">|", "out.txt"]);
+  assert.deepEqual(tokenizeShellCommand("echo x 1>| out.txt"), ["echo", "x", "1>|", "out.txt"]);
+
+  for (const [clobbered, plain] of [
+    ["echo x >| .env", "echo x > .env"],
+    ["echo x 1>| .env", "echo x 1> .env"],
+    ["echo x >| out.txt", "echo x > out.txt"],
+  ]) {
+    const clobberedClassified = classifyShellCommand(clobbered);
+    const plainClassified = classifyShellCommand(plain);
+    assert.equal(clobberedClassified.hardDenied, plainClassified.hardDenied, clobbered);
+    assert.equal(clobberedClassified.primaryAction, plainClassified.primaryAction, clobbered);
+    assert.equal(clobberedClassified.risk, plainClassified.risk, clobbered);
+    assert.deepEqual(clobberedClassified.targetPaths, plainClassified.targetPaths, clobbered);
+  }
+});
+
+test("unexpanded shell variable mutation targets classify as outside-ish", () => {
+  const redirected = classifyShellCommand("echo hi > $HOME/.zshenv");
+  assert.equal(redirected.risk, "dangerous");
+  assert.equal(redirected.requiresUserDecision, true);
+});
+
+test("source and dot execution are detected as local script executions", () => {
+  const sourced = detectLocalScriptExecutions("source ./deploy.sh");
+  assert.deepEqual(sourced.map((execution) => [execution.rawPath, execution.shellHint]), [["./deploy.sh", true]]);
+
+  const dotted = detectLocalScriptExecutions(". scripts/env.sh");
+  assert.deepEqual(dotted.map((execution) => [execution.rawPath, execution.shellHint]), [["scripts/env.sh", true]]);
+});
+
+test("destructive inline code is detected across interpreters", () => {
+  for (const command of [
+    "python3 -c \"import shutil; shutil.rmtree('build')\"",
+    "python2 -c \"import shutil; shutil.rmtree('build')\"",
+    "ruby -e \"FileUtils.rm_rf('build')\"",
+    "perl -e \"unlink('build/file')\"",
+  ]) {
+    const classified = classifyShellCommand(command);
+    assert.equal(classified.risk, "dangerous", command);
+    assert.equal(classified.requiresUserDecision, true, command);
+  }
+});
+
+test("credential keyword matching uses word boundaries", () => {
+  assert.equal(classifyShellCommand("cat src/tokenizer.ts").credentialAccess, false);
+  assert.equal(classifyShellCommand("cat secretary-notes.md").credentialAccess, false);
+  assert.equal(classifyShellCommand("cat api-tokens.txt").credentialAccess, true);
+  assert.equal(classifyShellCommand("cat my-secret.yaml").credentialAccess, true);
+});

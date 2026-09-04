@@ -255,6 +255,16 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
         actions: ["read", "list"],
         reason: "Project GuardMe runtime settings should be changed through /guardme.",
       },
+      {
+        pattern: ".git/**",
+        actions: ["read", "list"],
+        reason: "Repository metadata is read-only for direct writes; change it through git commands.",
+      },
+      {
+        pattern: "**/.git/**",
+        actions: ["read", "list"],
+        reason: "Repository metadata is read-only for direct writes; change it through git commands.",
+      },
     ],
     noDeletePaths: [
       {
@@ -465,6 +475,12 @@ function parsePolicyYamlTopLevelLine(line: ParsedYamlLine, state: PolicyYamlPars
       return;
     }
     state.currentSection = "guardedTools";
+    if (isRecord(state.data.guardedTools)) {
+      state.diagnostics.push(
+        lineDiagnostic("warning", "yaml.duplicateSection", "Duplicate section 'guardedTools' merges with the earlier block.", state.source, line.lineNumber),
+      );
+      return;
+    }
     state.data.guardedTools = {};
     return;
   }
@@ -480,6 +496,12 @@ function parsePolicyYamlTopLevelLine(line: ParsedYamlLine, state: PolicyYamlPars
     return;
   }
   state.currentSection = key;
+  if (Array.isArray(state.data[key])) {
+    state.diagnostics.push(
+      lineDiagnostic("warning", "yaml.duplicateSection", `Duplicate section '${key}' merges with the earlier '${key}' block.`, state.source, line.lineNumber),
+    );
+    return;
+  }
   state.data[key] = [];
 }
 
@@ -627,6 +649,8 @@ function validateRuleSection(
   return rules;
 }
 
+const KNOWN_RULE_KEYS: ReadonlySet<string> = new Set(["pattern", "actions", "reason"]);
+
 function validateRule(
   section: PolicyConfigSection,
   rawRule: unknown,
@@ -642,6 +666,13 @@ function validateRule(
     return undefined;
   }
 
+  for (const key of Object.keys(rawRule)) {
+    if (!KNOWN_RULE_KEYS.has(key)) {
+      const hint = key === "action" ? " Did you mean 'actions'? Without 'actions', the rule applies to every action." : "";
+      diagnostics.push(configDiagnostic("warning", "config.unknownRuleKey", `Unknown rule key '${key}' in '${section}' ignored.${hint}`, source));
+    }
+  }
+
   if (typeof rawRule.pattern !== "string" || rawRule.pattern.trim() === "") {
     diagnostics.push(configDiagnostic("error", "config.missingPattern", `Rule in '${section}' must include a non-empty pattern.`, source));
     return undefined;
@@ -649,8 +680,19 @@ function validateRule(
 
   const validatedActions = validateActions(section, rawRule.actions, source, diagnostics);
   if (!validatedActions.usable) {
-    return undefined;
+    if (!DENY_DIRECTION_SECTION_SET.has(section)) {
+      return undefined;
+    }
+    diagnostics.push(
+      configDiagnostic(
+        "error",
+        "config.denyRuleActionsFallback",
+        `Rule in '${section}' has invalid actions; GuardMe applies it to all actions as a fail-safe.`,
+        source,
+      ),
+    );
   }
+  const actions = validatedActions.usable ? validatedActions.actions : [];
   const reason = rawRule.reason;
   if (reason !== undefined && typeof reason !== "string") {
     diagnostics.push(configDiagnostic("error", "config.invalidReason", `Rule reason in '${section}' must be a string.`, source));
@@ -658,10 +700,20 @@ function validateRule(
 
   return {
     pattern: rawRule.pattern.trim(),
-    ...(validatedActions.actions.length > 0 ? { actions: validatedActions.actions } : {}),
+    ...(actions.length > 0 ? { actions } : {}),
     ...(typeof reason === "string" ? { reason } : {}),
   };
 }
+
+const DENY_DIRECTION_SECTION_SET: ReadonlySet<PolicyConfigSection> = new Set([
+  "denyPaths",
+  "zeroAccessPaths",
+  "readOnlyPaths",
+  "noDeletePaths",
+  "protectedCredentialPaths",
+  "denyCommands",
+  "dangerousCommands",
+]);
 
 interface ActionValidationResult {
   readonly actions: readonly PolicyAction[];

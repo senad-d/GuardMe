@@ -30,6 +30,10 @@ export type PersistedDecisionTarget = "none" | "local-yaml" | "global-yaml";
 
 const PERSISTED_DECISION_TARGETS = ["none", "local-yaml", "global-yaml"] as const;
 const MAX_STATE_FILE_BYTES = 1024 * 1024;
+// Compact before the file can reach MAX_STATE_FILE_BYTES: past that cap the
+// whole state file becomes unreadable and warned-once history is lost.
+const STATE_FILE_COMPACT_THRESHOLD_BYTES = 768 * 1024;
+const STATE_FILE_COMPACT_KEEP_BYTES = 384 * 1024;
 
 export interface GuardMeStatePaths {
   readonly globalStatePath: string;
@@ -211,7 +215,70 @@ export async function appendStateRecord(path: string, record: GuardMeStateRecord
   await assertNoSymlinkInExistingPath(directory);
   await mkdir(directory, { recursive: true });
   await assertNoSymlinkInExistingPath(directory);
+  await compactOversizedStateFile(path);
   await appendFileNoFollow(path, `${JSON.stringify(record)}\n`);
+}
+
+async function compactOversizedStateFile(path: string): Promise<void> {
+  let stats;
+  try {
+    stats = await lstat(path);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  if (!stats.isFile() || stats.size <= STATE_FILE_COMPACT_THRESHOLD_BYTES) {
+    return;
+  }
+
+  const text = await readFileNoFollow(path);
+  const lines = text.split("\n").filter((line) => line.trim() !== "");
+  const kept: string[] = [];
+  let keptBytes = 0;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index] ?? "";
+    const lineBytes = Buffer.byteLength(line, "utf8") + 1;
+    if (keptBytes + lineBytes > STATE_FILE_COMPACT_KEEP_BYTES) {
+      break;
+    }
+    kept.unshift(line);
+    keptBytes += lineBytes;
+  }
+  await truncateFileNoFollow(path, kept.length > 0 ? `${kept.join("\n")}\n` : "");
+}
+
+async function readFileNoFollow(path: string): Promise<string> {
+  const flags = constants.O_RDONLY | constants.O_NOFOLLOW;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, flags);
+    return await handle.readFile("utf8");
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ELOOP") {
+      throw new Error("Refusing to read GuardMe state through a symbolic link.");
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function truncateFileNoFollow(path: string, text: string): Promise<void> {
+  const flags = constants.O_TRUNC | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, flags, 0o600);
+    await handle.writeFile(text, "utf8");
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ELOOP") {
+      throw new Error("Refusing to write GuardMe state through a symbolic link.");
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
 }
 
 export async function appendWarningRecord(path: string, input: CreateWarningRecordInput): Promise<WarningStateRecord> {

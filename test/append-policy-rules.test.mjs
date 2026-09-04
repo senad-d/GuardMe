@@ -157,3 +157,34 @@ test("appendPolicyConfigRules refuses malformed existing YAML", async () => {
   assert.match(result.reason ?? "", /validation errors/);
   assert.equal(text, "version: nope\nallowPaths: bad\n");
 });
+
+test("appendPolicyConfigRules ignores indented keys that shadow section names", async () => {
+  const { cwd, home, paths } = await tempProject("guardme-append-shadow-");
+  await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
+  await writeFile(
+    paths.localPolicyPath,
+    [
+      "version: 1",
+      "",
+      "denyPaths:",
+      "  - pattern: \"**/.env\"",
+      "    denyCommands:",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const result = await appendPolicyConfigRules({
+    cwd,
+    homeDir: home,
+    scope: "local",
+    rules: [{ section: "denyCommands", rule: { pattern: "sudo *", reason: "No privilege escalation" } }],
+  });
+  const text = await readFile(paths.localPolicyPath, "utf8");
+  const loaded = await loadPolicyConfigFile(paths.localPolicyPath, "local");
+
+  assert.equal(result.saved, true);
+  assert.match(text, /^denyCommands:$/m);
+  assert.ok(loaded.config.denyCommands.some((rule) => rule.pattern === "sudo *"));
+  assert.ok(!loaded.config.denyPaths.some((rule) => rule.pattern === "sudo *"));
+});

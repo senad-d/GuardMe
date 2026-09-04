@@ -892,3 +892,68 @@ test("registerGuard wires a tool_call handler", () => {
   assert.equal(typeof handlers.get("turn_start"), "function");
   assert.equal(typeof handlers.get("tool_call"), "function");
 });
+
+test("concurrent identical later-turn retries consume only one automatic approval", async () => {
+  const { ctx } = await createGuardContext({ environment: { GUARDME_APPROVAL_MODE: "agent" } });
+  const call = { toolName: "bash", input: { command: "rm -rf build" } };
+
+  assert.equal((await evaluateGuardedToolCall(call, ctx))?.block, true);
+  beginGuardMeAgentTurn();
+  const results = await Promise.all([evaluateGuardedToolCall(call, ctx), evaluateGuardedToolCall(call, ctx)]);
+
+  const allowed = results.filter((result) => result === undefined);
+  assert.equal(allowed.length, 1);
+  stopGuardMeSession(ctx);
+});
+
+test("alias-guarded tools fail closed when session state is missing", async () => {
+  const { ctx } = await createGuardContext({ globalPolicy: "version: 1\nguardedTools:\n  pwsh: bash\n" });
+  stopGuardMeSession(ctx);
+
+  const result = await evaluateGuardedToolCall({ toolName: "pwsh", input: { command: "rm -rf build" } }, ctx);
+
+  assert.equal(result?.block, true);
+  assert.match(result?.reason ?? "", /not initialized/i);
+});
+
+test("agent mode in TUI blocks without prompting and allows the later-turn retry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-agent-tui-"));
+  const home = join(root, "home");
+  const cwd = join(root, "project");
+  await mkdir(cwd, { recursive: true });
+  let interactiveCalls = 0;
+  const ctx = {
+    cwd,
+    hasUI: true,
+    mode: "tui",
+    isProjectTrusted: () => true,
+    ui: {
+      setStatus: () => {},
+      notify: () => {},
+      custom: async () => {
+        interactiveCalls += 1;
+        return undefined;
+      },
+      select: async () => {
+        interactiveCalls += 1;
+        return undefined;
+      },
+    },
+  };
+  await startGuardMeSession(ctx, { homeDir: home, environment: { GUARDME_APPROVAL_MODE: "agent" } });
+  const call = { toolName: "bash", input: { command: "rm -rf build" } };
+
+  const first = await evaluateGuardedToolCall(call, ctx);
+  const sameTurn = await evaluateGuardedToolCall(call, ctx);
+  beginGuardMeAgentTurn();
+  const laterTurn = await evaluateGuardedToolCall(call, ctx);
+
+  assert.equal(first?.block, true);
+  assert.match(first?.reason ?? "", /GuardMe blocked .*delete/i);
+  assert.match(first?.reason ?? "", /Next step: .*later agent turn/i);
+  assert.equal(sameTurn?.block, true);
+  assert.match(sameTurn?.reason ?? "", /same agent turn|first attempt in this process/i);
+  assert.equal(laterTurn, undefined);
+  assert.equal(interactiveCalls, 0);
+  stopGuardMeSession(ctx);
+});

@@ -1,3 +1,4 @@
+import type { GuardedToolContract } from "../constants.ts";
 import type { LoadedGuardMeConfig } from "../config/load-config.ts";
 import type { LoadedGuardMeRuntimeSettings } from "../config/runtime-settings.ts";
 import type { MatchedRule, PolicyDiagnostic } from "../policy/action.ts";
@@ -39,9 +40,17 @@ export interface GuardMeSessionState {
 }
 
 let currentSessionState: GuardMeSessionState | undefined;
+// Retained across session shutdown so guarded aliases fail closed (instead of
+// silently unguarded) if a tool call arrives while no session state exists.
+let lastKnownGuardedTools: Readonly<Record<string, GuardedToolContract>> | undefined;
 
 export function setGuardMeSessionState(state: GuardMeSessionState): void {
   currentSessionState = state;
+  lastKnownGuardedTools = state.config.config.guardedTools;
+}
+
+export function getLastKnownGuardedTools(): Readonly<Record<string, GuardedToolContract>> | undefined {
+  return lastKnownGuardedTools;
 }
 
 export function getGuardMeSessionState(): GuardMeSessionState | undefined {

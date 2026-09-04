@@ -260,11 +260,53 @@ function extractPackageJsonScripts(content: string, sourcePath: string | undefin
 function extractMakefileRecipes(content: string, sourcePath: string | undefined): readonly ExtractedScriptCommand[] {
   return splitLines(content).flatMap((line, index) => {
     if (!line.startsWith("\t")) {
-      return [];
+      return makefileShellExpansionCommands(line, index + 1, sourcePath);
     }
     const command = trimMakefileRecipePrefix(line).trim();
     return shellLineLooksEvaluable(command) ? [commandRecord(command, index + 1, "makefile-recipe", "Makefile recipe", sourcePath)] : [];
   });
+}
+
+// `VAR := $(shell ...)` runs at Makefile parse time, before any recipe.
+function makefileShellExpansionCommands(
+  line: string,
+  lineNumber: number,
+  sourcePath: string | undefined,
+): readonly ExtractedScriptCommand[] {
+  const commands: ExtractedScriptCommand[] = [];
+  let searchIndex = 0;
+  while (searchIndex < line.length) {
+    const start = line.indexOf("$(shell", searchIndex);
+    if (start < 0) {
+      break;
+    }
+    const bodyStart = start + "$(shell".length;
+    if (!isScriptWhitespace(line[bodyStart] ?? "")) {
+      searchIndex = bodyStart;
+      continue;
+    }
+    let depth = 1;
+    let end = bodyStart;
+    while (end < line.length && depth > 0) {
+      const character = line[end];
+      if (character === "(") {
+        depth += 1;
+      }
+      if (character === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          break;
+        }
+      }
+      end += 1;
+    }
+    const command = line.slice(bodyStart, end).trim();
+    if (shellLineLooksEvaluable(command)) {
+      commands.push(commandRecord(command, lineNumber, "makefile-recipe", "Makefile shell expansion", sourcePath));
+    }
+    searchIndex = end + 1;
+  }
+  return commands;
 }
 
 function trimMakefileRecipePrefix(line: string): string {
@@ -342,10 +384,38 @@ function parseCiRunHeader(line: string): { readonly indent: number; readonly val
       cursor += 1;
     }
   }
-  if (line.slice(cursor, cursor + 4) !== "run:") {
+  const valueStart = parseCiRunKeyEnd(line, cursor);
+  if (valueStart === undefined) {
     return undefined;
   }
-  return { indent, value: line.slice(cursor + 4).trim() };
+  return { indent, value: line.slice(valueStart).trim() };
+}
+
+// Accepts `run:`, `run :`, `"run":`, and `'run':` — all YAML-legal step keys.
+function parseCiRunKeyEnd(line: string, cursor: number): number | undefined {
+  let index = cursor;
+  const quote = line[index];
+  const quoted = quote === '"' || quote === "'";
+  if (quoted) {
+    index += 1;
+  }
+  if (line.slice(index, index + 3) !== "run") {
+    return undefined;
+  }
+  index += 3;
+  if (quoted) {
+    if (line[index] !== quote) {
+      return undefined;
+    }
+    index += 1;
+  }
+  while (isScriptWhitespace(line[index] ?? "")) {
+    index += 1;
+  }
+  if (line[index] !== ":") {
+    return undefined;
+  }
+  return index + 1;
 }
 
 function extractCiRunBlock(

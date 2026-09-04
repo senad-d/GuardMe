@@ -435,3 +435,83 @@ test("guard persists selected local allow rule from approval flow", async () => 
   assert.match(yaml, /rm -rf build/);
   stopGuardMeSession(ctx);
 });
+
+test("guard refuses to save project rules in untrusted projects", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-write-untrusted-"));
+  const home = join(root, "home");
+  const cwd = join(root, "project");
+  await mkdir(cwd, { recursive: true });
+  const paths = resolvePolicyConfigPaths(cwd, home);
+  const allowLocal = APPROVAL_CHOICES.find((choice) => choice.decision === "allow-local");
+  const label = `${allowLocal.label} — ${allowLocal.description}`;
+  const ctx = {
+    cwd,
+    hasUI: true,
+    mode: "rpc",
+    isProjectTrusted: () => false,
+    ui: {
+      setStatus: () => {},
+      notify: () => {},
+      select: async () => label,
+    },
+  };
+  await startGuardMeSession(ctx, {
+    homeDir: home,
+    environment: { GUARDME_APPROVAL_MODE: "interactive" },
+  });
+
+  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+
+  assert.ok(second);
+  assert.match(second.reason, /not trusted/i);
+  await assert.rejects(readFile(paths.localPolicyPath, "utf8"));
+  stopGuardMeSession(ctx);
+});
+
+test("persisting an approval decision preserves existing YAML comments", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-write-comments-"));
+  const home = join(root, "home");
+  const cwd = join(root, "project");
+  await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
+  const paths = resolvePolicyConfigPaths(cwd, home);
+  await writeFile(
+    paths.localPolicyPath,
+    [
+      "# team policy header",
+      "version: 1",
+      "",
+      "allowCommands:",
+      "  - pattern: \"pwd *\" # discovery",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const allowLocal = APPROVAL_CHOICES.find((choice) => choice.decision === "allow-local");
+  const label = `${allowLocal.label} — ${allowLocal.description}`;
+  const ctx = {
+    cwd,
+    hasUI: true,
+    mode: "rpc",
+    isProjectTrusted: () => true,
+    ui: {
+      setStatus: () => {},
+      notify: () => {},
+      select: async () => label,
+    },
+  };
+  await startGuardMeSession(ctx, {
+    homeDir: home,
+    environment: { GUARDME_APPROVAL_MODE: "interactive" },
+  });
+
+  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const yaml = await readFile(paths.localPolicyPath, "utf8");
+
+  assert.equal(second, undefined);
+  assert.match(yaml, /# team policy header/);
+  assert.match(yaml, /# discovery/);
+  assert.match(yaml, /rm -rf build/);
+  stopGuardMeSession(ctx);
+});

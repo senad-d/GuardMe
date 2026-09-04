@@ -28,6 +28,7 @@ import { persistUserDecisionRule } from "../config/write-policy.ts";
 import { appendAutomaticDecisionRecord, appendDecisionRecord, appendWarningRecord } from "../state/warnings.ts";
 import {
   APPROVAL_UNAVAILABLE_NEXT_STEP,
+  formatAgentModeBlockReason,
   formatApprovalUnavailableBlockReason,
   isAllowDecision,
   requestApprovalDecision,
@@ -40,6 +41,7 @@ import {
   deferAgentApproval,
   formatGuardMeStatus,
   getGuardMeSessionState,
+  getLastKnownGuardedTools,
   recordAgentApprovalBlock,
   recordGuardMeGuidance,
   setGuardMeSessionState,
@@ -69,7 +71,6 @@ type ScriptInspectionSourceKind = "script-content" | "local-script";
 type PersistedPolicyTarget = "none" | "local-yaml" | "global-yaml";
 type StateFileSourceKind = "global" | "local";
 
-const AGENT_APPROVAL_RUN_MODES: ReadonlySet<string> = new Set(["rpc", "json", "print"]);
 const AGENT_APPROVAL_NEXT_STEP =
   "If this exact action is still necessary, retry it once in a later agent turn. Duplicate calls in the current assistant response remain blocked, and every automatic approval is consumed after one use.";
 const AGENT_APPROVAL_BLOCK_REASON =
@@ -101,7 +102,8 @@ export async function evaluateGuardedToolCall(
   ctx: GuardedToolCallContext,
 ): Promise<ToolCallBlockResult | undefined> {
   const state = getGuardMeSessionState();
-  const guardedTools: Readonly<Record<string, GuardedToolContract>> = state?.config.config.guardedTools ?? BUILT_IN_GUARDED_TOOLS;
+  const guardedTools: Readonly<Record<string, GuardedToolContract>> =
+    state?.config.config.guardedTools ?? getLastKnownGuardedTools() ?? BUILT_IN_GUARDED_TOOLS;
   const contract = Object.hasOwn(guardedTools, event.toolName)
     ? guardedTools[event.toolName]
     : undefined;
@@ -161,7 +163,7 @@ export async function mapToolCallToPolicyRequest(
       return { error: `GuardMe could not evaluate ${event.toolName} as bash because input.command is missing.` };
     }
     const commandClassification = classifyShellCommand(command);
-    const normalized = await normalizeTargets(commandClassification.targetPaths, cwd, homeDir);
+    const normalized = await normalizeTargets(commandClassification.targetPaths, cwd, homeDir, true);
     if ("error" in normalized) {
       return { error: normalized.error };
     }
@@ -214,21 +216,21 @@ async function handlePolicyDecision(
   if (decision.outcome === "coach" || decision.outcome === "deny") {
     refreshGuardMeStatus(ctx);
   }
-  if (decision.outcome === "coach" && usesAgentApprovalMode(state, ctx)) {
+  if (decision.outcome === "coach" && usesAgentApprovalMode(state)) {
     recordAgentApprovalBlock(decision.fingerprint);
     const guidance = `${decision.guidance} ${AGENT_APPROVAL_NEXT_STEP}`;
     recordDecisionGuidance(request, decision, guidance);
-    return block(`${decision.reason}\n\nGuardMe coaching: ${guidance}`);
+    return block(formatAgentModeBlockReason(request, decision, `GuardMe coaching: ${decision.guidance}`, AGENT_APPROVAL_NEXT_STEP));
   }
   if (decision.outcome === "needs-user-decision") {
-    const agentApproval = await resolveAgentModeApproval(state, ctx, decision);
+    const agentApproval = await resolveAgentModeApproval(state, decision);
     if (agentApproval === "allowed") {
       refreshGuardMeStatus(ctx);
       return undefined;
     }
     if (agentApproval === "blocked") {
       recordDecisionGuidance(request, decision, AGENT_APPROVAL_NEXT_STEP);
-      return block(formatApprovalUnavailableBlockReason(request, decision, AGENT_APPROVAL_BLOCK_REASON, AGENT_APPROVAL_NEXT_STEP));
+      return block(formatAgentModeBlockReason(request, decision, AGENT_APPROVAL_BLOCK_REASON, AGENT_APPROVAL_NEXT_STEP));
     }
 
     const approval = await requestApprovalDecision(toApprovalContext(ctx, state.config.config.approvalMode), request, decision);
@@ -258,10 +260,9 @@ type AgentModeApprovalResolution = "not-applicable" | "blocked" | "allowed";
 
 async function resolveAgentModeApproval(
   state: GuardMeSessionState,
-  ctx: GuardedToolCallContext,
   decision: Extract<PolicyDecision, { readonly outcome: "needs-user-decision" }>,
 ): Promise<AgentModeApprovalResolution> {
-  if (!usesAgentApprovalMode(state, ctx)) {
+  if (!usesAgentApprovalMode(state)) {
     return "not-applicable";
   }
   if (!isAgentAutomaticApprovalEligible(decision)) {
@@ -274,17 +275,22 @@ async function resolveAgentModeApproval(
     return "blocked";
   }
 
+  // Consume before the awaited audit write so a concurrent identical call in
+  // the same turn observes the fingerprint as spent and stays blocked.
+  consumeAgentApproval(fingerprint);
   if (!(await appendAutomaticApprovalDecisionRecord(state, fingerprint))) {
     deferAgentApproval(fingerprint);
     return "blocked";
   }
 
-  consumeAgentApproval(fingerprint);
   return "allowed";
 }
 
-function usesAgentApprovalMode(state: GuardMeSessionState, ctx: GuardedToolCallContext): boolean {
-  return state.config.config.approvalMode === "agent" && typeof ctx.mode === "string" && AGENT_APPROVAL_RUN_MODES.has(ctx.mode);
+// Agent mode never opens an approval prompt in any run mode (TUI included):
+// GuardMe blocks with a short notification and the later-turn retry gate is
+// the only path to an automatic allow-once.
+function usesAgentApprovalMode(state: GuardMeSessionState): boolean {
+  return state.config.config.approvalMode === "agent";
 }
 
 async function inspectWriteEditContentBeforeMutation(
@@ -319,7 +325,7 @@ async function inspectLocalScriptsBeforeExecution(
   }
 
   for (const script of detectLocalScriptExecutions(request.command)) {
-    const normalized = await normalizeTargets([script.rawPath], request.cwd, state.homeDir);
+    const normalized = await normalizeTargets([script.rawPath], request.cwd, state.homeDir, true);
     if ("error" in normalized) {
       const synthetic = localScriptUninspectableRequest(request, script, script.rawPath, normalized.error);
       const decision = evaluatePolicyRequest({
@@ -591,7 +597,7 @@ async function inspectPackageScriptBeforeExecution(
   request: PolicyRequest,
   script: PackageScriptExecution,
 ): Promise<ToolCallBlockResult | undefined> {
-  const normalized = await normalizeTargets([script.rawPath], request.cwd, state.homeDir);
+  const normalized = await normalizeTargets([script.rawPath], request.cwd, state.homeDir, true);
   if ("error" in normalized) {
     const synthetic = packageScriptUninspectableRequest(request, script, script.rawPath, normalized.error);
     const decision = evaluatePolicyRequest({
@@ -739,7 +745,7 @@ async function scriptCommandPolicyRequest(
   | { readonly error: string }
 > {
   const commandClassification = classifyShellCommand(command.command);
-  const normalized = await normalizeTargets(commandClassification.targetPaths, parentRequest.cwd, homeDir);
+  const normalized = await normalizeTargets(commandClassification.targetPaths, parentRequest.cwd, homeDir, true);
   if ("error" in normalized) {
     return { error: normalized.error };
   }
@@ -864,6 +870,14 @@ export async function persistApprovalRuleIfRequested(
   }
 
   const scope = userDecision.endsWith("global") ? "global" : "local";
+  if (scope === "local" && !state.projectTrusted) {
+    return {
+      saved: false,
+      reason:
+        "GuardMe cannot save a project rule because this project is not trusted: project-local policy is never loaded for untrusted projects, so the rule would silently have no effect. Trust the project from /guardme or save a global rule instead.",
+      persistedTo: "none",
+    };
+  }
   const policyPath = scope === "global" ? state.config.paths.globalPolicyPath : state.config.paths.localPolicyPath;
   const persistenceRequest = policyDecision.suggestedCommandRule && request.command
     ? { ...request, command: policyDecision.suggestedCommandRule, targets: [{ kind: "command" as const, raw: policyDecision.suggestedCommandRule, normalized: policyDecision.suggestedCommandRule }] }
@@ -1476,11 +1490,12 @@ async function normalizeTargets(
   pathValues: readonly string[],
   cwd: string,
   homeDir?: string,
+  shellExpansion = false,
 ): Promise<{ readonly targets: readonly PathTarget[] } | { readonly error: string }> {
   const targets: PolicyTarget[] = [];
   for (const pathValue of pathValues) {
     try {
-      const normalized = await normalizePolicyPath(pathValue, { cwd, ...(homeDir ? { homeDir } : {}) });
+      const normalized = await normalizePolicyPath(pathValue, { cwd, shellExpansion, ...(homeDir ? { homeDir } : {}) });
       targets.push(pathTargetFromNormalizedPath(normalized));
     } catch (error) {
       return { error: `GuardMe could not safely resolve one or more tool paths (${formatPathResolutionError(error)}). Blocking by default.` };

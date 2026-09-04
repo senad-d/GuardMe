@@ -160,7 +160,7 @@ guardedTools:
 
 The built-ins `bash`, `read`, `write`, `edit`, `grep`, `find`, and `ls` are always guarded and cannot be remapped. Global aliases load before aliases from trusted project policy; identical mappings are deduplicated, while a conflicting later mapping reports an error and leaves the earlier mapping effective. Untrusted project aliases are not loaded. Unknown third-party tools are not inferred and remain outside GuardMe enforcement until explicitly mapped. Inspect the effective built-ins and aliases in `/guardme diagnostics` or the Policies pane.
 
-Policy YAML also accepts the validated top-level key `approvalMode: auto | interactive | agent | block`. Built-in `auto` is the safe default: only TUI sessions can request GuardMe approval UI. The explicit `agent` mode keeps that TUI behavior but lets RPC, JSON, and print agents receive one automatic allow-once when an identical blocked fingerprint is retried in a later agent turn. Trusted project policy overrides global policy, and the process environment variable `GUARDME_APPROVAL_MODE` overrides both for managed child launches.
+Policy YAML also accepts the validated top-level key `approvalMode: auto | interactive | agent | block`. Built-in `auto` is the safe default: only TUI sessions can request GuardMe approval UI. The explicit `agent` mode never opens an approval prompt in any run mode: GuardMe blocks the first attempt with a short agent-facing notification and automatically allows one identical retry in a later agent turn. Trusted project policy overrides global policy, and the process environment variable `GUARDME_APPROVAL_MODE` overrides both for managed child launches.
 
 YAML rule sections:
 
@@ -256,7 +256,7 @@ Approval modes:
 
 - `auto` (default): preserve TUI approval; RPC, JSON, print, and other non-interactive modes fail closed without an approval UI request.
 - `interactive`: allow approval UI when Pi exposes the relevant method, including RPC controllers that implement `extension_ui_request` / `extension_ui_response`.
-- `agent`: preserve TUI approval; in RPC, JSON, and print modes, block the first in-process attempt and same-turn duplicates, then automatically allow-once only an identical fingerprint retried in a later agent turn.
+- `agent`: never show an approval prompt in any run mode (TUI included); block the first in-process attempt and same-turn duplicates with a short notification, then automatically allow-once only an identical fingerprint retried in a later agent turn.
 - `block`: never call an interactive GuardMe approval UI method.
 
 Managed child processes can explicitly opt into later-turn automatic approval:
@@ -287,7 +287,7 @@ Saved decisions append narrow YAML rules, reload policy for the current session,
 | Problem | Try |
 | --- | --- |
 | Expected command is blocked | Open `/guardme`, inspect the warning, then allow once or save a narrow project/global rule if appropriate. |
-| Approval prompt does not appear | `auto` prompts only in TUI. Use `agent` for explicit later-turn automatic approval in managed RPC/JSON/print children, or `interactive` only for an RPC controller that handles the extension UI round trip. |
+| Approval prompt does not appear | `auto` prompts only in TUI, and `agent` never prompts anywhere — it blocks once and auto-allows an identical later-turn retry. Use `interactive` only for an RPC controller that handles the extension UI round trip. |
 | Project policy or settings are ignored | Trust the project from `/guardme` and reload/restart pi if needed. |
 | Cloud CLI is blocked | This is a hard protection. Run cloud commands outside Pi or use a separate, intentionally isolated workflow. |
 | A broad command allow still blocks | GuardMe evaluates every executable segment and protected path first; allow `ls *` cannot approve `ls && rm -rf build` or `cat .env`. `find -L` follows symlinks, so it needs an exact reviewed command allow or user approval even when `find *` is allowed. |

@@ -562,6 +562,8 @@ async function createSnapshot(fixture) {
     projectTrusted: true,
     guardMe: diagnostics.some((diagnostic) => diagnostic.severity === "error") ? "degraded" : "active",
     insecureEdits: false,
+    approvalMode: loadedConfig.config.approvalMode,
+    guardedTools: loadedConfig.config.guardedTools,
     policyRules: countPolicyRules(loadedConfig.config),
     warnedFingerprints: warnings.warnedFingerprints.size,
     warningRecords: warnings.records,

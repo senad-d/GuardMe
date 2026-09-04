@@ -246,3 +246,47 @@ test("global warning state is filtered to the active project cwd", async () => {
   assert.equal(hasWarnedFingerprint(loaded, "sha256:current"), true);
   assert.equal(hasWarnedFingerprint(loaded, "sha256:other"), false);
 });
+
+test("oversized state files are compacted on append instead of failing forever", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-state-compact-"));
+  const cwd = join(root, "project");
+  const home = join(root, "home");
+  await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
+  const paths = resolveStatePaths(cwd, home);
+  const filler = `${JSON.stringify({
+    type: "warning",
+    version: 1,
+    timestamp: new Date().toISOString(),
+    fingerprint: "sha256:filler",
+    scope: "project",
+    cwd,
+    toolName: "bash",
+    action: "shell",
+    risk: "medium",
+    target: "x".repeat(160),
+    reason: "filler",
+    matchedRules: [],
+  })}\n`;
+  const fillerCount = Math.ceil((1024 * 1024 + 65536) / filler.length);
+  await writeFile(paths.localStatePath, filler.repeat(fillerCount), "utf8");
+
+  const appended = await appendWarningRecord(paths.localStatePath, {
+    fingerprint: "sha256:appended",
+    scope: "project",
+    cwd,
+    toolName: "bash",
+    action: "shell",
+    risk: "medium",
+    target: "rm -rf build",
+    reason: "compaction regression",
+    matchedRules: [],
+  });
+
+  const text = await readFile(paths.localStatePath, "utf8");
+  assert.ok(Buffer.byteLength(text, "utf8") < 1024 * 1024);
+
+  const read = await readStateFile(paths.localStatePath, "project");
+  assert.equal(read.diagnostics.length, 0);
+  assert.ok(read.records.some((record) => record.fingerprint === appended.fingerprint));
+  assert.ok(read.records.length > 1);
+});

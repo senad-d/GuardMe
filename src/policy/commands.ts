@@ -177,7 +177,7 @@ const SHELL_LEADING_CONTROL_WORDS = new Set(["!", "(", "{", "if", "then", "do", 
 const SHELL_HARD_SEGMENT_BOUNDARY_TOKENS = new Set([";", "&&", "||", "|", "&"]);
 const SHELL_COMMAND_POSITION_BOUNDARY_TOKENS = new Set(["(", "{", "then", "do", "else", "elif", "fi", "done", "esac"]);
 const SHELL_CLOSING_SEGMENT_BOUNDARY_TOKENS = new Set([")", "}"]);
-const OUTPUT_REDIRECTION_TOKENS = new Set([">", ">>", "1>", "1>>", "2>", "2>>", "<>", "0<>"]);
+const OUTPUT_REDIRECTION_TOKENS = new Set([">", ">>", ">|", "1>", "1>>", "1>|", "2>", "2>>", "2>|", "<>", "0<>"]);
 const INPUT_REDIRECTION_TOKENS = new Set(["<", "0<"]);
 const REDIRECTION_TOKENS_WITH_TARGET = new Set([
   ...OUTPUT_REDIRECTION_TOKENS,
@@ -589,6 +589,9 @@ function readShellOperatorToken(command: string, index: number): ShellOperatorTo
   if (character === ">" && next === "&") {
     return { token: ">&", nextIndex: index + 2 };
   }
+  if (character === ">" && next === "|") {
+    return { token: ">|", nextIndex: index + 2 };
+  }
   if (character === "<" && next === "<") {
     return readHereDocumentOperator(command, index);
   }
@@ -611,7 +614,8 @@ function readFileDescriptorRedirectionOperator(command: string, index: number): 
   const character = command[index] ?? "";
   const next = command[index + 1] ?? "";
   const afterNext = command[index + 2];
-  const tokenLength = afterNext === next || afterNext === "&" || (character === "0" && afterNext === ">") ? 3 : 2;
+  const clobber = next === ">" && afterNext === "|";
+  const tokenLength = afterNext === next || afterNext === "&" || clobber || (character === "0" && afterNext === ">") ? 3 : 2;
   return { token: command.slice(index, index + tokenLength), nextIndex: index + tokenLength };
 }
 
@@ -709,7 +713,14 @@ function codePointEscapeValue(
 function classifySegment(rawCommand: string, segmentTokens: readonly string[], depth: number): SegmentClassification {
   const unwrapped = unwrapExecutable(segmentTokens);
   if (unwrapped.innerCommand) {
-    return withPriority(classifyShellCommandInternal(unwrapped.innerCommand, depth + 1));
+    const inner = withPriority(classifyShellCommandInternal(unwrapped.innerCommand, depth + 1));
+    const redirection = wrapperRedirectionClassification(rawCommand, segmentTokens);
+    if (!redirection) {
+      return inner;
+    }
+    const redirectionWithPriority = withPriority(redirection);
+    const selected = inner.priority > redirectionWithPriority.priority ? inner : redirectionWithPriority;
+    return withPriority(aggregateCommandClassification(rawCommand, selected, [inner, redirectionWithPriority]));
   }
 
   const context = createSegmentClassificationContext(rawCommand, segmentTokens, unwrapped);
@@ -918,6 +929,57 @@ function outputRedirectionClassification(context: ExecutableSegmentClassificatio
     hardDenied: false,
     dangerous,
     requiresUserDecision: dangerous,
+  });
+}
+
+function wrapperRedirectionClassification(rawCommand: string, segmentTokens: readonly string[]): CommandClassification | undefined {
+  const inputTargets = extractInputRedirectionTargets(segmentTokens);
+  const outputTargets = extractOutputRedirectionTargets(segmentTokens).filter((target) => !isNullOutputSink(target));
+  if (inputTargets.length === 0 && outputTargets.length === 0) {
+    return undefined;
+  }
+  const targetPaths = uniqueStrings([...inputTargets, ...outputTargets]);
+  if (targetPaths.some(isCredentialLikePath)) {
+    return classification({
+      rawCommand,
+      kind: "hard-denied",
+      primaryAction: "read",
+      risk: "hard-denied",
+      reason: "Credential-like file redirection detected on a shell wrapper.",
+      matchedPatterns: ["credential-read"],
+      targetPaths,
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+      credentialAccess: true,
+    });
+  }
+  if (outputTargets.length > 0) {
+    const dangerous = isOutsideishMutation(outputTargets);
+    return classification({
+      rawCommand,
+      kind: "write",
+      primaryAction: "write",
+      risk: mutationRisk(outputTargets),
+      reason: "Shell redirection writes to a file.",
+      matchedPatterns: ["redirection"],
+      targetPaths,
+      hardDenied: false,
+      dangerous,
+      requiresUserDecision: dangerous,
+    });
+  }
+  return classification({
+    rawCommand,
+    kind: "read",
+    primaryAction: "read",
+    risk: outsideishTargetPresent(inputTargets) ? "medium" : "low",
+    reason: "Shell redirection reads from a file.",
+    matchedPatterns: ["redirection"],
+    targetPaths,
+    hardDenied: false,
+    dangerous: false,
+    requiresUserDecision: false,
   });
 }
 
@@ -1654,6 +1716,11 @@ function localScriptExecutionFromSegment(tokens: readonly string[]): LocalScript
 
   if (SHELL_WRAPPERS.has(commandName)) {
     const scriptPath = shellWrapperScriptPath(args);
+    return scriptPath ? { rawPath: scriptPath, invocation, shellHint: true, via: "shell-wrapper" } : undefined;
+  }
+
+  if (commandToken === "." || commandName === "source") {
+    const scriptPath = args.find((arg) => arg !== "--" && !arg.startsWith("-"));
     return scriptPath ? { rawPath: scriptPath, invocation, shellHint: true, via: "shell-wrapper" } : undefined;
   }
 
@@ -2476,10 +2543,14 @@ function isCredentialLikePath(pathValue: string): boolean {
     lower.includes("~/.config/gcloud") ||
     lower.includes("/.config/gcloud") ||
     lower.endsWith("/.docker/config.json") ||
-    lower.includes("credential") ||
-    lower.includes("secret") ||
-    lower.includes("token")
+    containsCredentialKeyword(lower)
   );
+}
+
+// Word-boundary keyword match: "tokens.txt" and "my-secret.yaml" match, while
+// "tokenizer.ts" and "secretary.md" do not.
+function containsCredentialKeyword(lowerPathValue: string): boolean {
+  return /(?:credential|secret|token)s?(?![a-z0-9])/u.test(lowerPathValue);
 }
 
 function isProtectedEnvPathOperand(pathValue: string): boolean {
@@ -2531,11 +2602,13 @@ function mutationRisk(targetPaths: readonly string[]): RiskLevel {
 }
 
 function isOutsideishMutation(targetPaths: readonly string[]): boolean {
-  return targetPaths.some((target) => target.startsWith("/") || target.startsWith("~") || target.startsWith("..") || target.includes("/../"));
+  return targetPaths.some(
+    (target) => target.startsWith("/") || target.startsWith("~") || target.startsWith("..") || target.includes("/../") || target.includes("$"),
+  );
 }
 
 function outsideishTargetPresent(targetPaths: readonly string[]): boolean {
-  return targetPaths.some((target) => target.startsWith("/") || target.startsWith("~") || target.startsWith(".."));
+  return targetPaths.some((target) => target.startsWith("/") || target.startsWith("~") || target.startsWith("..") || target.includes("$"));
 }
 
 function looksLikeRename(targetPaths: readonly string[]): boolean {
@@ -2545,12 +2618,30 @@ function looksLikeRename(targetPaths: readonly string[]): boolean {
   return dirname(targetPaths[0] ?? "") === dirname(targetPaths[1] ?? "") && basename(targetPaths[0] ?? "") !== basename(targetPaths[1] ?? "");
 }
 
+const DESTRUCTIVE_INLINE_CODE_MARKERS = [
+  "rmtree",
+  "rmsync",
+  "rmdirsync",
+  "unlinksync",
+  "rm_rf",
+  "rm_r(",
+  "os.remove",
+  "os.unlink",
+  "os.rmdir",
+  "unlink(",
+] as const;
+
 function looksDestructiveButAmbiguous(commandName: string, args: readonly string[]): boolean {
-  return (
-    (commandName === "git" && args[0] === "clean" && args.some((arg) => arg.includes("f"))) ||
-    (commandName === "python" && args.some((arg) => arg.includes("shutil.rmtree"))) ||
-    (commandName === "node" && args.some((arg) => arg.includes("rmSync")))
-  );
+  if (commandName === "git" && args[0] === "clean" && args.some((arg) => arg.includes("f"))) {
+    return true;
+  }
+  if (!INLINE_CODE_INTERPRETERS.has(commandName)) {
+    return false;
+  }
+  return args.some((arg) => {
+    const lower = arg.toLowerCase();
+    return DESTRUCTIVE_INLINE_CODE_MARKERS.some((marker) => lower.includes(marker));
+  });
 }
 
 function looksLikeSedExpression(value: string): boolean {

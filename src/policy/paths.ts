@@ -7,6 +7,13 @@ import type { PathTarget } from "./action.ts";
 export interface NormalizePolicyPathOptions {
   readonly cwd: string;
   readonly homeDir?: string;
+  /**
+   * Set when the raw path came from shell command text, where `$VAR`,
+   * backticks, and `~user` would be expanded by the shell before use. GuardMe
+   * cannot resolve those statically, so such paths are treated as
+   * outside-project and fall through to the default-deny/approval flow.
+   */
+  readonly shellExpansion?: boolean;
 }
 
 export interface NormalizedPolicyPath {
@@ -25,6 +32,13 @@ export interface NormalizedPolicyPath {
 export interface PolicyPathMatchOptions {
   readonly cwd: string;
   readonly homeDir?: string;
+  /**
+   * "all" (default) also matches the raw input path, which is safe only for
+   * deny-direction rules. "resolved" matches canonical/absolute forms alone so
+   * traversal (`docs/../..`) or symlink escapes cannot satisfy an allow rule
+   * written for the un-escaped location.
+   */
+  readonly candidateScope?: "all" | "resolved";
 }
 
 export interface PolicyPathMatchResult {
@@ -43,9 +57,10 @@ export async function normalizePolicyPath(
   const inputPath = stripPiPathPrefix(rawPath.trim());
   const expandedPath = expandHome(inputPath, homeDir);
   const hadTraversal = hasTraversalSegment(expandedPath);
+  const unresolvedShellReference = options.shellExpansion === true && containsUnresolvedShellReference(expandedPath);
   const absolutePath = isAbsolute(expandedPath) ? resolve(expandedPath) : resolve(projectRoot, expandedPath);
   const canonical = await canonicalizePath(absolutePath);
-  const isInsideProject = isPathInside(projectRoot, canonical.canonicalPath);
+  const isInsideProject = !unresolvedShellReference && isPathInside(projectRoot, canonical.canonicalPath);
   const projectRelativePath = isInsideProject ? toPosixPath(relative(projectRoot, canonical.canonicalPath) || ".") : undefined;
 
   return {
@@ -104,7 +119,7 @@ export function matchPolicyPathPattern(
 ): PolicyPathMatchResult {
   const homeDir = resolve(options?.homeDir ?? homedir());
   const normalizedPattern = normalizePattern(pattern, normalizedPath.projectRoot, homeDir);
-  const candidates = pathMatchCandidates(normalizedPath);
+  const candidates = pathMatchCandidates(normalizedPath, options?.candidateScope ?? "all");
   const regex = globToRegExp(normalizedPattern);
   return {
     matched: candidates.some((candidate) => regex.test(candidate)),
@@ -161,14 +176,14 @@ function normalizePattern(pattern: string, projectRoot: string, homeDir: string)
   return toPosixPath(expanded.replace(/^\.\//, ""));
 }
 
-function pathMatchCandidates(normalizedPath: NormalizedPolicyPath): readonly string[] {
+function pathMatchCandidates(normalizedPath: NormalizedPolicyPath, scope: "all" | "resolved"): readonly string[] {
   const candidates = new Set<string>();
   candidates.add(toPosixPath(normalizedPath.canonicalPath));
   candidates.add(toPosixPath(normalizedPath.absolutePath));
   if (normalizedPath.projectRelativePath) {
     candidates.add(normalizedPath.projectRelativePath);
   }
-  if (normalizedPath.inputPath !== "") {
+  if (scope === "all" && normalizedPath.inputPath !== "") {
     candidates.add(toPosixPath(normalizedPath.inputPath));
   }
   return [...candidates];
@@ -221,6 +236,10 @@ async function canonicalizePath(absolutePath: string): Promise<{
 
 function hasTraversalSegment(pathValue: string): boolean {
   return pathValue.split(/[\\/]+/).includes("..");
+}
+
+function containsUnresolvedShellReference(pathValue: string): boolean {
+  return pathValue.includes("$") || pathValue.includes("`") || pathValue.startsWith("~");
 }
 
 function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {

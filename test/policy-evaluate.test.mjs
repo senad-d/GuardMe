@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -638,4 +638,79 @@ test("dangerous command evaluation returns coach first and user decision after w
   assert.equal(first.block, true);
   assert.equal(repeated.outcome, "needs-user-decision");
   assert.equal(repeated.prompt, true);
+});
+
+test("exact whole-command allows do not cover background or |& compounds", () => {
+  const cwd = process.cwd();
+  const policy = policyFrom({ ...createEmptyPolicyConfig(), allowCommands: [{ pattern: "git status" }] });
+
+  const single = shellRequest(cwd, "command git status");
+  const singleDecision = evaluatePolicyRequest({ policy, request: single.request, commandClassification: single.classified });
+  assert.equal(singleDecision.outcome, "allow");
+
+  for (const command of ["command git status & rm -rf build", "command git status |& sh"]) {
+    const compound = shellRequest(cwd, command);
+    const decision = evaluatePolicyRequest({ policy, request: compound.request, commandClassification: compound.classified });
+    assert.notEqual(decision.outcome, "allow", command);
+  }
+});
+
+test("path allow rules do not match traversal or symlink escapes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-eval-allow-escape-"));
+  const cwd = join(root, "project");
+  await mkdir(join(cwd, "docs"), { recursive: true });
+  await writeFile(join(root, "secret.txt"), "outside", "utf8");
+  await symlink(root, join(cwd, "docs", "link"));
+  const policy = policyFrom({ ...createEmptyPolicyConfig(), allowPaths: [{ pattern: "docs/**", actions: ["read"] }] });
+
+  const traversal = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", "docs/../../secret.txt") });
+  assert.equal(traversal.outcome, "deny");
+
+  const symlinked = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", "docs/link/secret.txt") });
+  assert.equal(symlinked.outcome, "deny");
+
+  const legit = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", "docs/readme.md") });
+  assert.equal(legit.outcome, "allow");
+});
+
+test("shell-expanded variable paths are not treated as inside-project", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-shellvar-"));
+
+  const shellNormalized = await normalizePolicyPath("$HOME/.bash_history", { cwd, shellExpansion: true });
+  assert.equal(shellNormalized.isInsideProject, false);
+
+  const tildeUser = await normalizePolicyPath("~root/.bash_history", { cwd, shellExpansion: true });
+  assert.equal(tildeUser.isInsideProject, false);
+
+  const literal = await normalizePolicyPath("$HOME/.bash_history", { cwd });
+  assert.equal(literal.isInsideProject, true);
+
+  const policy = policyFrom(createEmptyPolicyConfig());
+  const request = {
+    toolName: "bash",
+    action: "read",
+    cwd,
+    command: "cat $HOME/.bash_history",
+    targets: [pathTargetFromNormalizedPath(shellNormalized)],
+  };
+  const decision = evaluatePolicyRequest({ policy, request });
+  assert.equal(decision.outcome, "deny");
+});
+
+test("built-in defaults block direct writes into .git", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-git-write-"));
+  await mkdir(join(cwd, ".git"), { recursive: true });
+  await writeFile(join(cwd, ".git", "config"), "[core]\n", "utf8");
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+
+  const writeDecision = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "write", ".git/config") });
+  assert.equal(writeDecision.outcome, "deny");
+  assert.equal(writeDecision.hard, true);
+
+  const readDecision = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", ".git/config") });
+  assert.equal(readDecision.outcome, "allow");
+
+  const { request, classified } = shellRequest(cwd, "echo x >> .git/config");
+  const shellDecision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
+  assert.equal(shellDecision.outcome, "deny");
 });

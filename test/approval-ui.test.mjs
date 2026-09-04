@@ -102,26 +102,36 @@ test("agent mode suppresses approval UI outside TUI", async () => {
   );
 
   assert.equal(result.kind, "blocked");
-  assert.match(result.reason, /agent.*never invokes approval UI outside TUI/i);
+  assert.match(result.reason, /agent.*never invokes interactive approval UI/i);
   assert.equal(interactiveCalls, 0);
 });
 
-test("agent mode retains the existing approval prompt in TUI", async () => {
+test("agent mode suppresses the approval prompt in TUI as well", async () => {
   const { request, decision } = needsDecisionFixture();
-  const allowLabel = `${APPROVAL_CHOICES[0].label} — ${APPROVAL_CHOICES[0].description}`;
+  let interactiveCalls = 0;
   const result = await requestApprovalDecision(
     {
       cwd: request.cwd,
       hasUI: true,
       mode: "tui",
       approvalMode: "agent",
-      ui: { select: async () => allowLabel },
+      ui: {
+        custom: async () => {
+          interactiveCalls += 1;
+        },
+        select: async () => {
+          interactiveCalls += 1;
+          return undefined;
+        },
+      },
     },
     request,
     decision,
   );
 
-  assert.deepEqual(result, { kind: "decision", decision: "allow-once" });
+  assert.equal(result.kind, "blocked");
+  assert.match(result.reason, /agent.*never invokes interactive approval UI/i);
+  assert.equal(interactiveCalls, 0);
 });
 
 test("block mode suppresses every approval UI method in TUI", async () => {
