@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -247,6 +247,98 @@ test("default allow list covers common dev commands and denies environment dumps
     assert.equal(decision.outcome, "deny", command);
     assert.equal(decision.risk, "hard-denied", command);
   }
+});
+
+test("read-only path grants outside the project require anchored patterns", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-anchored-"));
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+
+  const piAuth = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", join(homedir(), ".pi", "agent", "auth.json")) });
+  const otherProjectPi = evaluatePolicyRequest({
+    policy,
+    request: await pathRequest(cwd, "read", join(homedir(), "guardme-unrelated", ".pi", "agent", "guardme-state.jsonl")),
+  });
+  const otherProjectGit = evaluatePolicyRequest({
+    policy,
+    request: await pathRequest(cwd, "read", join(homedir(), "guardme-unrelated", ".git", "config")),
+  });
+  const globalPolicyRead = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", join(homedir(), ".pi", "agent", "guardme.yaml")) });
+
+  assert.equal(piAuth.outcome, "deny");
+  assert.equal(piAuth.hard, true);
+  assert.equal(otherProjectPi.outcome, "deny");
+  assert.equal(otherProjectGit.outcome, "deny");
+  assert.equal(globalPolicyRead.outcome, "allow");
+});
+
+test("credential-printing and file-writing CLI subcommands are gated by defaults", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-cli-gates-"));
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+
+  for (const command of ["gh auth token", "git credential fill", "npm config get //registry.npmjs.org/:_authToken"]) {
+    const { request, classified } = shellRequest(cwd, command);
+    const decision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
+    assert.equal(decision.outcome, "deny", command);
+  }
+
+  for (const command of ["git apply fix.patch", "git config core.hooksPath /tmp/hooks", "npm pkg set scripts.test=vitest"]) {
+    const { request, classified } = shellRequest(cwd, command);
+    const decision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
+    assert.equal(decision.outcome, "coach", command);
+  }
+
+  for (const command of ["gh pr list", "git config user.name", "npm pkg get name"]) {
+    const { request, classified } = shellRequest(cwd, command);
+    const decision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
+    assert.equal(decision.outcome, "allow", command);
+  }
+});
+
+test("fingerprints distinguish commands that differ only in secret values", () => {
+  const base = { toolName: "bash", action: "shell", cwd: "/tmp/project", targets: [] };
+  const first = createPolicyFingerprint({ ...base, command: "deploy --token=AAA" });
+  const second = createPolicyFingerprint({ ...base, command: "deploy --token=BBB" });
+  const repeat = createPolicyFingerprint({ ...base, command: "deploy --token=AAA" });
+
+  assert.notEqual(first, second);
+  assert.equal(first, repeat);
+});
+
+test("discovery-synthesized protections are approval-gated while zero-access stays hard", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-discovery-"));
+  const denyPolicy = policyFrom({
+    ...createEmptyPolicyConfig(),
+    denyPaths: [{ pattern: "vault/**", actions: ["read"] }],
+  });
+  const zeroPolicy = policyFrom({
+    ...createEmptyPolicyConfig(),
+    zeroAccessPaths: [{ pattern: "vault/**" }],
+  });
+  const request = {
+    toolName: "grep",
+    action: "read",
+    cwd,
+    targets: [
+      { kind: "path", raw: "." },
+      { kind: "path", raw: "vault/notes.txt", discovery: true },
+    ],
+  };
+
+  const coached = evaluatePolicyRequest({ policy: denyPolicy, request });
+  const prompted = evaluatePolicyRequest({ policy: denyPolicy, request, warnedFingerprints: new Set([coached.fingerprint]) });
+  const zero = evaluatePolicyRequest({ policy: zeroPolicy, request });
+  const direct = evaluatePolicyRequest({
+    policy: denyPolicy,
+    request: { ...request, targets: [{ kind: "path", raw: "vault/notes.txt" }] },
+  });
+
+  assert.equal(coached.outcome, "coach");
+  assert.match(coached.reason, /traverse protected path/);
+  assert.equal(prompted.outcome, "needs-user-decision");
+  assert.equal(isAgentAutomaticApprovalEligible(prompted), false);
+  assert.equal(zero.outcome, "deny");
+  assert.equal(zero.hard, true);
+  assert.equal(direct.outcome, "deny");
 });
 
 test("denyPaths beat allowPaths", async () => {

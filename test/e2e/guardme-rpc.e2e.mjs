@@ -187,8 +187,9 @@ test("GuardMe RPC e2e setup, policy enforcement, approvals, and persistence", { 
     await assertProtectedEnvRead(client, fixture);
     await assertCloudCliHardDeny(client, "hard-deny-cloud-cli");
     await assertCloudCliHardDeny(client, "hard-deny-cloud-cli-wrapper");
-    await assertBroadDiscoveryProtection(client, fixture);
-    await assertBroadFindDiscoveryProtection(client, fixture);
+    await assertBroadContentSearchAllowed(client, fixture);
+    await assertBroadFindAllowed(client, fixture);
+    await assertCredentialNameDiscoveryProtection(client, fixture);
     await assertEnvDeleteHardDeny(client, fixture);
     await assertProtectedMetadataDelete(client, fixture);
     await assertOutsideRepositoryProtections(client, fixture);
@@ -264,19 +265,27 @@ async function assertCloudCliHardDeny(client, scenario) {
   assert.match(resultText(end), /Cloud CLI|cloud CLI|Cloud CLIs/i);
 }
 
-async function assertBroadDiscoveryProtection(client, fixture) {
+async function assertBroadContentSearchAllowed(client, fixture) {
   await fixture.recreateEnvTest();
-  const run = await runScenario(client, "broad-discovery-protected-descendant");
-  const end = expectToolEnd(run.events, "grep", { error: true });
-  assert.match(resultText(end), /Credential|Environment files|protected/i);
+  const run = await runScenario(client, "broad-content-search-allowed");
+  const end = expectToolEnd(run.events, "grep", { error: false });
+  assert.match(resultText(end), /README\.md.*GuardMe e2e fixture/);
   assertNoSecretLeak(run.events);
 }
 
-async function assertBroadFindDiscoveryProtection(client, fixture) {
+async function assertBroadFindAllowed(client, fixture) {
   await fixture.recreateEnvTest();
-  const run = await runScenario(client, "broad-find-protected-descendant");
+  const run = await runScenario(client, "broad-find-allowed");
+  const end = expectToolEnd(run.events, "find", { error: false });
+  assert.match(resultText(end), /README\.md/);
+  assertNoSecretLeak(run.events);
+}
+
+async function assertCredentialNameDiscoveryProtection(client, fixture) {
+  await fixture.recreateEnvTest();
+  const run = await runScenario(client, "credential-name-discovery");
   const end = expectToolEnd(run.events, "find", { error: true });
-  assert.match(resultText(end), /Credential|Environment files|protected/i);
+  assert.match(resultText(end), /traverse protected path|Credential-like/i);
   assertNoSecretLeak(run.events);
 }
 
@@ -374,7 +383,7 @@ async function assertPolicyMissingApproval(client, fixture) {
   const third = await runScenario(client, "policy-missing-generic-command", { uiHandler: createApprovalUiHandler("Allow once") });
   assert.ok(third.uiRequests.some((request) => request.method === "select" && /GuardMe approval required/i.test(request.title ?? "")));
   end = expectToolEnd(third.events, "bash", { error: false });
-  assert.match(resultText(end), /guardme generic/);
+  assert.match(resultText(end), /42/);
   assert.equal(await fixture.readLocalPolicy(), beforeYaml, "allow once must not persist a YAML rule");
 }
 

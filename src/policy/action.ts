@@ -90,6 +90,13 @@ export interface PathTarget {
   readonly exists?: boolean;
   readonly isInsideProject?: boolean;
   readonly hadTraversal?: boolean;
+  /**
+   * Set for protected descendants synthesized by discovery scanning (broad
+   * grep/find/rg roots), as opposed to paths the command targets directly.
+   * Protections on discovery targets are approval-gated instead of
+   * hard-denied, except zeroAccessPaths.
+   */
+  readonly discovery?: boolean;
 }
 
 export interface CommandTarget {

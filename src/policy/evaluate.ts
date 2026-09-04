@@ -22,7 +22,7 @@ import {
   type ExecutableCommandSegment,
   classifyShellCommand,
 } from "./commands.ts";
-import { type NormalizedPolicyPath, isPathInside, matchPolicyPathPattern, toPosixPath } from "./paths.ts";
+import { type NormalizedPolicyPath, isAnchoredPolicyPathPattern, isPathInside, matchPolicyPathPattern, toPosixPath } from "./paths.ts";
 import { redactSensitiveText } from "./redact.ts";
 import { containsCredentialKeyword, isProtectedEnvFileSegment } from "./sensitive-paths.ts";
 
@@ -57,6 +57,8 @@ export function evaluatePolicyRequest(options: EvaluatePolicyRequestOptions): Po
   const command = options.commandClassification ?? (request.command ? classifyShellCommand(request.command) : undefined);
   const pathTargets = request.targets.filter((target): target is PathTarget => target.kind === "path");
   const normalizedPaths = pathTargets.map((target) => normalizedPathFromTarget(target, request.cwd));
+  const directPaths = normalizedPaths.filter((path) => !path.discovery);
+  const discoveryPaths = normalizedPaths.filter((path) => path.discovery);
 
   if (command?.hardDenied) {
     return denyDecision(request, "hard-denied", command.reason, [hardDenyMatchedRule(command)], true, request.reasonCode ?? "hard-denied-command");
@@ -67,17 +69,17 @@ export function evaluatePolicyRequest(options: EvaluatePolicyRequestOptions): Po
     return denyDecision(request, "medium", commandDeny.reason ?? `Command denied by ${commandDeny.source.kind} policy.`, [matchedRule(commandDeny)], false);
   }
 
-  const credentialPathDenial = firstCredentialLikePathDenial(policy, normalizedPaths, request.action);
+  const credentialPathDenial = firstCredentialLikePathDenial(policy, directPaths, request.action);
   if (credentialPathDenial) {
     return denyDecision(request, "hard-denied", credentialPathDenial.reason, [credentialPathDenial.matchedRule], true);
   }
 
-  const hardPathDenial = firstHardPathDenial(policy, normalizedPaths, request.action);
+  const hardPathDenial = firstHardPathDenial(policy, directPaths, request.action);
   if (hardPathDenial) {
     return denyDecision(request, "hard-denied", hardPathDenial.reason, [matchedRule(hardPathDenial.rule)], true);
   }
 
-  const pathDeny = firstMatchingPathRule(policy.denyPaths, normalizedPaths, request.action);
+  const pathDeny = firstMatchingPathRule(policy.denyPaths, directPaths, request.action);
   if (pathDeny) {
     return denyDecision(request, "medium", pathDeny.reason ?? `Path denied by ${pathDeny.source.kind} policy.`, [matchedRule(pathDeny)], false);
   }
@@ -85,6 +87,11 @@ export function evaluatePolicyRequest(options: EvaluatePolicyRequestOptions): Po
   const outsidePathDenial = firstOutsidePathDefaultDenial(policy, request, normalizedPaths);
   if (outsidePathDenial) {
     return outsidePathDenial;
+  }
+
+  const discoveryDecision = discoveryTraversalDecision(policy, request, discoveryPaths, options.warnedFingerprints);
+  if (discoveryDecision) {
+    return discoveryDecision;
   }
 
   if (request.command) {
@@ -107,17 +114,20 @@ export function isAgentAutomaticApprovalEligible(decision: PolicyDecision): bool
   );
 }
 
+// Fingerprints hash the raw request: only the opaque SHA-256 is persisted,
+// and hashing redacted text would let commands differing only in a secret
+// value share one fingerprint (and so share one warned-once approval).
 export function createPolicyFingerprint(request: PolicyRequest): string {
   const payload = {
     action: request.action,
-    command: redactSensitiveText(request.command ?? ""),
-    fingerprintSeed: request.fingerprintSeed ? redactSensitiveText(request.fingerprintSeed) : undefined,
+    command: request.command ?? "",
+    fingerprintSeed: request.fingerprintSeed,
     reasonCode: request.reasonCode,
     targets: request.targets.map((target) => {
       if (target.kind === "path") {
         return { kind: target.kind, path: target.canonicalPath ?? target.absolutePath ?? target.raw };
       }
-      return { kind: target.kind, value: redactSensitiveText(target.raw) };
+      return { kind: target.kind, value: target.raw };
     }),
   };
   return `sha256:${createHash("sha256").update(JSON.stringify(payload)).digest("hex")}`;
@@ -356,6 +366,76 @@ function evaluatePathDefaultsAndAllows(
   return denyDecision(request, "medium", "No GuardMe path allow rule matched this request.", [], false);
 }
 
+interface DiscoveryPathProtection {
+  readonly matchedRule: MatchedRule;
+  readonly reason: string;
+  readonly path: NormalizedPolicyPath;
+}
+
+/**
+ * Protections matched by discovery-synthesized targets (protected descendants
+ * of a broad grep/find/rg root) are approval-gated instead of hard-denied:
+ * the search only traverses the protected file, it does not target it.
+ * zeroAccessPaths matches stay hard, and a reviewed exact whole-command allow
+ * counts as user sign-off on the traversal.
+ */
+function discoveryTraversalDecision(
+  policy: MergedGuardMePolicyConfig,
+  request: PolicyRequest,
+  discoveryPaths: readonly NormalizedPolicyPath[],
+  warnedFingerprints: ReadonlySet<string> | undefined,
+): PolicyDecision | undefined {
+  if (discoveryPaths.length === 0) {
+    return undefined;
+  }
+
+  const zero = firstMatchingPathRule(policy.zeroAccessPaths, discoveryPaths, request.action, true);
+  if (zero) {
+    return denyDecision(request, "hard-denied", zero.reason ?? "Path is blocked by zeroAccessPaths.", [matchedRule(zero)], true);
+  }
+
+  if (request.command && firstMatchingExactWholeCommandAllowRule(policy.allowCommands, request.command)) {
+    return undefined;
+  }
+
+  const unallowedPaths = discoveryPaths.filter((path) => !firstPathAllow(policy, path, request.action));
+  const protection = firstDiscoveryPathProtection(policy, unallowedPaths, request.action);
+  if (!protection) {
+    return undefined;
+  }
+
+  const targetLabel = redactSensitiveText(protection.path.projectRelativePath ?? protection.path.rawPath);
+  return dangerousDecision(
+    request,
+    `Broad ${request.action} discovery would traverse protected path '${targetLabel}'. Narrow the search to specific files or directories, or ask the user for approval. ${protection.reason}`,
+    [protection.matchedRule],
+    warnedFingerprints,
+    "path-protected",
+  );
+}
+
+function firstDiscoveryPathProtection(
+  policy: MergedGuardMePolicyConfig,
+  paths: readonly NormalizedPolicyPath[],
+  action: PolicyAction,
+): DiscoveryPathProtection | undefined {
+  for (const path of paths) {
+    const credential = firstCredentialLikePathDenial(policy, [path], action);
+    if (credential) {
+      return { matchedRule: credential.matchedRule, reason: credential.reason, path };
+    }
+    const hard = firstHardPathDenial(policy, [path], action);
+    if (hard) {
+      return { matchedRule: matchedRule(hard.rule), reason: hard.reason, path };
+    }
+    const deny = firstMatchingPathRule(policy.denyPaths, [path], action);
+    if (deny) {
+      return { matchedRule: matchedRule(deny), reason: deny.reason ?? `Path denied by ${deny.source.kind} policy.`, path };
+    }
+  }
+  return undefined;
+}
+
 function firstOutsidePathDefaultDenial(
   policy: MergedGuardMePolicyConfig,
   request: PolicyRequest,
@@ -466,7 +546,13 @@ function firstPathAllow(
     return allow;
   }
   if (action === "read" || action === "list") {
-    return firstMatchingPathRule(policy.readOnlyPaths, [path], action, true, "resolved");
+    // readOnlyPaths are protections first, read grants second: outside the
+    // project only rules anchored to an absolute or home-relative location
+    // grant reads, so `**/.git/**`-style globs cannot open the whole disk.
+    const readOnlyRules = path.isInsideProject
+      ? policy.readOnlyPaths
+      : policy.readOnlyPaths.filter((rule) => isAnchoredPolicyPathPattern(rule.pattern));
+    return firstMatchingPathRule(readOnlyRules, [path], action, true, "resolved");
   }
   return undefined;
 }
@@ -910,6 +996,7 @@ function normalizedPathFromTarget(target: PathTarget, cwd: string): NormalizedPo
     exists: target.exists ?? false,
     isInsideProject,
     hadTraversal: target.hadTraversal ?? false,
+    ...(target.discovery ? { discovery: true } : {}),
   };
 }
 

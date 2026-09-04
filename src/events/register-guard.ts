@@ -11,7 +11,6 @@ import {
   detectPackageScriptExecutions,
   extractExecutableCommandSegments,
   tokenizeShellCommand,
-  type ExecutableCommandSegment,
   type LocalScriptExecution,
   type PackageScriptExecution,
 } from "../policy/commands.ts";
@@ -172,10 +171,7 @@ export async function mapToolCallToPolicyRequest(
     if ("error" in normalized) {
       return { error: normalized.error };
     }
-    const discoveryTargets = await protectedShellDiscoveryTargets(commandClassification, normalized.targets);
-    if ("error" in discoveryTargets) {
-      return discoveryTargets;
-    }
+    const discoveryTargets = protectedShellDiscoveryTargets(commandClassification);
     const mutationTargets = await protectedMutationDescendantTargets(commandClassification.primaryAction, normalized.targets);
     return {
       request: {
@@ -183,7 +179,7 @@ export async function mapToolCallToPolicyRequest(
         action: commandClassification.primaryAction,
         cwd,
         command,
-        targets: [...normalized.targets, ...discoveryTargets.targets, ...mutationTargets],
+        targets: [...normalized.targets, ...discoveryTargets, ...mutationTargets],
         riskHint: commandClassification.risk,
       },
       commandClassification,
@@ -200,7 +196,7 @@ export async function mapToolCallToPolicyRequest(
   if ("error" in normalized) {
     return { error: normalized.error };
   }
-  const discoveryTargets = await protectedDiscoveryTargets(contract, event.input, normalized.targets);
+  const discoveryTargets = protectedDiscoveryTargets(contract, event.input);
   return {
     request: {
       toolName: event.toolName,
@@ -766,10 +762,7 @@ async function scriptCommandPolicyRequest(
   if ("error" in normalized) {
     return { error: normalized.error };
   }
-  const discoveryTargets = await protectedShellDiscoveryTargets(commandClassification, normalized.targets);
-  if ("error" in discoveryTargets) {
-    return discoveryTargets;
-  }
+  const discoveryTargets = protectedShellDiscoveryTargets(commandClassification);
   const mutationTargets = await protectedMutationDescendantTargets(commandClassification.primaryAction, normalized.targets);
   return {
     request: {
@@ -779,7 +772,7 @@ async function scriptCommandPolicyRequest(
       command: command.command,
       targets: [
         ...normalized.targets,
-        ...discoveryTargets.targets,
+        ...discoveryTargets,
         ...mutationTargets,
         { kind: "tool", raw: `${source.sourceKind}:${source.sourcePath ?? source.snippetLabel}:${command.lineStart}:${command.preview}` },
       ],
@@ -1195,94 +1188,23 @@ async function protectedMutationDescendantTargets(
   return protectedTargets;
 }
 
-async function protectedShellDiscoveryTargets(
+// Broad search commands themselves are allowed; only searches that hunt for
+// credential-like file names (e.g. `find -name '.env*'`, a grep glob of
+// `*secret*`) are flagged, and the evaluator approval-gates them.
+function protectedShellDiscoveryTargets(
   commandClassification: ReturnType<typeof classifyShellCommand>,
-  targets: readonly PathTarget[],
-): Promise<{ readonly targets: readonly PathTarget[] } | { readonly error: string }> {
+): readonly PathTarget[] {
   const protectedTargets: PathTarget[] = [];
   for (const segment of extractExecutableCommandSegments(commandClassification.rawCommand)) {
-    if (segment.commandName !== "find" && !(isGrepCommandName(segment.commandName) && shellGrepIsRecursive(segment.originalText))) {
+    if (segment.commandName !== "find") {
       continue;
     }
-    const segmentTargets = pathTargetsForCommandSegment(segment, targets);
-    if ("error" in segmentTargets) {
-      return segmentTargets;
-    }
-    if (segment.commandName === "find") {
-      protectedTargets.push(
-        ...(await protectedDiscoveryTargets(
-          "find",
-          { pattern: shellFindPattern(segment.originalText) ?? shellFindPattern(segment.normalizedText) ?? "*" },
-          segmentTargets.targets,
-        )),
-      );
-      continue;
-    }
-    protectedTargets.push(...(await protectedDiscoveryTargets("grep", {}, segmentTargets.targets)));
-  }
-  return { targets: dedupePathTargets(protectedTargets) };
-}
-
-function isGrepCommandName(commandName: string | undefined): boolean {
-  return commandName === "grep" || commandName === "ggrep" || commandName === "rg";
-}
-
-function pathTargetsForCommandSegment(
-  segment: ExecutableCommandSegment,
-  targets: readonly PathTarget[],
-): { readonly targets: readonly PathTarget[] } | { readonly error: string } {
-  const mappedTargets: PathTarget[] = [];
-  for (const rawTarget of segment.targetPaths) {
-    const matches = targets.filter((target) => target.raw === rawTarget);
-    if (matches.length === 0) {
-      return {
-        error: `GuardMe could not safely map discovery target '${redactSensitiveText(rawTarget)}' for shell segment '${redactSensitiveText(segment.normalizedText)}'. Blocking by default.`,
-      };
-    }
-    mappedTargets.push(...matches);
-  }
-  if (mappedTargets.length === 0) {
-    return {
-      error: `GuardMe found no safely normalized discovery targets for shell segment '${redactSensitiveText(segment.normalizedText)}'. Blocking by default.`,
-    };
-  }
-  return { targets: dedupePathTargets(mappedTargets) };
-}
-
-function dedupePathTargets(targets: readonly PathTarget[]): readonly PathTarget[] {
-  const seen = new Set<string>();
-  return targets.filter((target) => {
-    const key = target.canonicalPath ?? target.absolutePath ?? target.raw;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
-function shellGrepIsRecursive(command: string): boolean {
-  const tokens = tokenizeShellCommand(command);
-  const grepIndex = tokens.findIndex((token) => isGrepCommandName(basename(token).toLowerCase()));
-  if (grepIndex < 0) {
-    return false;
-  }
-  if (basename(tokens[grepIndex] ?? "").toLowerCase() === "rg") {
-    return !tokens.slice(grepIndex + 1).includes("--no-recursive");
-  }
-  for (const token of tokens.slice(grepIndex + 1)) {
-    if (token === "--") {
-      return false;
-    }
-    if (token === "--recursive" || isRecursiveShortGrepOption(token)) {
-      return true;
+    const pattern = shellFindPattern(segment.originalText) ?? shellFindPattern(segment.normalizedText);
+    if (pattern && isCredentialLikeDiscoveryPattern(pattern)) {
+      protectedTargets.push({ kind: "path", raw: pattern, discovery: true });
     }
   }
-  return false;
-}
-
-function isRecursiveShortGrepOption(token: string): boolean {
-  return token.startsWith("-") && !token.startsWith("--") && token.slice(1).toLowerCase().includes("r");
+  return protectedTargets;
 }
 
 function shellFindPattern(command: string): string | undefined {
@@ -1300,57 +1222,16 @@ function shellFindPattern(command: string): string | undefined {
   return undefined;
 }
 
-async function protectedDiscoveryTargets(
-  toolName: string,
-  input: unknown,
-  targets: readonly PathTarget[],
-): Promise<readonly PathTarget[]> {
+function protectedDiscoveryTargets(toolName: string, input: unknown): readonly PathTarget[] {
   if (toolName !== "grep" && toolName !== "find") {
     return [];
   }
 
   const scopedPattern = toolName === "grep" ? readStringProperty(input, "glob") : readStringProperty(input, "pattern");
   if (scopedPattern && isCredentialLikeDiscoveryPattern(scopedPattern)) {
-    return [{ kind: "path", raw: scopedPattern }];
+    return [{ kind: "path", raw: scopedPattern, discovery: true }];
   }
-  if (!discoveryPatternMayReadProtectedDescendants(toolName, scopedPattern)) {
-    return [];
-  }
-
-  const protectedTargets: PathTarget[] = [];
-  for (const target of targets) {
-    if (!target.exists || !target.canonicalPath) {
-      continue;
-    }
-    for (const childPath of await directProtectedChildren(target.canonicalPath)) {
-      protectedTargets.push({
-        kind: "path",
-        raw: childPath,
-        absolutePath: childPath,
-        canonicalPath: childPath,
-        exists: true,
-        projectRoot: target.projectRoot,
-        isInsideProject: target.isInsideProject,
-      });
-    }
-  }
-  return protectedTargets;
-}
-
-function discoveryPatternMayReadProtectedDescendants(toolName: string, scopedPattern: string | undefined): boolean {
-  if (toolName === "grep" && scopedPattern === undefined) {
-    return true;
-  }
-  const normalized = scopedPattern?.trim();
-  return (
-    normalized === undefined ||
-    normalized === "" ||
-    normalized === "*" ||
-    normalized === "**" ||
-    normalized === "**/*" ||
-    normalized === "./**" ||
-    normalized === "./**/*"
-  );
+  return [];
 }
 
 const MAX_PROTECTED_MUTATION_SCAN_DEPTH = 8;
@@ -1409,34 +1290,6 @@ async function readDirectoryDirents(directoryPath: string): Promise<Dirent<strin
     return await readdir(directoryPath, { withFileTypes: true });
   } catch {
     return [];
-  }
-}
-
-async function directProtectedChildren(directoryPath: string): Promise<readonly string[]> {
-  const entries = await readDirectoryEntries(directoryPath);
-  const protectedChildren = entries.filter(isProtectedDiscoveryEntry).map((entry) => join(directoryPath, entry));
-  if (entries.includes(".config") && (await directoryContains(join(directoryPath, ".config"), "gcloud"))) {
-    protectedChildren.push(join(directoryPath, ".config", "gcloud"));
-  }
-  if (entries.includes(".docker") && (await directoryContains(join(directoryPath, ".docker"), "config.json"))) {
-    protectedChildren.push(join(directoryPath, ".docker", "config.json"));
-  }
-  return protectedChildren;
-}
-
-async function readDirectoryEntries(directoryPath: string): Promise<readonly string[]> {
-  try {
-    return await readdir(directoryPath);
-  } catch {
-    return [];
-  }
-}
-
-async function directoryContains(directoryPath: string, entryName: string): Promise<boolean> {
-  try {
-    return (await readdir(directoryPath)).includes(entryName);
-  } catch {
-    return false;
   }
 }
 

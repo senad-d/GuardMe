@@ -58,6 +58,16 @@ test("built-in default policy includes approved hard-protection sections", () =>
   assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "env"));
   assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "printenv"));
   assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "printenv *"));
+  assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "gh auth token*"));
+  assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "git credential*"));
+  assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "npm config get *_authToken*"));
+  assert.ok(defaults.dangerousCommands.some((rule) => rule.pattern === "git apply*"));
+  assert.ok(defaults.dangerousCommands.some((rule) => rule.pattern === "git * core.hooksPath*"));
+  assert.ok(defaults.dangerousCommands.some((rule) => rule.pattern === "npm pkg set*"));
+  assert.ok(defaults.zeroAccessPaths.some((rule) => rule.pattern === "~/.pi/agent/auth.json"));
+  assert.ok(defaults.readOnlyPaths.some((rule) => rule.pattern === "**/.pi/**"));
+  assert.ok(!defaults.readOnlyPaths.some((rule) => rule.pattern === "**.pi/**"));
+  assert.ok(!defaults.allowCommands.some((rule) => rule.pattern === "if *"));
   assert.ok(defaults.protectedCredentialPaths.some((rule) => rule.pattern === "~/.aws/**"));
   assert.ok(!defaults.protectedCredentialPaths.some((rule) => rule.pattern.includes("*credential*")));
   assert.ok(!defaults.protectedCredentialPaths.some((rule) => rule.pattern.includes("*secret*")));

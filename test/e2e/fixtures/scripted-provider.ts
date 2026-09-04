@@ -106,7 +106,10 @@ function countScenarioToolCalls(context: any, scenario: string): number {
 }
 
 function agentApprovalToolCall(): ScriptedToolCall {
-  return { name: "bash", arguments: { command: "awk 'BEGIN { print \"guardme agent automatic\" }'" } };
+  return {
+    name: "bash",
+    arguments: { command: "rm -rf approval-target/file.txt && printf 'guardme agent automatic\\n'" },
+  };
 }
 
 function latestScenarioName(context: any): string | undefined {
@@ -166,10 +169,12 @@ function toolCallForScenario(scenario: string): ScriptedToolCall | undefined {
       return { name: "bash", arguments: { command: "aws sts get-caller-identity" } };
     case "hard-deny-cloud-cli-wrapper":
       return { name: "bash", arguments: { command: "env -S \"aws sts get-caller-identity\"" } };
-    case "broad-discovery-protected-descendant":
-      return { name: "grep", arguments: { path: ".", pattern: "GUARDME_E2E_FAKE_TOKEN" } };
-    case "broad-find-protected-descendant":
+    case "broad-content-search-allowed":
+      return { name: "grep", arguments: { path: ".", pattern: "GuardMe e2e fixture" } };
+    case "broad-find-allowed":
       return { name: "find", arguments: { path: ".", pattern: "*" } };
+    case "credential-name-discovery":
+      return { name: "find", arguments: { path: ".", pattern: "*secret*" } };
     case "hard-deny-env-delete":
       return { name: "bash", arguments: { command: "rm -rf .env" } };
     case "protected-metadata-delete":
@@ -197,7 +202,7 @@ function toolCallForScenario(scenario: string): ScriptedToolCall | undefined {
     case "local-script-exec-denied-content":
       return { name: "bash", arguments: { command: "bash scripts/unsafe.sh" } };
     case "policy-missing-generic-command":
-      return { name: "bash", arguments: { command: "awk 'BEGIN { print \"guardme generic\" }'" } };
+      return { name: "bash", arguments: { command: "expr 20 + 22" } };
     case "approval-dangerous-delete":
       return { name: "bash", arguments: { command: "rm -rf approval-target/file.txt" } };
     case "approval-dangerous-deny":

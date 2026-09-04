@@ -27,6 +27,8 @@ export interface NormalizedPolicyPath {
   readonly isInsideProject: boolean;
   readonly hadTraversal: boolean;
   readonly nearestExistingParent?: string;
+  /** Mirrors PathTarget.discovery for targets synthesized by discovery scans. */
+  readonly discovery?: boolean;
 }
 
 export interface PolicyPathMatchOptions {
@@ -103,6 +105,17 @@ export function expandHome(pathValue: string, homeDir = homedir()): string {
     return join(resolve(homeDir), pathValue.slice(2));
   }
   return pathValue;
+}
+
+/**
+ * True when a policy pattern is anchored to an absolute or home-relative
+ * location. Only anchored readOnlyPaths rules may grant outside-project
+ * reads: relative and `**`-prefixed globs would otherwise match absolute
+ * path candidates anywhere on disk.
+ */
+export function isAnchoredPolicyPathPattern(pattern: string): boolean {
+  const stripped = stripPiPathPrefix(pattern.trim());
+  return stripped.startsWith("~") || isAbsolute(stripped);
 }
 
 export function isPathInside(parentPath: string, childPath: string): boolean {

@@ -464,14 +464,10 @@ test("bash tool calls are classified and blocked or allowed by policy", async ()
   assert.match(globCredential?.reason ?? "", /Credential|Environment files/i);
   assert.equal(outsideRead?.block, true);
   assert.match(outsideRead?.reason ?? "", /Outside-project read requires/);
-  assert.equal(broadShellGrep?.block, true);
-  assert.match(broadShellGrep?.reason ?? "", /Credential-like path|Environment files|Credential/i);
-  assert.equal(absoluteBroadShellGrep?.block, true);
-  assert.match(absoluteBroadShellGrep?.reason ?? "", /Credential-like path|Environment files|Credential/i);
-  assert.equal(compoundBroadShellGrep?.block, true);
-  assert.match(compoundBroadShellGrep?.reason ?? "", /Credential-like path|Environment files|Credential/i);
-  assert.equal(broadShellFind?.block, true);
-  assert.match(broadShellFind?.reason ?? "", /Credential-like path|Environment files|Credential/i);
+  assert.equal(broadShellGrep, undefined);
+  assert.equal(absoluteBroadShellGrep, undefined);
+  assert.equal(compoundBroadShellGrep, undefined);
+  assert.equal(broadShellFind, undefined);
   assert.equal(safeShellFind, undefined);
   assert.equal(discardedFindErrors, undefined);
   assert.equal(wildcardAllowCompound?.block, true);
@@ -531,6 +527,35 @@ test("compound discovery segments inspect only their own roots", async () => {
   assert.equal(findResult, undefined);
   assert.equal(grepResult, undefined);
   assert.equal(rgResult, undefined);
+  stopGuardMeSession(ctx);
+});
+
+test("broad content searches are allowed while credential-seeking discovery patterns are approval-gated", async () => {
+  const { cwd, ctx } = await createGuardContext();
+  await writeFile(join(cwd, ".env"), "SECRET=redacted\n", "utf8");
+  await writeFile(join(cwd, "notes.txt"), "TODO\n", "utf8");
+
+  const broadSearch = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rg TODO" } }, ctx);
+  const scopedSearch = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rg TODO notes.txt" } }, ctx);
+  const directRead = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "cat .env" } }, ctx);
+  const envNameHunt = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find . -name '.env*'" } }, ctx);
+  const credentialHuntFirst = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find . -name '*secret*'" } }, ctx);
+  const credentialHuntRepeat = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find . -name '*secret*'" } }, ctx);
+  const credentialGlobTool = await evaluateGuardedToolCall({ toolName: "grep", input: { pattern: "SECRET", glob: "*secret*" } }, ctx);
+
+  assert.equal(broadSearch, undefined);
+  assert.equal(scopedSearch, undefined);
+  assert.equal(directRead?.block, true);
+  assert.match(directRead?.reason ?? "", /Credential-like file read/);
+  assert.equal(envNameHunt?.block, true);
+  assert.match(envNameHunt?.reason ?? "", /Credential-like file reference/);
+  assert.equal(credentialHuntFirst?.block, true);
+  assert.match(credentialHuntFirst?.reason ?? "", /traverse protected path/);
+  assert.match(credentialHuntFirst?.reason ?? "", /GuardMe coaching/);
+  assert.equal(credentialHuntRepeat?.block, true);
+  assert.match(credentialHuntRepeat?.reason ?? "", /requires user approval|WARNINGS & DECISIONS/);
+  assert.equal(credentialGlobTool?.block, true);
+  assert.match(credentialGlobTool?.reason ?? "", /traverse protected path/);
   stopGuardMeSession(ctx);
 });
 
@@ -827,15 +852,12 @@ test("grep find and ls are mapped as read/list discovery actions", async () => {
 
   assert.equal(grep?.block, true);
   assert.equal(envExampleGrep, undefined);
-  assert.equal(broadGrep?.block, true);
-  assert.match(broadGrep?.reason ?? "", /Credential-like path|Environment files|Credential/i);
-  assert.equal(broadShellGgrep?.block, true);
-  assert.match(broadShellGgrep?.reason ?? "", /Credential-like path|Environment files|Credential/i);
+  assert.equal(broadGrep, undefined);
+  assert.equal(broadShellGgrep, undefined);
   assert.equal(scopedGrep, undefined);
   assert.equal(credentialGlobGrep?.block, true);
-  assert.match(credentialGlobGrep?.reason ?? "", /Credential-like path|Credential/i);
-  assert.equal(broadFind?.block, true);
-  assert.match(broadFind?.reason ?? "", /Credential-like path|Environment files|Credential/i);
+  assert.match(credentialGlobGrep?.reason ?? "", /traverse protected path.*Credential|Credential-like/i);
+  assert.equal(broadFind, undefined);
   assert.equal(scopedFind, undefined);
   assert.equal(find?.block, true);
   assert.match(find?.reason ?? "", /Outside-project list requires/);

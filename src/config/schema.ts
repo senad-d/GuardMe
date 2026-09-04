@@ -135,6 +135,7 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "tail *", reason: "Project file reads after path protections pass." },
       { pattern: "wc *", reason: "Project file reads after path protections pass." },
       { pattern: "grep *", reason: "Project search after path protections pass." },
+      { pattern: "ggrep *", reason: "Project search after path protections pass." },
       { pattern: "find *", reason: "Project discovery after path protections pass." },
       { pattern: "rg *", reason: "Project discovery after path protections pass." },
       { pattern: "npm *", reason: "Common project npm command." },
@@ -185,7 +186,6 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "grype *", reason: "Common project grype command." },
       { pattern: "snyk *", reason: "Common project snyk command." },
       { pattern: "ps *", reason: "Common project ps command." },
-      { pattern: "if *", reason: "Common project if command." },
       { pattern: "cp *", reason: "Common project cp command." },
       { pattern: "mv *", reason: "Common project mv command." },
       { pattern: "test *", reason: "Common project test command." },
@@ -267,6 +267,11 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
         reason: "SSH keys and config are never available to LLM tool calls.",
       },
       {
+        pattern: "~/.pi/agent/auth.json",
+        actions: ALL_PATH_ACTIONS,
+        reason: "Pi credentials are never available to LLM tool calls.",
+      },
+      {
         pattern: "~/.gnupg/**",
         actions: ALL_PATH_ACTIONS,
         reason: "GPG keys and trust material are never available to LLM tool calls.",
@@ -279,7 +284,7 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
     ],
     readOnlyPaths: [
       {
-        pattern: "**.pi/**",
+        pattern: "**/.pi/**",
         actions: ["read", "list"],
         reason: "Project GuardMe policy should be changed through /guardme or explicit user edits.",
       },
@@ -360,6 +365,9 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "env", reason: "Bare 'env' prints all environment variables, which may contain secrets." },
       { pattern: "printenv", reason: "'printenv' prints environment variables, which may contain secrets." },
       { pattern: "printenv *", reason: "'printenv' prints environment variables, which may contain secrets." },
+      { pattern: "gh auth token*", reason: "'gh auth token' prints the GitHub OAuth token." },
+      { pattern: "git credential*", reason: "git credential helpers print stored credentials." },
+      { pattern: "npm config get *_authToken*", reason: "npm config can print registry auth tokens." },
     ],
     dangerousCommands: [
       { pattern: "rm -rf *", reason: "Recursive force deletion requires coaching or user approval." },
@@ -368,6 +376,10 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "git clean -f*", reason: "Forced git clean can remove untracked work." },
       { pattern: "find * -delete", reason: "find -delete can remove many files." },
       { pattern: "rsync * --delete*", reason: "rsync --delete can remove destination files." },
+      { pattern: "git apply*", reason: "git apply writes files without content scanning or path protections." },
+      { pattern: "git * core.hooksPath*", reason: "Custom git hook paths can run arbitrary code on later git commands." },
+      { pattern: "npm pkg set*", reason: "npm pkg set edits package.json scripts without content scanning." },
+      { pattern: "npm set-script*", reason: "npm set-script edits package.json scripts without content scanning." },
     ],
     protectedCredentialPaths: [
       { pattern: "~/.aws/**", actions: ALL_PATH_ACTIONS, reason: "AWS credentials are protected." },
