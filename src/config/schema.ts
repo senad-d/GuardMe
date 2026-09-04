@@ -651,6 +651,28 @@ function validateRuleSection(
 
 const KNOWN_RULE_KEYS: ReadonlySet<string> = new Set(["pattern", "actions", "reason"]);
 
+function reportUnknownRuleKeys(
+  section: PolicyConfigSection,
+  rawRule: Record<string, unknown>,
+  source: RuleSource,
+  diagnostics: PolicyDiagnostic[],
+): void {
+  for (const key of Object.keys(rawRule)) {
+    if (!KNOWN_RULE_KEYS.has(key)) {
+      const hint = key === "action" ? " Did you mean 'actions'? Without 'actions', the rule applies to every action." : "";
+      diagnostics.push(configDiagnostic("warning", "config.unknownRuleKey", `Unknown rule key '${key}' in '${section}' ignored.${hint}`, source));
+    }
+  }
+}
+
+function createValidatedRule(pattern: string, actions: readonly PolicyAction[], reason: unknown): GuardMeRule {
+  return {
+    pattern: pattern.trim(),
+    ...(actions.length > 0 ? { actions } : {}),
+    ...(typeof reason === "string" ? { reason } : {}),
+  };
+}
+
 function validateRule(
   section: PolicyConfigSection,
   rawRule: unknown,
@@ -666,12 +688,7 @@ function validateRule(
     return undefined;
   }
 
-  for (const key of Object.keys(rawRule)) {
-    if (!KNOWN_RULE_KEYS.has(key)) {
-      const hint = key === "action" ? " Did you mean 'actions'? Without 'actions', the rule applies to every action." : "";
-      diagnostics.push(configDiagnostic("warning", "config.unknownRuleKey", `Unknown rule key '${key}' in '${section}' ignored.${hint}`, source));
-    }
-  }
+  reportUnknownRuleKeys(section, rawRule, source, diagnostics);
 
   if (typeof rawRule.pattern !== "string" || rawRule.pattern.trim() === "") {
     diagnostics.push(configDiagnostic("error", "config.missingPattern", `Rule in '${section}' must include a non-empty pattern.`, source));
@@ -698,11 +715,7 @@ function validateRule(
     diagnostics.push(configDiagnostic("error", "config.invalidReason", `Rule reason in '${section}' must be a string.`, source));
   }
 
-  return {
-    pattern: rawRule.pattern.trim(),
-    ...(actions.length > 0 ? { actions } : {}),
-    ...(typeof reason === "string" ? { reason } : {}),
-  };
+  return createValidatedRule(rawRule.pattern, actions, reason);
 }
 
 const DENY_DIRECTION_SECTION_SET: ReadonlySet<PolicyConfigSection> = new Set([

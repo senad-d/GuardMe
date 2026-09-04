@@ -268,6 +268,37 @@ function extractMakefileRecipes(content: string, sourcePath: string | undefined)
 }
 
 // `VAR := $(shell ...)` runs at Makefile parse time, before any recipe.
+function findMakefileShellExpansionStart(line: string, searchIndex: number): number | undefined {
+  let start = line.indexOf("$(shell", searchIndex);
+  while (start >= 0) {
+    const bodyStart = start + "$(shell".length;
+    if (isScriptWhitespace(line[bodyStart] ?? "")) {
+      return start;
+    }
+    start = line.indexOf("$(shell", bodyStart);
+  }
+  return undefined;
+}
+
+function findMakefileShellExpansionEnd(line: string, bodyStart: number): number {
+  let depth = 1;
+  let end = bodyStart;
+  while (end < line.length && depth > 0) {
+    const character = line[end];
+    if (character === "(") {
+      depth += 1;
+    }
+    if (character === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return end;
+      }
+    }
+    end += 1;
+  }
+  return end;
+}
+
 function makefileShellExpansionCommands(
   line: string,
   lineNumber: number,
@@ -276,30 +307,12 @@ function makefileShellExpansionCommands(
   const commands: ExtractedScriptCommand[] = [];
   let searchIndex = 0;
   while (searchIndex < line.length) {
-    const start = line.indexOf("$(shell", searchIndex);
-    if (start < 0) {
+    const start = findMakefileShellExpansionStart(line, searchIndex);
+    if (start === undefined) {
       break;
     }
     const bodyStart = start + "$(shell".length;
-    if (!isScriptWhitespace(line[bodyStart] ?? "")) {
-      searchIndex = bodyStart;
-      continue;
-    }
-    let depth = 1;
-    let end = bodyStart;
-    while (end < line.length && depth > 0) {
-      const character = line[end];
-      if (character === "(") {
-        depth += 1;
-      }
-      if (character === ")") {
-        depth -= 1;
-        if (depth === 0) {
-          break;
-        }
-      }
-      end += 1;
-    }
+    const end = findMakefileShellExpansionEnd(line, bodyStart);
     const command = line.slice(bodyStart, end).trim();
     if (shellLineLooksEvaluable(command)) {
       commands.push(commandRecord(command, lineNumber, "makefile-recipe", "Makefile shell expansion", sourcePath));

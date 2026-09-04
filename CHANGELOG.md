@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.9 - Unreleased
+
+- Hardened shell wrapper unwrapping so `bash -c` and `env -S` forms keep their outer redirection targets; credential redirections such as `bash -c 'cat' < ~/.ssh/id_rsa` are hard-denied and redirected writes are classified and policy-checked.
+- Detected single `&` and `|&` compounds so an exact whole-command allow cannot cover background compounds like `command git status & rm -rf build`.
+- Matched allow-direction path rules against resolved paths only, so `..` traversal and symlinked inputs cannot satisfy allow rules written for other locations; deny rules still match raw input.
+- Treated shell targets containing unexpanded `$VAR`, backticks, or `~user` as outside-project so they require an explicit allow or approval instead of the default inside-project allow.
+- Tokenized `>|`, `1>|`, and `2>|` clobber redirections so they classify exactly like their plain redirection forms.
+- Detected `source ./script.sh` and `. ./script.sh` as local script executions that receive pre-execution content inspection.
+- Extended destructive inline-code detection to `python2`/`python3`/`perl`/`ruby`/`php` and additional deletion markers such as `rm_rf`, `unlinkSync`, and `os.remove`.
+- Protected `.git/**` from direct writes, edits, and shell redirections in the built-in policy while keeping reads and `git` commands unaffected.
+- Used word-boundary credential keyword matching so files like `src/tokenizer.ts` are no longer hard-denied while `api-tokens.txt` and `my-secret.yaml` still are.
+- Extracted CI `run :` and quoted `"run":` step keys plus Makefile `$(shell ...)` parse-time expansions for script-content inspection.
+- Refused to save project rules from the approval flow in untrusted projects, where the rule would never load, and explained how to proceed.
+- Fixed policy rule appends landing inside the wrong YAML section when an indented rule key shadows a section name.
+- Reported unknown rule keys (including the `action:` vs `actions:` typo that silently broadened rules) and merged duplicate top-level sections instead of silently discarding the earlier block.
+- Made deny-direction rules with invalid `actions` fail safe to all actions instead of dropping the protection entirely.
+- Compacted oversized GuardMe state files during appends so warned-once history recovers automatically instead of failing permanently past the 1 MB read cap.
+- Consumed agent-mode automatic approvals before the audit write so concurrent identical calls in the same turn cannot double-spend one approval.
+- Preserved existing YAML comments and formatting when saving approval decisions, and skipped the write entirely when an identical rule already exists.
+- Failed closed for alias-guarded tools when GuardMe session state is missing, matching built-in tool behavior.
+- Redefined `approvalMode: agent` to never show approval UI in any run mode, TUI included: blocked attempts return a compact agent-facing notification (action, reason, coaching, next step) and only the identical later-turn retry receives the single automatic allow-once.
+- Fixed the TUI-capture e2e snapshot fixture missing the `approvalMode` and `guardedTools` fields.
+
 ## 0.1.2 - Unreleased
 
 - Made GuardMe custom selection screens use Pi's injected keybindings, and bounded the approval view by terminal height with compact decisions, selected details, scoped matched-rule truncation, and resize-aware render caching.

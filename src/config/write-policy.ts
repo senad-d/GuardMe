@@ -80,62 +80,67 @@ export interface PolicyWriteTargetValidationResult {
   readonly reason?: string;
 }
 
+type PreparedDecisionRule =
+  | { readonly ok: true; readonly rule: { readonly section: WritableRuleSection; readonly rule: GuardMeRule } }
+  | { readonly ok: false; readonly result: PersistUserDecisionRuleResult };
+
+function rejectedDecisionResult(
+  path: string,
+  scope: PolicyWriteScope,
+  code: string,
+  message: string,
+  reason: string,
+): PersistUserDecisionRuleResult {
+  return {
+    saved: false,
+    path,
+    diagnostics: [{ severity: "error", code, message, source: { kind: scope === "global" ? "global" : "local", path }, path }],
+    reason,
+  };
+}
+
+function prepareDecisionRule(options: PersistUserDecisionRuleOptions, path: string): PreparedDecisionRule {
+  if (isAllowDecision(options.decision) && options.hardDenied) {
+    return {
+      ok: false,
+      result: rejectedDecisionResult(
+        path,
+        options.scope,
+        "policyWrite.hardDenyAllowRejected",
+        "GuardMe refused to save an allow rule for a hard-denied action.",
+        "Hard-denied actions cannot be converted into allow rules.",
+      ),
+    };
+  }
+
+  const rule = ruleFromDecision(options);
+  if (!rule) {
+    return {
+      ok: false,
+      result: rejectedDecisionResult(
+        path,
+        options.scope,
+        "policyWrite.unsupportedDecision",
+        `Unsupported GuardMe user decision '${options.decision}'.`,
+        "Unsupported GuardMe user decision.",
+      ),
+    };
+  }
+  if ("rejected" in rule) {
+    return { ok: false, result: rejectedDecisionResult(path, options.scope, rule.code, rule.message, rule.reason) };
+  }
+  return { ok: true, rule };
+}
+
 export async function persistUserDecisionRule(
   options: PersistUserDecisionRuleOptions,
 ): Promise<PersistUserDecisionRuleResult> {
   const path = options.policyPath ?? policyPathForScope(options.scope, options.cwd, options.homeDir);
-  if (isAllowDecision(options.decision) && options.hardDenied) {
-    return {
-      saved: false,
-      path,
-      diagnostics: [
-        {
-          severity: "error",
-          code: "policyWrite.hardDenyAllowRejected",
-          message: "GuardMe refused to save an allow rule for a hard-denied action.",
-          source: { kind: options.scope === "global" ? "global" : "local", path },
-          path,
-        },
-      ],
-      reason: "Hard-denied actions cannot be converted into allow rules.",
-    };
+  const preparedRule = prepareDecisionRule(options, path);
+  if (!preparedRule.ok) {
+    return preparedRule.result;
   }
-
-  const ruleResult = ruleFromDecision(options);
-  if (!ruleResult) {
-    return {
-      saved: false,
-      path,
-      diagnostics: [
-        {
-          severity: "error",
-          code: "policyWrite.unsupportedDecision",
-          message: `Unsupported GuardMe user decision '${options.decision}'.`,
-          source: { kind: options.scope === "global" ? "global" : "local", path },
-          path,
-        },
-      ],
-      reason: "Unsupported GuardMe user decision.",
-    };
-  }
-  if ("rejected" in ruleResult) {
-    return {
-      saved: false,
-      path,
-      diagnostics: [
-        {
-          severity: "error",
-          code: ruleResult.code,
-          message: ruleResult.message,
-          source: { kind: options.scope === "global" ? "global" : "local", path },
-          path,
-        },
-      ],
-      reason: ruleResult.reason,
-    };
-  }
-
-  const rule = ruleResult;
+  const rule = preparedRule.rule;
 
   const safety = await validatePolicyWriteTarget({ cwd: options.cwd, homeDir: options.homeDir, path, scope: options.scope });
   if (!safety.safe) {
