@@ -91,7 +91,7 @@ export async function loadGuardMeConfig(options: LoadGuardMeConfigOptions): Prom
   const builtInConfig = createBuiltInDefaultPolicy();
   const globalFile = await loadPolicyConfigFile(paths.globalPolicyPath, "global");
   const localFile = options.loadLocalPolicy === false
-    ? skippedLocalPolicyConfigFile(paths.localPolicyPath)
+    ? await skippedLocalPolicyConfigFile(paths.localPolicyPath)
     : await loadPolicyConfigFile(paths.localPolicyPath, "local");
   const files = [globalFile, localFile];
   const merged = mergePolicyConfigs([
@@ -114,23 +114,39 @@ export async function loadGuardMeConfig(options: LoadGuardMeConfigOptions): Prom
   };
 }
 
-function skippedLocalPolicyConfigFile(path: string): PolicyConfigFileResult {
+async function skippedLocalPolicyConfigFile(path: string): Promise<PolicyConfigFileResult> {
+  // Warn only when a project policy file actually exists: its rules,
+  // approvalMode, and guardedTools are silently ignored until the project is
+  // trusted, which otherwise looks like GuardMe dropping configuration.
+  const exists = await localPolicyFileExists(path);
   return {
     path,
     found: false,
     skipped: true,
     sourceKind: "local",
     config: createEmptyPolicyConfig(),
-    diagnostics: [
-      {
-        severity: "info",
-        code: "config.localPolicySkippedUntrustedProject",
-        message: "Project is not trusted; local GuardMe policy was not loaded.",
-        source: { kind: "local", path },
-        path,
-      },
-    ],
+    diagnostics: exists
+      ? [
+          {
+            severity: "warning",
+            code: "config.localPolicySkippedUntrustedProject",
+            message:
+              "Project is not trusted: .pi/agent/guardme.yaml exists but was ignored. Its rules, approvalMode, and guardedTools do not apply until the project is trusted from /guardme.",
+            source: { kind: "local", path },
+            path,
+          },
+        ]
+      : [],
   };
+}
+
+async function localPolicyFileExists(path: string): Promise<boolean> {
+  try {
+    const stats = await stat(path);
+    return stats.isFile();
+  } catch {
+    return false;
+  }
 }
 
 async function inspectPolicyFileBeforeRead(

@@ -425,3 +425,25 @@ test("deny-direction rules with invalid actions fail safe to all actions", async
   assert.equal(loaded.config.denyPaths[0]?.actions, undefined);
   assert.equal(loaded.config.allowPaths.length, 0);
 });
+
+test("untrusted projects warn only when a local policy file exists", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-schema-untrusted-warn-"));
+  const cwd = join(root, "project");
+  await mkdir(cwd, { recursive: true });
+
+  const withoutFile = await loadGuardMeConfig({ cwd, homeDir: join(root, "home"), loadLocalPolicy: false });
+  assert.equal(
+    withoutFile.diagnostics.some((diagnostic) => diagnostic.code === "config.localPolicySkippedUntrustedProject"),
+    false,
+  );
+
+  await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), "version: 1\napprovalMode: agent\n", "utf8");
+  const withFile = await loadGuardMeConfig({ cwd, homeDir: join(root, "home"), loadLocalPolicy: false });
+  const warning = withFile.diagnostics.find((diagnostic) => diagnostic.code === "config.localPolicySkippedUntrustedProject");
+
+  assert.ok(warning);
+  assert.equal(warning.severity, "warning");
+  assert.match(warning.message, /not trusted/i);
+  assert.equal(withFile.config.approvalMode, "auto");
+});

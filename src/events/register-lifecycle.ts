@@ -66,6 +66,7 @@ export async function startGuardMeSession(
     agentApprovals: {
       currentTurn: 0,
       blockedTurnByFingerprint: new Map(),
+      sessionAllowedFingerprints: new Set(),
     },
     diagnostics,
     degraded,

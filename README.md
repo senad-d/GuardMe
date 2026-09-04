@@ -265,7 +265,7 @@ Managed child processes can explicitly opt into later-turn automatic approval:
 GUARDME_APPROVAL_MODE=agent pi --mode json ...
 ```
 
-`agent` approvals are consumed after one use, never save policy rules, and are recorded as `automatic-decision` audit entries rather than user decisions. Hard denials, explicit command/path deny rules, protected credentials/paths, and outside-project denials are never eligible. Persisted warning state cannot skip the first in-process block, and duplicate calls in one assistant response cannot satisfy the later-turn requirement.
+`agent` approvals never save policy rules and are recorded as `automatic-decision` audit entries rather than user decisions. Dangerous actions are approved once per block/retry cycle, while an approved policy-missing command stays allowed for the rest of the session (each reuse is still audited). Hard denials, explicit command/path deny rules, protected credentials/paths, and outside-project denials are never eligible. Persisted warning state cannot skip the first in-process block, and duplicate calls in one assistant response cannot satisfy the later-turn requirement.
 
 Pi exposes the current run mode but no reliable subagent marker, so GuardMe never auto-detects children or enables `agent` mode for them. Set `GUARDME_APPROVAL_MODE=agent` only in explicitly managed child processes. Use `GUARDME_APPROVAL_MODE=block` to force all children to fail closed, or `GUARDME_APPROVAL_MODE=interactive` only when an RPC controller explicitly completes the extension approval round trip. Invalid YAML or environment values report diagnostics and resolve safely to `block` for that source/override.
 

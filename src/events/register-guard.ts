@@ -42,7 +42,9 @@ import {
   formatGuardMeStatus,
   getGuardMeSessionState,
   getLastKnownGuardedTools,
+  hasSessionAgentAllow,
   recordAgentApprovalBlock,
+  recordSessionAgentAllow,
   recordGuardMeGuidance,
   setGuardMeSessionState,
   type GuardMeSessionState,
@@ -72,7 +74,9 @@ type PersistedPolicyTarget = "none" | "local-yaml" | "global-yaml";
 type StateFileSourceKind = "global" | "local";
 
 const AGENT_APPROVAL_NEXT_STEP =
-  "If this exact action is still necessary, retry it once in a later agent turn. Duplicate calls in the current assistant response remain blocked, and every automatic approval is consumed after one use.";
+  "If this exact action is still necessary, retry it once in a later agent turn. Duplicate calls in the current assistant response remain blocked. An approved policy-missing command stays allowed for this session; dangerous actions are approved once per retry cycle.";
+const AGENT_SESSION_ALLOW_AUDIT_REASON =
+  "GuardMe agent mode allowed this policy-missing command again under the session allowance granted by its earlier automatic approval.";
 const AGENT_APPROVAL_BLOCK_REASON =
   "GuardMe approvalMode 'agent' blocks the first attempt in this process and duplicate attempts from the same agent turn. An identical fingerprint may receive one automatic allow-once only in a later agent turn.";
 
@@ -270,6 +274,12 @@ async function resolveAgentModeApproval(
   }
 
   const fingerprint = decision.fingerprint;
+  if (hasSessionAgentAllow(fingerprint)) {
+    if (!(await appendAutomaticApprovalDecisionRecord(state, fingerprint, AGENT_SESSION_ALLOW_AUDIT_REASON))) {
+      return "blocked";
+    }
+    return "allowed";
+  }
   if (agentApprovalEligibility(fingerprint) !== "later-turn") {
     recordAgentApprovalBlock(fingerprint);
     return "blocked";
@@ -281,6 +291,12 @@ async function resolveAgentModeApproval(
   if (!(await appendAutomaticApprovalDecisionRecord(state, fingerprint))) {
     deferAgentApproval(fingerprint);
     return "blocked";
+  }
+
+  // Policy-missing commands stay allowed for the rest of the session after
+  // one automatic approval; dangerous actions remain one-use per retry cycle.
+  if (isCommandDefaultDenyDecision(decision)) {
+    recordSessionAgentAllow(fingerprint);
   }
 
   return "allowed";
@@ -954,6 +970,7 @@ export async function appendApprovalDecisionRecord(
 export async function appendAutomaticApprovalDecisionRecord(
   state: GuardMeSessionState,
   fingerprint: string,
+  reason = "GuardMe agent mode automatically allowed this identical later-turn retry once.",
 ): Promise<boolean> {
   const globalDecision = !state.projectTrusted;
   const path = globalDecision ? state.warnings.paths.globalStatePath : state.warnings.paths.localStatePath;
@@ -962,7 +979,7 @@ export async function appendAutomaticApprovalDecisionRecord(
       fingerprint,
       scope: globalDecision ? "global" : "project",
       cwd: state.cwd,
-      reason: "GuardMe agent mode automatically allowed this identical later-turn retry once.",
+      reason,
     });
     const currentState = currentSessionStateFor(state);
     if (!currentState) {

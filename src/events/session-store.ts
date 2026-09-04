@@ -19,6 +19,12 @@ export interface GuardMeGuidanceEvent {
 export interface AgentApprovalState {
   readonly currentTurn: number;
   readonly blockedTurnByFingerprint: ReadonlyMap<string, number>;
+  /**
+   * Fingerprints of policy-missing commands that already received one
+   * automatic later-turn approval this session. They stay allowed for the
+   * rest of the session; dangerous actions never enter this set.
+   */
+  readonly sessionAllowedFingerprints: ReadonlySet<string>;
 }
 
 export type AgentApprovalEligibility = "unseen" | "same-turn" | "later-turn";
@@ -113,6 +119,25 @@ export function deferAgentApproval(fingerprint: string): void {
       blockedTurnByFingerprint,
     },
   };
+}
+
+export function recordSessionAgentAllow(fingerprint: string): void {
+  if (!currentSessionState || currentSessionState.agentApprovals.sessionAllowedFingerprints.has(fingerprint)) {
+    return;
+  }
+  const sessionAllowedFingerprints = new Set(currentSessionState.agentApprovals.sessionAllowedFingerprints);
+  sessionAllowedFingerprints.add(fingerprint);
+  currentSessionState = {
+    ...currentSessionState,
+    agentApprovals: {
+      ...currentSessionState.agentApprovals,
+      sessionAllowedFingerprints,
+    },
+  };
+}
+
+export function hasSessionAgentAllow(fingerprint: string): boolean {
+  return currentSessionState?.agentApprovals.sessionAllowedFingerprints.has(fingerprint) ?? false;
 }
 
 export function consumeAgentApproval(fingerprint: string): void {

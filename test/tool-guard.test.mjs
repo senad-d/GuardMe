@@ -957,3 +957,26 @@ test("agent mode in TUI blocks without prompting and allows the later-turn retry
   assert.equal(interactiveCalls, 0);
   stopGuardMeSession(ctx);
 });
+
+test("agent mode grants a session allowance for approved policy-missing commands", async () => {
+  const { home, cwd, ctx } = await createGuardContext({ environment: { GUARDME_APPROVAL_MODE: "agent" } });
+  const statePaths = resolveStatePaths(cwd, home);
+  const call = { toolName: "bash", input: { command: "unknown-tool run" } };
+
+  const first = await evaluateGuardedToolCall(call, ctx);
+  beginGuardMeAgentTurn();
+  const laterTurn = await evaluateGuardedToolCall(call, ctx);
+  const sameTurnRepeat = await evaluateGuardedToolCall(call, ctx);
+  beginGuardMeAgentTurn();
+  const nextTurnRepeat = await evaluateGuardedToolCall(call, ctx);
+
+  assert.equal(first?.block, true);
+  assert.equal(laterTurn, undefined);
+  assert.equal(sameTurnRepeat, undefined);
+  assert.equal(nextTurnRepeat, undefined);
+
+  const records = (await readFile(statePaths.localStatePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  const automaticRecords = records.filter((record) => record.type === "automatic-decision");
+  assert.equal(automaticRecords.length, 3);
+  stopGuardMeSession(ctx);
+});
