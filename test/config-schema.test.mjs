@@ -55,8 +55,19 @@ test("built-in default policy includes approved hard-protection sections", () =>
   assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "az *"));
   assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "gcloud *"));
   assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "sudoedit *"));
+  assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "env"));
+  assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "printenv"));
+  assert.ok(defaults.denyCommands.some((rule) => rule.pattern === "printenv *"));
   assert.ok(defaults.protectedCredentialPaths.some((rule) => rule.pattern === "~/.aws/**"));
+  assert.ok(!defaults.protectedCredentialPaths.some((rule) => rule.pattern.includes("*credential*")));
+  assert.ok(!defaults.protectedCredentialPaths.some((rule) => rule.pattern.includes("*secret*")));
+  assert.ok(!defaults.protectedCredentialPaths.some((rule) => rule.pattern.includes("*token*")));
   assert.ok(defaults.readOnlyPaths.some((rule) => rule.pattern === ".pi/agent/guardme-settings.json"));
+  for (const pattern of ["pnpm *", "yarn *", "awk *", "sort *", "diff *", "xargs *", "[ *", "python3 *", "pip *"]) {
+    assert.ok(defaults.allowCommands.some((rule) => rule.pattern === pattern), pattern);
+  }
+  const allowPatterns = defaults.allowCommands.map((rule) => rule.pattern);
+  assert.equal(new Set(allowPatterns).size, allowPatterns.length, "allowCommands contains duplicate patterns");
 });
 
 test("config path resolution uses approved global and local policy paths", async () => {

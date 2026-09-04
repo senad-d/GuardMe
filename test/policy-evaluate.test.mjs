@@ -192,6 +192,63 @@ test("env example files are editable but destructive actions remain protected by
   assert.equal(readEnv.outcome, "deny");
 });
 
+test("non-template env variants are credential protected by defaults", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-env-variant-"));
+  await writeFile(join(cwd, ".env.local"), "SECRET=redacted\n", "utf8");
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+
+  const readLocal = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", ".env.local") });
+  const editProduction = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "edit", ".env.production") });
+
+  assert.equal(readLocal.outcome, "deny");
+  assert.equal(readLocal.hard, true);
+  assert.equal(editProduction.outcome, "deny");
+  assert.equal(editProduction.hard, true);
+});
+
+test("credential keyword protection uses word boundaries instead of substrings", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-keyword-"));
+  await mkdir(join(cwd, "src"), { recursive: true });
+  await writeFile(join(cwd, "src", "tokenizer.ts"), "export const x = 1;\n", "utf8");
+  await writeFile(join(cwd, "secrets.yaml"), "redacted\n", "utf8");
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+
+  const codeRead = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", "src/tokenizer.ts") });
+  const codeWrite = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "write", "src/tokenizer.ts") });
+  const secretRead = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", "secrets.yaml") });
+
+  assert.equal(codeRead.outcome, "allow");
+  assert.equal(codeWrite.outcome, "allow");
+  assert.equal(secretRead.outcome, "deny");
+  assert.equal(secretRead.hard, true);
+});
+
+test("default allow list covers common dev commands and denies environment dumps", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-dev-allow-"));
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+
+  for (const command of [
+    "pnpm install",
+    "yarn test",
+    "ls | sort -u",
+    "awk '{print $1}' notes.txt",
+    "[ -f package.json ] && echo yes",
+    "diff a.txt b.txt",
+    "tar -czf out.tgz src",
+  ]) {
+    const { request, classified } = shellRequest(cwd, command);
+    const decision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
+    assert.equal(decision.outcome, "allow", command);
+  }
+
+  for (const command of ["env", "printenv", "env | grep -i aws", "node -p process.env"]) {
+    const { request, classified } = shellRequest(cwd, command);
+    const decision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
+    assert.equal(decision.outcome, "deny", command);
+    assert.equal(decision.risk, "hard-denied", command);
+  }
+});
+
 test("denyPaths beat allowPaths", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-deny-allow-"));
   await writeFile(join(cwd, "blocked.txt"), "blocked", "utf8");

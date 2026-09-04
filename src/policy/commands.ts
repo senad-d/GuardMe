@@ -1,6 +1,7 @@
 import { basename, dirname, join } from "node:path";
 
 import type { PolicyAction, RiskLevel } from "./action.ts";
+import { containsCredentialKeyword, isProtectedEnvFileSegment } from "./sensitive-paths.ts";
 import { isAsciiDigit, isAsciiLetter, isShellIdentifier } from "./shell-identifiers.ts";
 import { collapseByCharacter } from "./text-utils.ts";
 
@@ -147,6 +148,7 @@ interface SegmentClassificationContext {
   readonly credentialAccess: boolean;
   readonly credentialLiteralAccess: boolean;
   readonly cloudCliLiteralAccess: boolean;
+  readonly envDumpLiteralAccess: boolean;
 }
 
 interface ExecutableSegmentClassificationContext extends SegmentClassificationContext {
@@ -158,6 +160,8 @@ type SegmentClassificationOptions = Omit<ClassificationOptions, "rawCommand" | "
 };
 
 const CLOUD_CLI_COMMANDS = new Set(["aws", "az", "gcloud"]);
+const ENVIRONMENT_DUMP_COMMANDS = new Set(["env", "printenv"]);
+const ENV_DUMP_INLINE_CODE_MARKERS = ["process.env", "os.environ", "import.meta.env"] as const;
 const READ_COMMANDS = new Set(["cat", "less", "more", "head", "tail"]);
 const GREP_COMMANDS = new Set(["grep", "ggrep", "rg"]);
 const ADDITIONAL_READ_COMMANDS = new Set(["awk", "base64", "md5sum", "od", "readlink", "sed", "sha1sum", "sha256sum", "sha512sum", "shasum", "strings", "wc", "xxd"]);
@@ -774,6 +778,7 @@ function createSegmentClassificationContext(
     credentialAccess,
     credentialLiteralAccess: !credentialAccess && args.some(containsCredentialLikeLiteral),
     cloudCliLiteralAccess: inlineCode.some(containsCloudCliLiteral),
+    envDumpLiteralAccess: inlineCode.some(containsEnvDumpLiteral),
   };
 }
 
@@ -834,6 +839,32 @@ function classifyPreWrapperSegment(context: ExecutableSegmentClassificationConte
       hardDenied: true,
       dangerous: true,
       requiresUserDecision: false,
+    });
+  }
+  if (ENVIRONMENT_DUMP_COMMANDS.has(context.commandName)) {
+    return segmentClassification(context, {
+      kind: "hard-denied",
+      primaryAction: "read",
+      risk: "hard-denied",
+      reason: `'${context.commandName}' prints process environment variables, which may contain secrets.`,
+      matchedPatterns: [context.commandName],
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+      credentialAccess: true,
+    });
+  }
+  if (context.envDumpLiteralAccess) {
+    return segmentClassification(context, {
+      kind: "hard-denied",
+      primaryAction: "read",
+      risk: "hard-denied",
+      reason: "Inline code reads process environment variables, which may contain secrets.",
+      matchedPatterns: ["env-dump-inline-code"],
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+      credentialAccess: true,
     });
   }
   return undefined;
@@ -1692,6 +1723,10 @@ function unwrapEnvExecutableStep(tokens: readonly string[], index: number): { re
   if (env.innerCommand) {
     return { nextIndex: tokens.length, result: { args: [], innerCommand: env.innerCommand } };
   }
+  if (env.index >= tokens.length) {
+    // `env` without a wrapped command prints the whole process environment.
+    return { nextIndex: tokens.length, result: { commandName: "env", args: tokens.slice(index + 1) } };
+  }
   return { nextIndex: env.index };
 }
 
@@ -2269,7 +2304,7 @@ function inlineCodeSnippets(commandName: string | undefined, args: readonly stri
     if (arg === "--") {
       break;
     }
-    if (arg === "-c" || arg === "-e" || arg === "-E" || arg === "-r" || arg === "--eval") {
+    if (arg === "-c" || arg === "-e" || arg === "-E" || arg === "-r" || arg === "-p" || arg === "--eval" || arg === "--print") {
       const snippet = args[index + 1];
       if (snippet) {
         snippets.push(snippet);
@@ -2315,7 +2350,10 @@ function extractLikelyPathOperands(commandName: string | undefined, args: readon
     return argsWithoutRedirections.filter((arg) => !arg.startsWith("-"));
   }
   if (commandName === "sed") {
-    return argsWithoutRedirections.filter((arg) => !arg.startsWith("-") && !looksLikeSedExpression(arg));
+    return sedPathOperands(argsWithoutRedirections);
+  }
+  if (commandName === "awk") {
+    return awkPathOperands(argsWithoutRedirections);
   }
   if (commandName === "dd") {
     return ddPathOperands(argsWithoutRedirections);
@@ -2513,6 +2551,11 @@ function containsCredentialLikeLiteral(value: string): boolean {
   return containsProtectedEnvPathReference(lower) || CREDENTIAL_LITERAL_MARKERS.some((marker) => lower.includes(marker));
 }
 
+function containsEnvDumpLiteral(value: string): boolean {
+  const lower = value.toLowerCase();
+  return ENV_DUMP_INLINE_CODE_MARKERS.some((marker) => lower.includes(marker));
+}
+
 function isCredentialLikePath(pathValue: string): boolean {
   const lower = pathValue.toLowerCase();
   return (
@@ -2547,35 +2590,38 @@ function isCredentialLikePath(pathValue: string): boolean {
   );
 }
 
-// Word-boundary keyword match: "tokens.txt" and "my-secret.yaml" match, while
-// "tokenizer.ts" and "secretary.md" do not.
-function containsCredentialKeyword(lowerPathValue: string): boolean {
-  return /(?:credential|secret|token)s?(?![a-z0-9])/u.test(lowerPathValue);
-}
-
 function isProtectedEnvPathOperand(pathValue: string): boolean {
   return pathValue
     .replaceAll("\\", "/")
     .split("/")
     .filter(Boolean)
-    .some((segment) => segment === ".env" || (segment.startsWith(".env") && hasEnvGlobWildcard(segment)));
-}
-
-function hasEnvGlobWildcard(segment: string): boolean {
-  return segment.includes("*") || segment.includes("?") || segment.includes("[") || segment.includes("]");
+    .some(isProtectedEnvFileSegment);
 }
 
 function containsProtectedEnvPathReference(value: string): boolean {
   const normalized = value.replaceAll("\\", "/");
   for (let index = 0; index < normalized.length; index += 1) {
-    if (!envReferenceStartsAt(normalized, index)) {
+    if (!normalized.startsWith(".env", index) || !envReferenceHasLeftBoundary(normalized, index)) {
       continue;
     }
-    if (envReferenceHasLeftBoundary(normalized, index) && envReferenceHasRightBoundary(normalized, index + envReferenceLength(normalized, index))) {
+    const end = envReferenceSegmentEnd(normalized, index);
+    if (isProtectedEnvFileSegment(normalized.slice(index, end))) {
       return true;
     }
   }
   return false;
+}
+
+function envReferenceSegmentEnd(value: string, start: number): number {
+  let end = start;
+  while (end < value.length && !isEnvReferenceSegmentBoundary(value[end] ?? "")) {
+    end += 1;
+  }
+  return end;
+}
+
+function isEnvReferenceSegmentBoundary(character: string): boolean {
+  return ENV_REFERENCE_SEGMENT_BOUNDARY_CHARS.has(character) || isShellWhitespace(character);
 }
 
 function isGitPath(pathValue: string): boolean {
@@ -2648,6 +2694,121 @@ function looksLikeSedExpression(value: string): boolean {
   return value.startsWith("s/") || value.startsWith("s#") || value.startsWith("/s/");
 }
 
+// The first non-option operand of sed/awk is the script/program text, not a
+// file path, unless an explicit -e/-f style option already provided it.
+function sedPathOperands(args: readonly string[]): readonly string[] {
+  const scriptProvided = args.some(isSedScriptOption);
+  const operands: string[] = [];
+  let scriptSeen = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (arg === "--") {
+      continue;
+    }
+    const skippedArguments = consumeSedOption(args, index, operands);
+    if (skippedArguments !== undefined) {
+      index += skippedArguments;
+      continue;
+    }
+    if (arg.startsWith("-") && arg !== "-") {
+      continue;
+    }
+    if (!scriptProvided && !scriptSeen) {
+      scriptSeen = true;
+      continue;
+    }
+    if (!looksLikeSedExpression(arg)) {
+      operands.push(arg);
+    }
+  }
+  return operands;
+}
+
+function consumeSedOption(args: readonly string[], index: number, operands: string[]): number | undefined {
+  const arg = args[index] ?? "";
+  if (arg === "-e" || arg === "--expression") {
+    return 1;
+  }
+  if (arg === "-f" || arg === "--file") {
+    pushPathOperand(operands, args[index + 1]);
+    return 1;
+  }
+  if (arg.startsWith("--file=")) {
+    pushPathOperand(operands, arg.slice("--file=".length));
+    return 0;
+  }
+  return undefined;
+}
+
+function isSedScriptOption(arg: string): boolean {
+  return (
+    arg === "-e" ||
+    arg === "--expression" ||
+    arg.startsWith("--expression=") ||
+    arg === "-f" ||
+    arg === "--file" ||
+    arg.startsWith("--file=") ||
+    (arg.startsWith("-e") && arg.length > 2 && !arg.startsWith("--"))
+  );
+}
+
+const AWK_OPTIONS_WITH_VALUES = new Set(["-F", "-v", "-W", "--field-separator", "--assign"]);
+
+type AwkOptionConsumption = {
+  skippedArguments: number;
+  providesProgram: boolean;
+};
+
+function awkPathOperands(args: readonly string[]): readonly string[] {
+  const operands: string[] = [];
+  let programSeen = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (arg === "--") {
+      continue;
+    }
+    const consumption = consumeAwkOption(args, index, operands);
+    if (consumption) {
+      index += consumption.skippedArguments;
+      programSeen ||= consumption.providesProgram;
+      continue;
+    }
+    if (arg.startsWith("-") && arg !== "-") {
+      continue;
+    }
+    if (!programSeen) {
+      programSeen = true;
+      continue;
+    }
+    if (!arg.includes("=")) {
+      operands.push(arg);
+    }
+  }
+  return operands;
+}
+
+function consumeAwkOption(args: readonly string[], index: number, operands: string[]): AwkOptionConsumption | undefined {
+  const arg = args[index] ?? "";
+  if (arg === "-f" || arg === "--file") {
+    pushPathOperand(operands, args[index + 1]);
+    return { skippedArguments: 1, providesProgram: true };
+  }
+  if (arg.startsWith("--file=")) {
+    pushPathOperand(operands, arg.slice("--file=".length));
+    return { skippedArguments: 0, providesProgram: true };
+  }
+  if (AWK_OPTIONS_WITH_VALUES.has(arg)) {
+    return { skippedArguments: 1, providesProgram: false };
+  }
+  return undefined;
+}
+
+function pushPathOperand(operands: string[], operand: string | undefined): void {
+  if (operand && operand !== "-") {
+    operands.push(operand);
+  }
+}
+
 function isEnvAssignment(value: string): boolean {
   const equalsIndex = value.indexOf("=");
   return equalsIndex > 0 && isShellIdentifier(value.slice(0, equalsIndex));
@@ -2674,24 +2835,12 @@ function isPrivateKeyFilePath(pathValue: string): boolean {
   return PRIVATE_KEY_FILE_NAMES.has(fileName);
 }
 
-function envReferenceStartsAt(value: string, index: number): boolean {
-  return value.startsWith(".env", index) || value.startsWith("./.env", index);
-}
-
-function envReferenceLength(value: string, index: number): number {
-  return value.startsWith("./.env", index) ? 6 : 4;
-}
-
 function envReferenceHasLeftBoundary(value: string, index: number): boolean {
   return index === 0 || ENV_REFERENCE_LEFT_BOUNDARY_CHARS.has(value[index - 1] ?? "") || isShellWhitespace(value[index - 1] ?? "");
 }
 
-function envReferenceHasRightBoundary(value: string, index: number): boolean {
-  return index >= value.length || ENV_REFERENCE_RIGHT_BOUNDARY_CHARS.has(value[index] ?? "") || isShellWhitespace(value[index] ?? "");
-}
-
 const ENV_REFERENCE_LEFT_BOUNDARY_CHARS = new Set(["'", "\"", "`", "(", "<", ">", "=", ":", ",", "/"]);
-const ENV_REFERENCE_RIGHT_BOUNDARY_CHARS = new Set(["'", "\"", "`", ")", ">", ":", ",", "/", "*", "?", "[", "]"]);
+const ENV_REFERENCE_SEGMENT_BOUNDARY_CHARS = new Set(["'", "\"", "`", "(", ")", "<", ">", ":", ",", ";", "/", "=", "&", "|"]);
 
 function hasInlineLongOptionValue(arg: string, optionsWithValues: ReadonlySet<string>): boolean {
   for (const option of optionsWithValues) {

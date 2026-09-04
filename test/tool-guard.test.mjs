@@ -550,7 +550,7 @@ test("destructive shell commands cannot target directories containing protected 
   assert.equal(nestedBlocked?.block, true);
   assert.match(nestedBlocked?.reason ?? "", /Repository metadata|deleted|renamed|moved/i);
   assert.equal(envTemplateBlocked?.block, true);
-  assert.match(envTemplateBlocked?.reason ?? "", /Environment template files|destructive changes/i);
+  assert.match(envTemplateBlocked?.reason ?? "", /Env file variants|credential classifier/i);
   stopGuardMeSession(ctx);
 });
 

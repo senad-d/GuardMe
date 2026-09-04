@@ -24,6 +24,7 @@ import {
 } from "./commands.ts";
 import { type NormalizedPolicyPath, isPathInside, matchPolicyPathPattern, toPosixPath } from "./paths.ts";
 import { redactSensitiveText } from "./redact.ts";
+import { containsCredentialKeyword, isProtectedEnvFileSegment } from "./sensitive-paths.ts";
 
 export interface EvaluatePolicyRequestOptions {
   readonly policy: MergedGuardMePolicyConfig;
@@ -836,7 +837,7 @@ function envCredentialPattern(candidate: string, basename: string): string | und
   if (!isProtectedEnvPathCandidate(candidate)) {
     return undefined;
   }
-  return basename === ".env" ? ".env" : ".env glob";
+  return basename === ".env" ? ".env" : ".env variant";
 }
 
 function basenameCredentialPattern(basename: string): string | undefined {
@@ -855,7 +856,7 @@ function cloudConfigCredentialPattern(candidate: string): string | undefined {
 }
 
 function keywordCredentialPattern(basename: string): string | undefined {
-  return /(?:credential|secret|token)s?(?![a-z0-9])/u.test(basename) ? "credential-like filename" : undefined;
+  return containsCredentialKeyword(basename) ? "credential-like filename" : undefined;
 }
 
 function credentialPathCandidates(path: NormalizedPolicyPath): readonly string[] {
@@ -869,10 +870,7 @@ function hasPathSegmentPrefix(path: string, segmentPrefix: string): boolean {
 }
 
 function isProtectedEnvPathCandidate(path: string): boolean {
-  return path
-    .split("/")
-    .filter(Boolean)
-    .some((segment) => segment === ".env" || (segment.startsWith(".env") && /[*?[\]]/u.test(segment)));
+  return path.split("/").filter(Boolean).some(isProtectedEnvFileSegment);
 }
 
 function matchedRule(rule: SourcedGuardMeRule | SourcedGuardMePathRule): MatchedRule {

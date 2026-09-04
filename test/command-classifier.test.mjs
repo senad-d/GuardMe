@@ -269,6 +269,58 @@ test("credential detection handles long exact path boundaries", () => {
   assert.equal(classifyShellCommand(`python -c "print('${longPrefix} .env*')"`).credentialAccess, true);
 });
 
+test("environment dumps are hard denied while env wrapper forms stay classifiable", () => {
+  for (const command of ["env", "env -0", "env | grep -i aws", "printenv", "printenv AWS_SECRET_ACCESS_KEY"]) {
+    const classified = classifyShellCommand(command);
+    assert.equal(classified.hardDenied, true, command);
+    assert.equal(classified.risk, "hard-denied", command);
+    assert.equal(classified.credentialAccess, true, command);
+  }
+
+  assert.equal(classifyShellCommand("env FOO=1 npm test").hardDenied, false);
+  assert.equal(classifyShellCommand("env -S 'npm test'").hardDenied, false);
+});
+
+test("inline code that reads the process environment is hard denied", () => {
+  for (const command of [
+    "node -e 'console.log(process.env)'",
+    "node -p process.env",
+    "node --print process.env",
+    "python3 -c \"import os; print(os.environ)\"",
+  ]) {
+    const classified = classifyShellCommand(command);
+    assert.equal(classified.hardDenied, true, command);
+    assert.equal(classified.credentialAccess, true, command);
+  }
+
+  assert.equal(classifyShellCommand("node -e 'console.log(1+1)'").hardDenied, false);
+});
+
+test("non-template .env variants are credential protected while templates stay usable", () => {
+  for (const command of [
+    "cat .env.local",
+    "cat .env.production",
+    "awk '{print}' .env.local",
+    "node -e \"require('fs').readFileSync('.env.local','utf8')\"",
+  ]) {
+    const classified = classifyShellCommand(command);
+    assert.equal(classified.hardDenied, true, command);
+    assert.equal(classified.credentialAccess, true, command);
+  }
+
+  for (const command of ["cat .env.example", "cat .env.sample", "cat .env.template", "cat .env.dist"]) {
+    assert.equal(classifyShellCommand(command).credentialAccess, false, command);
+  }
+});
+
+test("awk and sed script operands are not treated as target paths", () => {
+  assert.deepEqual(classifyShellCommand("awk '{print $1}' notes.txt").targetPaths, ["notes.txt"]);
+  assert.deepEqual(classifyShellCommand("awk -F: '{print $1}' data.csv").targetPaths, ["data.csv"]);
+  assert.deepEqual(classifyShellCommand("awk -f prog.awk data.csv").targetPaths, ["prog.awk", "data.csv"]);
+  assert.deepEqual(classifyShellCommand("sed -n '$p' notes.txt").targetPaths, ["notes.txt"]);
+  assert.deepEqual(classifyShellCommand("sed -e 's/a/b/' -e 's/c/d/' input.txt").targetPaths, ["input.txt"]);
+});
+
 test("find global symlink options preserve starting paths and classify -L conservatively", () => {
   const followed = classifyShellCommand("find -L node_modules/pkg -maxdepth 2 -type f");
   assert.deepEqual(followed.targetPaths, ["node_modules/pkg"]);

@@ -17,6 +17,7 @@ import {
 } from "../policy/commands.ts";
 import { createPolicyFingerprint, evaluatePolicyRequest, isAgentAutomaticApprovalEligible } from "../policy/evaluate.ts";
 import { normalizePolicyPath, pathTargetFromNormalizedPath } from "../policy/paths.ts";
+import { containsCredentialKeyword, isProtectedEnvFileSegment } from "../policy/sensitive-paths.ts";
 import { redactSensitiveText } from "../policy/redact.ts";
 import {
   extractScriptCommandsFromContent,
@@ -1454,7 +1455,7 @@ function isProtectedMutationEntry(entry: string): boolean {
 function isProtectedDiscoveryEntry(entry: string): boolean {
   const lower = entry.toLowerCase();
   return (
-    lower === ".env" ||
+    isProtectedEnvFileSegment(lower) ||
     lower === ".npmrc" ||
     lower === ".pypirc" ||
     lower === ".netrc" ||
@@ -1463,9 +1464,7 @@ function isProtectedDiscoveryEntry(entry: string): boolean {
     lower === ".1password" ||
     lower === ".aws" ||
     lower === ".azure" ||
-    lower.includes("credential") ||
-    lower.includes("secret") ||
-    lower.includes("token")
+    containsCredentialKeyword(lower)
   );
 }
 
@@ -1496,11 +1495,7 @@ function isProtectedEnvDiscoveryPattern(pattern: string): boolean {
     .replaceAll("\\", "/")
     .split("/")
     .filter(Boolean)
-    .some((segment) => segment === ".env" || (segment.startsWith(".env") && hasGlobWildcard(segment)));
-}
-
-function hasGlobWildcard(segment: string): boolean {
-  return segment.includes("*") || segment.includes("?") || segment.includes("[") || segment.includes("]");
+    .some(isProtectedEnvFileSegment);
 }
 
 async function normalizeTargets(

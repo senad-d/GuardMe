@@ -229,7 +229,7 @@ readOnlyPaths:
     reason: "Documentation is read-only"
 ```
 
-Common built-in protections include cloud CLIs, privilege escalation, disk formatting/raw disk operations, `.git` deletion, credential-like files, `.env`, SSH keys, broad credential discovery, unsafe generated script content, and destructive commands aimed at protected descendants. **Insecure edits** deliberately skips proposed content/script scanning only for `write` and `edit`; use it temporarily and remember that protected paths such as `.env` remain blocked.
+Common built-in protections include cloud CLIs, privilege escalation, disk formatting/raw disk operations, `.git` deletion, credential-like files, `.env` and non-template `.env.*` variants such as `.env.local`, environment dumps (`env`, `printenv`, inline `process.env`/`os.environ` reads), SSH keys, broad credential discovery, unsafe generated script content, and destructive commands aimed at protected descendants. **Insecure edits** deliberately skips proposed content/script scanning only for `write` and `edit`; use it temporarily and remember that protected paths such as `.env` remain blocked.
 
 ---
 
