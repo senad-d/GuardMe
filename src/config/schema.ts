@@ -134,6 +134,8 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "head *", reason: "Project file reads after path protections pass." },
       { pattern: "tail *", reason: "Project file reads after path protections pass." },
       { pattern: "wc *", reason: "Project file reads after path protections pass." },
+      { pattern: "shasum *", reason: "Direct checksum reads after path protections pass." },
+      { pattern: "curl *", reason: "Ordinary curl requests after explicit local file path protections pass; network policy is external." },
       { pattern: "grep *", reason: "Project search after path protections pass." },
       { pattern: "ggrep *", reason: "Project search after path protections pass." },
       { pattern: "find *", reason: "Project discovery after path protections pass." },

@@ -2,7 +2,8 @@ import { basename, extname } from "node:path";
 
 import { tokenizeShellCommand } from "./commands.ts";
 import { redactSensitiveText } from "./redact.ts";
-import { isAsciiDigit, isShellIdentifier, isShellIdentifierPart, isShellIdentifierStart } from "./shell-identifiers.ts";
+import { prepareShellHeredocs } from "./heredocs.ts";
+import { isAsciiDigit, isShellIdentifier } from "./shell-identifiers.ts";
 import { collapseByCharacter, splitByCharacter } from "./text-utils.ts";
 
 export type ScriptContentContext =
@@ -461,11 +462,18 @@ function extractShellScriptCommands(
   label = "shell script",
 ): readonly ExtractedScriptCommand[] {
   const commands: ExtractedScriptCommand[] = [];
-  const lines = splitLines(content);
-  const heredocRanges = findShellHeredocRanges(lines);
-
+  const heredocs = prepareShellHeredocs(content);
+  if (heredocs.error) {
+    // Preserve the full malformed/unsupported construct for fail-closed policy evaluation.
+    return [commandRecord(content, lineOffset, context, label, sourcePath)];
+  }
+  const heredocRanges = (heredocs.ranges ?? []).map((range) => ({
+    start: splitLines(content.slice(0, range.start)).length,
+    end: splitLines(content.slice(0, range.end).replace(/\n$/u, "")).length,
+    command: content.slice(range.start, range.end),
+  }));
   for (const heredoc of heredocRanges) {
-    commands.push(...extractShellScriptCommands(heredoc.body.join("\n"), sourcePath, lineOffset + heredoc.bodyStart, "heredoc-shell", "shell heredoc"));
+    commands.push(commandRecord(heredoc.command, lineOffset + heredoc.start - 1, "heredoc-shell", "shell heredoc", sourcePath, lineOffset + heredoc.end - 1));
   }
 
   for (const logicalLine of joinContinuationLines(content)) {
@@ -480,87 +488,6 @@ function extractShellScriptCommands(
   }
 
   return commands;
-}
-
-interface ShellHeredocRange {
-  readonly marker: string;
-  readonly start: number;
-  readonly bodyStart: number;
-  readonly end: number;
-  readonly body: readonly string[];
-}
-
-function findShellHeredocRanges(lines: readonly string[]): readonly ShellHeredocRange[] {
-  const ranges: ShellHeredocRange[] = [];
-  let index = 0;
-
-  while (index < lines.length) {
-    const range = parseShellHeredocRange(lines, index);
-    if (!range) {
-      index += 1;
-      continue;
-    }
-    ranges.push(range);
-    index = range.end;
-  }
-
-  return ranges;
-}
-
-function parseShellHeredocRange(lines: readonly string[], index: number): ShellHeredocRange | undefined {
-  const marker = shellHeredocMarker(lines[index] ?? "");
-  if (!marker) {
-    return undefined;
-  }
-  const body: string[] = [];
-  let bodyIndex = index + 1;
-  while (bodyIndex < lines.length) {
-    const bodyLine = lines[bodyIndex] ?? "";
-    if (bodyLine.trim() === marker) {
-      return { marker, start: index + 1, bodyStart: index + 1, end: bodyIndex + 1, body };
-    }
-    body.push(bodyLine);
-    bodyIndex += 1;
-  }
-  return { marker, start: index + 1, bodyStart: index + 1, end: bodyIndex, body };
-}
-
-function shellHeredocMarker(line: string): string | undefined {
-  const heredocIndex = line.indexOf("<<");
-  if (heredocIndex < 0 || !lineStartsShellHeredoc(line.slice(0, heredocIndex))) {
-    return undefined;
-  }
-
-  let markerStart = heredocIndex + 2;
-  if (line[markerStart] === "-") {
-    markerStart += 1;
-  }
-  while (isScriptWhitespace(line[markerStart] ?? "")) {
-    markerStart += 1;
-  }
-  return readHeredocMarker(line, markerStart);
-}
-
-function lineStartsShellHeredoc(prefix: string): boolean {
-  return tokenizeShellCommand(prefix).some((token) => SHELL_HEREDOC_COMMANDS.has(basename(token).toLowerCase()));
-}
-
-const SHELL_HEREDOC_COMMANDS = new Set(["bash", "sh", "zsh"]);
-
-function readHeredocMarker(line: string, startIndex: number): string | undefined {
-  const quote = line[startIndex] === "\"" || line[startIndex] === "'" ? line[startIndex] : undefined;
-  let index = quote ? startIndex + 1 : startIndex;
-  const first = line[index] ?? "";
-  if (!isShellIdentifierStart(first)) {
-    return undefined;
-  }
-  let marker = first;
-  index += 1;
-  while (isShellIdentifierPart(line[index] ?? "")) {
-    marker += line[index];
-    index += 1;
-  }
-  return marker;
 }
 
 function commandRecord(

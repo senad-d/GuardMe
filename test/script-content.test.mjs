@@ -63,7 +63,9 @@ test("script content parsing handles long assignment and heredoc inputs", () => 
     content: `#!/bin/sh\nTOKEN=${"a".repeat(50000)}\nhelper() {\n}\nbash <<'EOF'\necho heredoc\nEOF\n`,
   });
 
-  assert.deepEqual(result.commands.map((command) => command.command), ["echo heredoc"]);
+  assert.deepEqual(result.commands.map((command) => command.command), ["bash <<'EOF'\necho heredoc\nEOF\n"]);
+  assert.equal(result.commands[0].lineStart, 5);
+  assert.equal(result.commands[0].lineEnd, 7);
   assert.deepEqual(result.commands.map((command) => command.context), ["heredoc-shell"]);
 });
 

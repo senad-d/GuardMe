@@ -980,6 +980,25 @@ test("agent mode in TUI blocks without prompting and allows the later-turn retry
   stopGuardMeSession(ctx);
 });
 
+test("quoted interpreter heredocs are inspected consistently in bash, local scripts and proposed content", async () => {
+  const safe = "node --input-type=module <<'JS'\nconst commands = [`curl --head https://example.com`];\nconsole.log(commands.map((command) => ({command})));\nJS\n";
+  // Local/proposed scripts retain their existing exact-command approval requirement.
+  const { cwd, ctx } = await createGuardContext({ globalPolicy: `version: 1\nallowCommands:\n  - pattern: ${JSON.stringify(safe)}\n` });
+  const unsafe = "node <<'JS'\nconsole.log(process.env);\nJS\n";
+  try {
+    assert.equal(await evaluateGuardedToolCall({ toolName: "bash", input: { command: safe } }, ctx), undefined);
+    assert.equal(await evaluateGuardedToolCall({ toolName: "write", input: { path: "verify.sh", content: safe } }, ctx), undefined);
+    await writeFile(join(cwd, "verify.sh"), safe);
+    assert.equal(await evaluateGuardedToolCall({ toolName: "bash", input: { command: "bash verify.sh" } }, ctx), undefined);
+    assert.equal((await evaluateGuardedToolCall({ toolName: "write", input: { path: "bad.sh", content: unsafe } }, ctx))?.block, true);
+    await writeFile(join(cwd, "bad.sh"), unsafe);
+    assert.equal((await evaluateGuardedToolCall({ toolName: "bash", input: { command: "bash bad.sh" } }, ctx))?.block, true);
+    assert.equal((await evaluateGuardedToolCall({ toolName: "bash", input: { command: `${safe}cat .env` } }, ctx))?.block, true);
+  } finally {
+    stopGuardMeSession(ctx);
+  }
+});
+
 test("agent mode grants a session allowance for approved policy-missing commands", async () => {
   const { home, cwd, ctx } = await createGuardContext({ environment: { GUARDME_APPROVAL_MODE: "agent" } });
   const statePaths = resolveStatePaths(cwd, home);

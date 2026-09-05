@@ -1,6 +1,8 @@
 import { basename, dirname, join } from "node:path";
 
 import type { PolicyAction, RiskLevel } from "./action.ts";
+import { curlFileAccess } from "./curl.ts";
+import { prepareShellHeredocs } from "./heredocs.ts";
 import { containsCredentialKeyword, isProtectedEnvFileSegment } from "./sensitive-paths.ts";
 import { isAsciiDigit, isAsciiLetter, isShellIdentifier } from "./shell-identifiers.ts";
 import { collapseByCharacter } from "./text-utils.ts";
@@ -294,6 +296,21 @@ function detectPackageScriptExecutionsInternal(command: string, depth: number): 
 }
 
 function classifyShellCommandInternal(command: string, depth: number): CommandClassification {
+  const heredocs = prepareShellHeredocs(command);
+  if (heredocs.error) {
+    return classification({
+      rawCommand: command,
+      kind: "hard-denied",
+      primaryAction: "shell",
+      risk: "hard-denied",
+      reason: heredocs.error,
+      matchedPatterns: ["uninspectable-heredoc"],
+      targetPaths: [],
+      hardDenied: true,
+      dangerous: true,
+      requiresUserDecision: false,
+    });
+  }
   const tokens = tokenizeShellCommand(command);
   if (tokens.length === 0) {
     return classification({
@@ -448,6 +465,11 @@ function uniqueExecutableCommandSegments(segments: readonly ExecutableCommandSeg
 }
 
 export function tokenizeShellCommand(command: string): readonly string[] {
+  const heredocs = prepareShellHeredocs(command);
+  if (heredocs.error) {
+    return ["${GUARDME_UNINSPECTABLE_HEREDOC}"];
+  }
+  command = heredocs.command;
   const state = createShellTokenizerState();
   while (state.index < command.length) {
     advanceShellTokenizer(command, state);
@@ -894,6 +916,21 @@ function classifyPostWrapperSegment(context: ExecutableSegmentClassificationCont
 }
 
 function classifyGuardedSegment(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
+  if (context.commandName === "curl") {
+    return curlClassification(context);
+  }
+  if (context.commandName === "shasum" && context.args.some(isChecksumCheckOption)) {
+    return segmentClassification(context, {
+      kind: "dangerous",
+      primaryAction: "read",
+      risk: "dangerous",
+      reason: "Checksum manifests can name additional unreviewed files; an exact allowCommands rule or user approval is required.",
+      matchedPatterns: ["shasum --check"],
+      hardDenied: false,
+      dangerous: true,
+      requiresUserDecision: true,
+    });
+  }
   const diskReason = hardDeniedDiskReason(context.commandName, context.args);
   if (diskReason) {
     return segmentClassification(context, {
@@ -937,6 +974,27 @@ function classifyGuardedSegment(context: ExecutableSegmentClassificationContext)
     });
   }
   return undefined;
+}
+
+function curlClassification(context: ExecutableSegmentClassificationContext): CommandClassification {
+  const access = curlFileAccess(stripRedirectionOperands(context.args));
+  const inputAction = access.reads.length > 0 ? "read" : "shell";
+  const primaryAction = access.writes.length > 0 ? "write" : inputAction;
+  const credential = context.credentialAccess || context.credentialLiteralAccess;
+  const dangerous = Boolean(access.reviewReason) || (primaryAction === "write" && isOutsideishMutation(access.writes.filter((path) => !isNullOutputSink(path))));
+  const unprotectedKind = dangerous ? "dangerous" : primaryAction;
+  const unprotectedRisk = dangerous ? "dangerous" : "low";
+  return segmentClassification(context, {
+    kind: credential ? "hard-denied" : unprotectedKind,
+    primaryAction,
+    risk: credential ? "hard-denied" : unprotectedRisk,
+    reason: credential ? "Credential-like file access detected in curl command." : access.reviewReason ?? "curl command with explicit local file operands checked by path policy.",
+    matchedPatterns: ["curl"],
+    hardDenied: credential,
+    dangerous: credential || dangerous,
+    requiresUserDecision: dangerous && !credential,
+    credentialAccess: credential,
+  });
 }
 
 function outputRedirectionClassification(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
@@ -1499,6 +1557,11 @@ function splitCommandSegments(tokens: readonly string[]): readonly (readonly str
 }
 
 function extractExecutableShellSubcommands(command: string): readonly ShellSubcommand[] {
+  const heredocs = prepareShellHeredocs(command);
+  if (heredocs.error) {
+    return [];
+  }
+  command = heredocs.command;
   const state: ShellSubcommandScanState = { subcommands: [], escaped: false, index: 0 };
   while (state.index < command.length) {
     advanceShellSubcommandScanner(command, state);
@@ -2358,6 +2421,13 @@ function extractLikelyPathOperands(commandName: string | undefined, args: readon
   if (commandName === "dd") {
     return ddPathOperands(argsWithoutRedirections);
   }
+  if (commandName === "shasum") {
+    return checksumPathOperands(argsWithoutRedirections);
+  }
+  if (commandName === "curl") {
+    const access = curlFileAccess(argsWithoutRedirections);
+    return uniqueStrings([...access.reads, ...access.writes]);
+  }
   if (TEST_COMMANDS.has(commandName)) {
     return testPathOperands(argsWithoutRedirections);
   }
@@ -2465,6 +2535,26 @@ function findFollowsSymlinks(args: readonly string[]): boolean {
 
 function isFindExpressionToken(arg: string): boolean {
   return arg === "(" || arg === ")" || arg === "!" || arg === ",";
+}
+
+function isChecksumCheckOption(arg: string): boolean {
+  return arg === "--check" || (!arg.startsWith("--") && arg.startsWith("-") && arg.includes("c"));
+}
+
+function checksumPathOperands(args: readonly string[]): readonly string[] {
+  const paths: string[] = [];
+  let afterOptions = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!afterOptions && arg === "--") {
+      afterOptions = true;
+    } else if (!afterOptions && (arg === "--algorithm" || /^-[bctUw]*a$/u.test(arg))) {
+      index += 1;
+    } else if (afterOptions || !arg.startsWith("-")) {
+      paths.push(arg);
+    }
+  }
+  return paths;
 }
 
 function ddPathOperands(args: readonly string[]): readonly string[] {

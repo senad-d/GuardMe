@@ -130,6 +130,8 @@ GuardMe checks Pi LLM tool calls before they run:
 
 Policy is deny-first, similar to AWS IAM: hard protections and deny rules always win. Shell commands are segment-aware and default-deny, so every executable segment in a `bash` command must match `allowCommands` or go through the warned-once approval path.
 
+Defaults include `shasum *` and `curl *`: direct checksums and ordinary curl requests are allowed after local file protections pass. GuardMe does not filter network traffic; another extension can own that policy. Quoted interpreter heredocs are inspected as stdin code rather than misread as shell commands. See [checksums, curl, and heredoc details](docs/POLICY.md#checksums-curl-and-heredocs) for conservative approval gates and static-analysis limits.
+
 Examples:
 
 - `pwd && ls -lh` can run when both `pwd *` and `ls *` are allowed.
