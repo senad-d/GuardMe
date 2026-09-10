@@ -1403,44 +1403,44 @@ function addCommandRuleCandidatesFromNestedCommand(candidates: Set<string>, comm
   }
 }
 
-// NOSONAR - wrapper parsing must preserve shell ordering and control-word semantics.
 function leadingWrapperInvokedCommandText(tokens: readonly string[]): string | undefined {
-  let index = 0;
-  while (index < tokens.length && isEnvAssignment(tokens[index] ?? "")) {
-    index += 1;
+  const index = skipLeadingWords(tokens);
+  if (index === "loop") {
+    return "true";
   }
+  if (index === undefined) {
+    return undefined;
+  }
+  const commandName = basename(tokens[index] ?? "").toLowerCase();
+  if (commandName === "env") {
+    return commandAfterEnv(tokens, index);
+  }
+  if (PREFIX_WRAPPERS.has(commandName)) {
+    return commandAfterPrefixWrapper(tokens, index, commandName);
+  }
+  return index > 0 ? joinTokensAsCommand(tokens.slice(index)) : undefined;
+}
+
+function skipLeadingWords(tokens: readonly string[]): number | "loop" | undefined {
+  let index = 0;
+  while (index < tokens.length && isEnvAssignment(tokens[index] ?? "")) index += 1;
   let lastControlWord: string | undefined;
   while (index < tokens.length && SHELL_LEADING_CONTROL_WORDS.has(basename(tokens[index] ?? "").toLowerCase())) {
     lastControlWord = basename(tokens[index] ?? "").toLowerCase();
     index += 1;
   }
-  // "for NAME in WORDS", "select NAME in WORDS" and "case WORD in" execute
-  // nothing themselves; substitutions inside them are extracted as their own
-  // segments. Match the header like the shell no-op.
-  if (lastControlWord !== undefined && LOOP_HEADER_CONTROL_WORDS.has(lastControlWord)) {
-    return "true";
-  }
+  if (lastControlWord !== undefined && LOOP_HEADER_CONTROL_WORDS.has(lastControlWord)) return "loop";
+  return index < tokens.length ? index : undefined;
+}
 
-  const commandName = basename(tokens[index] ?? "").toLowerCase();
-  if (commandName === "env") {
-    const env = unwrapEnv(tokens, index + 1);
-    if (env.innerCommand) {
-      return env.innerCommand;
-    }
-    return env.index < tokens.length ? joinTokensAsCommand(tokens.slice(env.index)) : undefined;
-  }
+function commandAfterEnv(tokens: readonly string[], index: number): string | undefined {
+  const env = unwrapEnv(tokens, index + 1);
+  return env.innerCommand ?? (env.index < tokens.length ? joinTokensAsCommand(tokens.slice(env.index)) : undefined);
+}
 
-  if (commandName === "command" || commandName === "builtin" || commandName === "noglob" || commandName === "nohup" || commandName === "exec") {
-    const commandIndex = skipPrefixWrapper(commandName, tokens, index + 1);
-    return commandIndex < tokens.length ? joinTokensAsCommand(tokens.slice(commandIndex)) : undefined;
-  }
-  // "if [ -f x ]", "while read -r line", "until false": the command after the
-  // control word is what runs, so it is what the rules should see.
-  if (index > 0 && index < tokens.length) {
-    return joinTokensAsCommand(tokens.slice(index));
-  }
-
-  return undefined;
+function commandAfterPrefixWrapper(tokens: readonly string[], index: number, commandName: string): string | undefined {
+  const commandIndex = skipPrefixWrapper(commandName, tokens, index + 1);
+  return commandIndex < tokens.length ? joinTokensAsCommand(tokens.slice(commandIndex)) : undefined;
 }
 
 function addCommandRuleCandidate(candidates: Set<string>, command: string): void {

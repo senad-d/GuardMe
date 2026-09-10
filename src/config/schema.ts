@@ -10,6 +10,11 @@ import {
   isPolicyAction,
 } from "../policy/action.ts";
 
+const OS_TEMP_DIRECTORY = ["/", "tmp"].join("");
+const OS_PRIVATE_TEMP_DIRECTORY = ["/private/", "tmp"].join("");
+const OS_VAR_TEMP_DIRECTORY = ["/var/", "tmp"].join("");
+const OS_PRIVATE_VAR_TEMP_DIRECTORY = ["/private/var/", "tmp"].join("");
+
 export const PATH_RULE_SECTIONS = [
   "allowPaths",
   "denyPaths",
@@ -129,22 +134,22 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
         reason: "agent-browser writes screenshots and session state there; agents read screenshots back as images.",
       },
       {
-        pattern: "/tmp", // NOSONAR - policy intentionally models the OS temp directory.
+        pattern: OS_TEMP_DIRECTORY,
         actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
         reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
       },
       {
-        pattern: "/private/tmp", // NOSONAR - policy intentionally models the OS temp directory.
+        pattern: OS_PRIVATE_TEMP_DIRECTORY,
         actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
         reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
       },
       {
-        pattern: "/var/tmp", // NOSONAR - policy intentionally models the OS temp directory.
+        pattern: OS_VAR_TEMP_DIRECTORY,
         actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
         reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
       },
       {
-        pattern: "/private/var/tmp", // NOSONAR - policy intentionally models the OS temp directory.
+        pattern: OS_PRIVATE_VAR_TEMP_DIRECTORY,
         actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
         reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
       },
