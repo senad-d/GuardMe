@@ -11,6 +11,7 @@ import {
 } from "../policy/action.ts";
 
 import { OS_TEMP_ROOT_PATTERNS } from "./os-temp-patterns.ts";
+import { TOOL_LOCATION_PATTERNS } from "./tool-location-patterns.ts";
 
 export const PATH_RULE_SECTIONS = [
   "allowPaths",
@@ -85,6 +86,14 @@ export function createEmptyPolicyConfig(version = POLICY_VERSION): GuardMePolicy
   };
 }
 
+function createToolLocationRule(pattern: string): GuardMePathRule {
+  return {
+    pattern,
+    actions: ["read", "list"],
+    reason: "Tool installation: agents inspect binaries and versions there; read-only.",
+  };
+}
+
 function createTempRootRule(pattern: string): GuardMePathRule {
   return {
     pattern,
@@ -146,6 +155,7 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
         actions: ["read", "list"],
         reason: "agent-browser writes screenshots and session state there; agents read screenshots back as images.",
       },
+      ...TOOL_LOCATION_PATTERNS.map(createToolLocationRule),
       ...OS_TEMP_ROOT_PATTERNS.map(createTempRootRule),
       ...OS_TEMP_ROOT_PATTERNS.map(createTempContentRule),
     ],
@@ -279,6 +289,8 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "local *", reason: "Shell function local variable." },
       { pattern: "umask *", reason: "Show or set the file creation mask." },
       { pattern: "hash *", reason: "Command hash table." },
+      { pattern: "break *", reason: "Leave a shell loop." },
+      { pattern: "continue *", reason: "Next shell loop iteration." },
       { pattern: "mktemp *", reason: "Create temp files and directories." },
       { pattern: "ln *", reason: "Create links after path protections pass." },
       { pattern: "pkill *", reason: "Stopping processes the agent started by name, such as a local dev server." },

@@ -988,10 +988,11 @@ test("shell control-word headers and builtins do not block compound commands, hi
     "if [ -f old.txt ]; then echo y; fi", "ls -la; if [ -f docs/testing.md ]; then printf 'x\\n'; fi", "for f in a b; do echo $f; done",
     "while read -r l; do echo $l; done < old.txt", "until false; do echo; done", "case x in a) echo;; esac",
     "cd site && ls", "export X=1; echo $X", "unset X", "exec node x.js", "wait", "wait 123", "exit 0", "false || true", ":", "type node", "jobs", "disown",
+    "for i in 1 2 3; do if [ -f old.txt ]; then break; fi; continue; done", "ls /opt/homebrew/opt/node@24/bin/node", "head -1 /usr/local/bin/pnpm", "cat /usr/bin/env", "ls ~/Library/pnpm/nodejs",
   ]) {
     assert.equal(decide(command).outcome, "allow", command);
   }
-  for (const command of ["cd /etc && ls", "cd ../.. && ls", "export PATH=/evil:$PATH", 'export "PATH=/evil"', "export LD_PRELOAD=/evil.so", "exec aws s3 ls", "for f in $(aws s3 ls); do echo; done"]) {
+  for (const command of ["cd /etc && ls", "cd ../.. && ls", "export PATH=/evil:$PATH", 'export "PATH=/evil"', "export LD_PRELOAD=/evil.so", "exec aws s3 ls", "for f in $(aws s3 ls); do echo; done", "cat /usr/local/etc/redis.conf", "cat /opt/homebrew/etc/secrets.yaml", "echo x > /opt/homebrew/bin/pnpm"]) {
     assert.equal(decide(command).outcome, "deny", command);
   }
 });
