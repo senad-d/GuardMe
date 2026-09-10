@@ -114,14 +114,14 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
         reason: "Pi skill files may be loaded from sibling repositories or global skill directories.",
       },
       {
-        pattern: "/opt/homebrew/lib/node_modules/@earendil-works",
+        pattern: "**/node_modules/@earendil-works",
         actions: ["read", "list"],
-        reason: "Pi package documentation may be loaded from the local Homebrew node_modules installation.",
+        reason: "Allow discovery of all @earendil-works packages across installation locations.",
       },
       {
-        pattern: "/opt/homebrew/lib/node_modules/@earendil-works/**",
+        pattern: "**/node_modules/@earendil-works/**",
         actions: ["read", "list"],
-        reason: "Pi package documentation may be loaded from the local Homebrew node_modules installation.",
+        reason: "Allow reading all @earendil-works package contents across installation locations.",
       },
     ],
     allowCommands: [
@@ -233,6 +233,7 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "which *", reason: "Common project which command." },
       { pattern: "pi *", reason: "Common project pi command." },
       { pattern: "tmux *", reason: "Common project tmux command." },
+      { pattern: "agent-browser *", reason: "Common project agent-browser command." },
     ],
     denyPaths: [
       {

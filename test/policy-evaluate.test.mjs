@@ -410,7 +410,7 @@ test("built-in defaults allow reading Pi skill files and local Pi docs outside t
   const singularSkillDir = join(root, "legacy-project", ".pi", "skill", "example-skill");
   const pluralSkillPath = join(pluralSkillDir, "SKILL.md");
   const singularSkillPath = join(singularSkillDir, "SKILL.md");
-  const piDocsRoot = "/opt/homebrew/lib/node_modules/@earendil-works";
+  const piDocsRoot = "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/docs";
   const piDocsPath = "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/README.md";
   await mkdir(cwd, { recursive: true });
   await mkdir(pluralSkillDir, { recursive: true });
@@ -432,6 +432,40 @@ test("built-in defaults allow reading Pi skill files and local Pi docs outside t
   assert.equal(piDocsReadDecision.outcome, "allow");
   assert.equal(piDocsReadDecision.matchedRules[0]?.category, "allowPaths");
   assert.equal(piDocsListDecision.outcome, "allow");
+});
+
+test("@earendil-works defaults allow all scoped packages across installations without granting unrelated access", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-eval-pi-docs-"));
+  const cwd = join(root, "project");
+  await mkdir(cwd, { recursive: true });
+  const defaults = createBuiltInDefaultPolicy();
+  const policy = policyFrom(defaults);
+
+  for (const installation of ["sibling/node_modules", ".pi/agent/npm/node_modules", "usr/local/lib/node_modules"]) {
+    const packageRoot = join(root, installation, "@earendil-works/pi-coding-agent");
+    for (const relativePath of ["README.md", "docs/extensions.md", "examples/extensions/example.ts", "dist/index.js", "../pi-ai/README.md", "../pi-tui/src/index.ts"]) {
+      const target = join(packageRoot, relativePath);
+      await mkdir(join(target, ".."), { recursive: true });
+      await writeFile(target, "example", "utf8");
+      const read = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", target) });
+      assert.equal(read.outcome, "allow", target);
+      for (const action of ["write", "edit", "delete", "move", "rename"]) {
+        const mutation = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, action, target) });
+        assert.equal(mutation.outcome, "deny", `${action}: ${target}`);
+      }
+    }
+    for (const directory of ["docs", "examples", "..", "../pi-ai", "../pi-tui/src"]) {
+      const listed = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "list", join(packageRoot, directory)) });
+      assert.equal(listed.outcome, "allow");
+    }
+    for (const relativePath of ["../../other-package/README.md", "../../@earendil-works-other/package/README.md", "docs/.env", "examples/credentials.json"]) {
+      const denied = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", join(packageRoot, relativePath)) });
+      assert.equal(denied.outcome, "deny", relativePath);
+    }
+    const target = join(packageRoot, "README.md");
+    const deniedPolicy = policyFrom({ ...defaults, denyPaths: [...defaults.denyPaths, { pattern: target }] });
+    assert.equal(evaluatePolicyRequest({ policy: deniedPolicy, request: await pathRequest(cwd, "read", target) }).outcome, "deny");
+  }
 });
 
 test("outside-project mutations require explicit allow and no protection", async () => {

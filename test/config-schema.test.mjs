@@ -23,12 +23,12 @@ test("built-in default policy includes approved hard-protection sections", () =>
   assert.ok(skillAllowRules.every((rule) => rule.actions?.includes("read") && rule.actions?.includes("list")));
   const piDocsAllowRules = defaults.allowPaths.filter((rule) =>
     [
-      "/opt/homebrew/lib/node_modules/@earendil-works",
-      "/opt/homebrew/lib/node_modules/@earendil-works/**",
+      "**/node_modules/@earendil-works",
+      "**/node_modules/@earendil-works/**",
     ].includes(rule.pattern),
   );
   assert.equal(piDocsAllowRules.length, 2);
-  assert.ok(piDocsAllowRules.every((rule) => rule.actions?.includes("read") && rule.actions?.includes("list")));
+  assert.ok(piDocsAllowRules.every((rule) => JSON.stringify(rule.actions) === JSON.stringify(["read", "list"])));
   const nullSinkRule = defaults.allowPaths.find((rule) => rule.pattern === "/dev/null");
   assert.deepEqual(nullSinkRule?.actions, ["write"]);
   assert.ok(defaults.allowCommands.some((rule) => rule.pattern === "pwd *"));
