@@ -241,6 +241,8 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "agent-browser *", reason: "Common project agent-browser command." },
       { pattern: "lsof *", reason: "Port and open-file checks while running local servers." },
       { pattern: "kill *", reason: "Stopping processes the agent started, such as a local dev server." },
+      { pattern: "rm *", reason: "Deleting concrete paths inside the project once path protections pass; the project root, globs, variables and outside paths still need approval." },
+      { pattern: "rmdir *", reason: "Removing directories inside the project once path protections pass." },
       { pattern: "terraform *", reason: "Infrastructure as Code checks: fmt, validate, init, plan, show, output. Apply, destroy, import, taint and state mutations are dangerous." },
       { pattern: "tofu *", reason: "OpenTofu checks: fmt, validate, init, plan, show, output. Apply, destroy, import, taint and state mutations are dangerous." },
       { pattern: "terragrunt *", reason: "Terragrunt wrapper for the same checks. Apply and destroy, including run-all, are dangerous." },
@@ -410,9 +412,6 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "npm config get *_authToken*", reason: "npm config can print registry auth tokens." },
     ],
     dangerousCommands: [
-      { pattern: "rm -rf *", reason: "Recursive force deletion requires coaching or user approval." },
-      { pattern: "rm -fr *", reason: "Recursive force deletion requires coaching or user approval." },
-      { pattern: "rm --recursive --force *", reason: "Recursive force deletion requires coaching or user approval." },
       { pattern: "git clean -f*", reason: "Forced git clean can remove untracked work." },
       { pattern: "find * -delete", reason: "find -delete can remove many files." },
       { pattern: "rsync * --delete*", reason: "rsync --delete can remove destination files." },

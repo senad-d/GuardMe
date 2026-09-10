@@ -65,7 +65,7 @@ test("interpreter stdin retains credential environment and destructive-code chec
 test("shell heredocs and trailing commands remain executable policy segments", () => {
   assert.equal(evaluate("bash -s <<'SH'\npwd\ngit diff --check\nSH").outcome, "allow");
   assert.equal(evaluate("sh <<'SH'\naws s3 ls\nSH").outcome, "deny");
-  assert.equal(evaluate("sh <<'SH'\nrm -rf build\nSH").outcome, "coach");
+  assert.equal(evaluate("sh <<'SH'\nfind build -delete\nSH").outcome, "coach");
   assert.equal(evaluate("node <<'JS'\nconsole.log(1)\nJS\naws s3 ls").outcome, "deny");
   assert.equal(evaluate("node <<'JS'; aws s3 ls\nconsole.log(1)\nJS").outcome, "deny");
   assert.equal(evaluate("node <<'JS' > .env\nconsole.log(1)\nJS").outcome, "deny");

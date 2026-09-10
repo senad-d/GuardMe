@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { relative, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 
 import type { MergedGuardMePolicyConfig, SourcedGuardMePathRule, SourcedGuardMeRule } from "../config/merge-policy.ts";
 import {
@@ -213,10 +213,11 @@ function evaluateCommandSegment(
 ): CommandSegmentEvaluation {
   const exactAllow = firstMatchingExactSegmentCommandRule(policy.allowCommands, segment);
   const wildcardOrExactAllow = firstMatchingSegmentCommandRule(policy.allowCommands, segment);
+  const projectScopedDelete = isProjectScopedDelete(segment, request.cwd);
   const dangerousRule = firstMatchingSegmentCommandRule(policy.dangerousCommands, segment);
-  const segmentRequiresExact = commandSegmentRequiresExactAllow(segment, Boolean(request.requiresExactCommandAllow));
+  const segmentRequiresExact = commandSegmentRequiresExactAllow(segment, Boolean(request.requiresExactCommandAllow), projectScopedDelete);
 
-  if (segmentRequiresApproval(segment, dangerousRule, segmentRequiresExact, exactAllow)) {
+  if (segmentRequiresApproval(segment, dangerousRule, segmentRequiresExact, exactAllow, projectScopedDelete)) {
     return { failure: dangerousSegmentFailure(request, segment, dangerousRule, command, segmentRequiresExact, failureIndex) };
   }
 
@@ -233,8 +234,39 @@ function segmentRequiresApproval(
   dangerousRule: SourcedGuardMeRule | undefined,
   segmentRequiresExact: boolean,
   exactAllow: SourcedGuardMeRule | undefined,
+  projectScopedDelete: boolean,
 ): boolean {
-  return !exactAllow && (segment.dangerous || Boolean(dangerousRule) || segmentRequiresExact);
+  return !exactAllow && ((segment.dangerous && !projectScopedDelete) || Boolean(dangerousRule) || segmentRequiresExact);
+}
+
+const PROJECT_SCOPED_DELETE_COMMANDS: ReadonlySet<string> = new Set(["rm", "rmdir"]);
+const COMMAND_GLOB_CHARACTERS = /[*?[\]{}]/u;
+
+// rm/rmdir of concrete paths inside the project do not need an exact allow rule
+// or approval: their targets already passed the path protections (.env, .git,
+// credential paths, noDeletePaths, protected descendants), and agents must be
+// able to remove their own scratch files without a human. The project root,
+// globs, shell variables, ~, traversal outside the project and every other
+// delete-capable command (find -delete, rsync --delete, git clean) keep the
+// approval path, and so does any dangerousCommands rule a policy declares
+// (the built-in defaults no longer carry one for rm -rf). Recursive force
+// deletes inside the project are covered too; add `rm -rf *` back to
+// dangerousCommands locally if that turns out too broad.
+function isProjectScopedDelete(segment: ExecutableCommandSegment, cwd: string): boolean {
+  if (segment.action !== "delete" || segment.hardDenied || segment.targetPaths.length === 0) {
+    return false;
+  }
+  const executable = basename(segment.normalizedText.split(" ")[0] ?? "");
+  if (!PROJECT_SCOPED_DELETE_COMMANDS.has(executable)) {
+    return false;
+  }
+  return segment.targetPaths.every((raw) => {
+    if (raw === "" || raw.startsWith("~") || raw.includes("$") || COMMAND_GLOB_CHARACTERS.test(raw)) {
+      return false;
+    }
+    const path = normalizedPathFromTarget({ kind: "path", raw }, cwd);
+    return path.isInsideProject && path.projectRelativePath !== undefined && path.projectRelativePath !== ".";
+  });
 }
 
 function dangerousSegmentFailure(
@@ -626,14 +658,18 @@ function commandRuleMatchesCandidates(rule: SourcedGuardMeRule, candidates: read
   return candidates.some((candidate) => regex.test(normalizeCommandText(candidate)));
 }
 
-function commandSegmentRequiresExactAllow(segment: ExecutableCommandSegment, requestRequiresExact: boolean): boolean {
-  return (
-    requestRequiresExact ||
-    segment.risk === "dangerous" ||
-    segment.action === "delete" ||
-    segment.action === "move" ||
-    segment.action === "rename"
-  );
+function commandSegmentRequiresExactAllow(
+  segment: ExecutableCommandSegment,
+  requestRequiresExact: boolean,
+  projectScopedDelete: boolean,
+): boolean {
+  if (requestRequiresExact) {
+    return true;
+  }
+  if (projectScopedDelete) {
+    return false;
+  }
+  return segment.risk === "dangerous" || segment.action === "delete" || segment.action === "move" || segment.action === "rename";
 }
 
 function commandSegmentPolicyRequest(parent: PolicyRequest, segment: ExecutableCommandSegment): PolicyRequest {

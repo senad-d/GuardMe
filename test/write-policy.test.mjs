@@ -239,16 +239,16 @@ test("guard persists selected global allow rule from approval flow", async () =>
     environment: { GUARDME_APPROVAL_MODE: "interactive" },
   });
 
-  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
-  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
-  const third = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
+  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
+  const third = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
   const yaml = await readFile(paths.globalPolicyPath, "utf8");
 
   assert.equal(second, undefined);
   assert.equal(third, undefined);
   assert.equal(selectCalls, 1);
   assert.match(yaml, /allowCommands:/);
-  assert.match(yaml, /rm -rf build/);
+  assert.match(yaml, /find build -delete/);
   stopGuardMeSession(ctx);
 });
 
@@ -423,16 +423,16 @@ test("guard persists selected local allow rule from approval flow", async () => 
     environment: { GUARDME_APPROVAL_MODE: "interactive" },
   });
 
-  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
-  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
-  const third = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
+  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
+  const third = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
   const yaml = await readFile(paths.localPolicyPath, "utf8");
 
   assert.equal(second, undefined);
   assert.equal(third, undefined);
   assert.equal(selectCalls, 1);
   assert.match(yaml, /allowCommands:/);
-  assert.match(yaml, /rm -rf build/);
+  assert.match(yaml, /find build -delete/);
   stopGuardMeSession(ctx);
 });
 
@@ -460,8 +460,8 @@ test("guard refuses to save project rules in untrusted projects", async () => {
     environment: { GUARDME_APPROVAL_MODE: "interactive" },
   });
 
-  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
-  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
+  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
 
   assert.ok(second);
   assert.match(second.reason, /not trusted/i);
@@ -505,13 +505,13 @@ test("persisting an approval decision preserves existing YAML comments", async (
     environment: { GUARDME_APPROVAL_MODE: "interactive" },
   });
 
-  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
-  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
+  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
   const yaml = await readFile(paths.localPolicyPath, "utf8");
 
   assert.equal(second, undefined);
   assert.match(yaml, /# team policy header/);
   assert.match(yaml, /# discovery/);
-  assert.match(yaml, /rm -rf build/);
+  assert.match(yaml, /find build -delete/);
   stopGuardMeSession(ctx);
 });

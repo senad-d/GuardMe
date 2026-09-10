@@ -451,9 +451,9 @@ test("bash tool calls are classified and blocked or allowed by policy", async ()
     toolName: "bash",
     input: { command: "find .github -maxdepth 3 -type f -print 2>/dev/null" },
   }, ctx);
-  const wildcardAllowCompound = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "npm test && rm -rf build" } }, ctx);
-  const dangerousWithOutsideRead = await evaluateGuardedToolCall({ toolName: "bash", input: { command: `rm -rf build && cat ${outside}` } }, ctx);
-  const dangerous = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const wildcardAllowCompound = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "npm test && find build -delete" } }, ctx);
+  const dangerousWithOutsideRead = await evaluateGuardedToolCall({ toolName: "bash", input: { command: `find build -delete && cat ${outside}` } }, ctx);
+  const dangerous = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
 
   assert.equal(allowed, undefined);
   assert.equal(cloud?.block, true);
@@ -599,8 +599,8 @@ test("first dangerous attempt records coaching state and repeated attempt asks f
   const { home, cwd, ctx } = await createGuardContext();
   const statePaths = resolveStatePaths(cwd, home);
 
-  const first = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
-  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const first = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
+  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
   const jsonl = await readFile(statePaths.localStatePath, "utf8");
 
   assert.equal(first?.block, true);
@@ -616,7 +616,7 @@ test("first dangerous attempt records coaching state and repeated attempt asks f
 test("agent mode allows one identical retry only in a later agent turn and consumes it", async () => {
   const { home, cwd, ctx } = await createGuardContext({ environment: { GUARDME_APPROVAL_MODE: "agent" } });
   const statePaths = resolveStatePaths(cwd, home);
-  const call = { toolName: "bash", input: { command: "rm -rf build" } };
+  const call = { toolName: "bash", input: { command: "find build -delete" } };
 
   const first = await evaluateGuardedToolCall(call, ctx);
   const duplicate = await evaluateGuardedToolCall(call, ctx);
@@ -646,7 +646,7 @@ test("agent mode allows one identical retry only in a later agent turn and consu
 test("agent mode audit-write failure blocks same-turn retries and defers approval", async () => {
   const { root, home, cwd, ctx } = await createGuardContext({ environment: { GUARDME_APPROVAL_MODE: "agent" } });
   const statePaths = resolveStatePaths(cwd, home);
-  const call = { toolName: "bash", input: { command: "rm -rf build" } };
+  const call = { toolName: "bash", input: { command: "find build -delete" } };
 
   assert.equal((await evaluateGuardedToolCall(call, ctx))?.block, true);
   const warningState = await readFile(statePaths.localStatePath, "utf8");
@@ -688,7 +688,7 @@ test("agent mode audit-write failure blocks same-turn retries and defers approva
 
 test("agent mode ignores persisted warnings until the first attempt in the new process is blocked", async () => {
   const { home, cwd, ctx } = await createGuardContext();
-  const call = { toolName: "bash", input: { command: "rm -rf build" } };
+  const call = { toolName: "bash", input: { command: "find build -delete" } };
 
   assert.equal((await evaluateGuardedToolCall(call, ctx))?.block, true);
   stopGuardMeSession(ctx);
@@ -736,7 +736,7 @@ test("persisted warnings fail closed with bounded guidance in auto RPC mode with
   const { home, cwd, ctx } = await createGuardContext({ environment: {} });
   const statePaths = resolveStatePaths(cwd, home);
 
-  const first = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const first = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
   assert.equal(first?.block, true);
   stopGuardMeSession(ctx);
 
@@ -752,7 +752,7 @@ test("persisted warnings fail closed with bounded guidance in auto RPC mode with
   };
   await startGuardMeSession(ctx, { homeDir: home, environment: {} });
 
-  const repeated = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const repeated = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
   const allowed = await evaluateGuardedToolCall({ toolName: "write", input: { path: "safe.txt", content: "safe\n" } }, ctx);
   const stateText = await readFile(statePaths.localStatePath, "utf8");
 
@@ -760,7 +760,7 @@ test("persisted warnings fail closed with bounded guidance in auto RPC mode with
   assert.match(repeated?.reason ?? "", /WARNINGS & DECISIONS/);
   assert.match(repeated?.reason ?? "", /Risk classification: dangerous/);
   assert.match(repeated?.reason ?? "", /Guarded tool and action: bash:delete/);
-  assert.match(repeated?.reason ?? "", /Target or command: rm -rf build/);
+  assert.match(repeated?.reason ?? "", /Target or command: find build -delete/);
   assert.match(repeated?.reason ?? "", /Matched rules:/);
   assert.match(repeated?.reason ?? "", /Interactive approval: .*unavailable/i);
   assert.match(repeated?.reason ?? "", /safe built-in tool/);
@@ -778,7 +778,7 @@ test("untrusted project coaching state is written globally instead of into the p
   const { home, cwd, ctx } = await createGuardContext({ trusted: false });
   const statePaths = resolveStatePaths(cwd, home);
 
-  const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
   const globalJsonl = await readFile(statePaths.globalStatePath, "utf8");
 
   assert.equal(blocked?.block, true);
@@ -820,7 +820,7 @@ test("state write failures degrade status while preserving fail-closed coaching"
   };
   await startGuardMeSession(ctx, { homeDir: home });
 
-  const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
   const state = getGuardMeSessionState();
 
   assert.equal(blocked?.block, true);
@@ -917,7 +917,7 @@ test("registerGuard wires a tool_call handler", () => {
 
 test("concurrent identical later-turn retries consume only one automatic approval", async () => {
   const { ctx } = await createGuardContext({ environment: { GUARDME_APPROVAL_MODE: "agent" } });
-  const call = { toolName: "bash", input: { command: "rm -rf build" } };
+  const call = { toolName: "bash", input: { command: "find build -delete" } };
 
   assert.equal((await evaluateGuardedToolCall(call, ctx))?.block, true);
   beginGuardMeAgentTurn();
@@ -932,7 +932,7 @@ test("alias-guarded tools fail closed when session state is missing", async () =
   const { ctx } = await createGuardContext({ globalPolicy: "version: 1\nguardedTools:\n  pwsh: bash\n" });
   stopGuardMeSession(ctx);
 
-  const result = await evaluateGuardedToolCall({ toolName: "pwsh", input: { command: "rm -rf build" } }, ctx);
+  const result = await evaluateGuardedToolCall({ toolName: "pwsh", input: { command: "find build -delete" } }, ctx);
 
   assert.equal(result?.block, true);
   assert.match(result?.reason ?? "", /not initialized/i);
@@ -963,7 +963,7 @@ test("agent mode in TUI blocks without prompting and allows the later-turn retry
     },
   };
   await startGuardMeSession(ctx, { homeDir: home, environment: { GUARDME_APPROVAL_MODE: "agent" } });
-  const call = { toolName: "bash", input: { command: "rm -rf build" } };
+  const call = { toolName: "bash", input: { command: "find build -delete" } };
 
   const first = await evaluateGuardedToolCall(call, ctx);
   const sameTurn = await evaluateGuardedToolCall(call, ctx);

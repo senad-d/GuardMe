@@ -688,9 +688,9 @@ test("command allows do not approve outside-project shell path access", async ()
 test("wildcard command allows still guard compound command segments", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-compound-allow-"));
   const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
-  const dangerous = shellRequest(cwd, "npm test && rm -rf build");
+  const dangerous = shellRequest(cwd, "npm test && find build -delete");
   const outsideRead = shellRequest(cwd, "npm test && cat /etc/passwd");
-  const dangerousWithOutsideRead = shellRequest(cwd, "rm -rf build && cat /etc/passwd");
+  const dangerousWithOutsideRead = shellRequest(cwd, "find build -delete && cat /etc/passwd");
   const genericCompound = shellRequest(cwd, "npm test && echo ok");
 
   const dangerousDecision = evaluatePolicyRequest({
@@ -896,4 +896,27 @@ test("built-in defaults block direct writes into .git", async () => {
   const { request, classified } = shellRequest(cwd, "echo x >> .git/config");
   const shellDecision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
   assert.equal(shellDecision.outcome, "deny");
+});
+
+test("project-scoped rm and rmdir are allowed by the default policy, everything else still asks or denies", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-project-delete-"));
+  await mkdir(join(cwd, "build"), { recursive: true });
+  await mkdir(join(cwd, "infra"), { recursive: true });
+  await writeFile(join(cwd, "old.txt"), "old", "utf8");
+  await writeFile(join(cwd, "infra", "main.tf"), "", "utf8");
+  await writeFile(join(cwd, ".env"), "TOKEN=x", "utf8");
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  const decide = (command) => {
+    const { request, classified } = shellRequest(cwd, command);
+    return evaluatePolicyRequest({ policy, request, commandClassification: classified });
+  };
+
+  for (const command of ["rm old.txt", "rm -rf build", "rm -r -f build old.txt", "rmdir build", "rm infra/main.tf && rmdir infra", "/bin/rm old.txt"]) {
+    assert.equal(decide(command).outcome, "allow", command);
+  }
+  for (const command of ["rm -rf .", "rm -rf ./", "rm -rf *", "rm -rf build/*", "rm -rf ../x", "rm $F", "rm -rf ~/.aws", "rm -rf /tmp/x", "find build -delete", "mv old.txt new.txt"]) {
+    assert.notEqual(decide(command).outcome, "allow", command);
+  }
+  assert.equal(decide("rm .env").outcome, "deny");
+  assert.equal(decide("rm -rf .git").outcome, "deny");
 });

@@ -503,8 +503,8 @@ test("guard uses approval fallback for repeated dangerous actions", async () => 
     environment: { GUARDME_APPROVAL_MODE: "interactive" },
   });
 
-  const first = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
-  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf build" } }, ctx);
+  const first = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
+  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
 
   assert.equal(first?.block, true);
   assert.equal(second, undefined);
