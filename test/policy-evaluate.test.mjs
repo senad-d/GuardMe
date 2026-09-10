@@ -417,6 +417,29 @@ test("built-in defaults allow the OS temp directory, keep protections inside it,
   assert.equal(decide("mv old.txt /etc/old.txt").outcome, "deny");
 });
 
+test("all built-in temp roots allow ordinary paths without widening credentials or neighboring directories", async () => {
+  const cwd = outsideRoot("guardme-eval-temp-patterns-");
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  const roots = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders/ab/example/T", "/private/var/folders/ab/example/T"];
+
+  for (const root of roots) {
+    for (const action of ["read", "list", "write", "edit", "delete", "move", "rename"]) {
+      for (const target of [root, `${root}/guardme-scratch/nested/probe.log`]) {
+        const allowed = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, action, target) });
+        assert.equal(allowed.outcome, "allow", `${action}: ${target}`);
+      }
+      for (const target of [`${root}/.env`, `${root}/guardme-scratch/credentials.json`, `${root}-neighbor/probe.log`]) {
+        const denied = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, action, target) });
+        assert.equal(denied.outcome, "deny", `${action}: ${target}`);
+      }
+    }
+  }
+  for (const target of ["/var/folders/ab/example/C/probe.log", "/var/folders/ab/T/probe.log", "/var/folders/ab/example/extra/T/probe.log"]) {
+    const denied = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", target) });
+    assert.equal(denied.outcome, "deny", target);
+  }
+});
+
 test("built-in defaults allow reading Pi skill files and local Pi docs outside the project", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-eval-skill-read-"));
   const cwd = join(root, "project");

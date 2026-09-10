@@ -10,6 +10,14 @@ npm run format:check
 npm run validate
 ```
 
+## SonarQube analysis
+
+Run `npm run coverage` before `sonar-scanner -Dsonar.qualitygate.wait=true` to analyze current code with fresh coverage.
+
+`sonar-project.properties` excludes only `typescript:S5443` in `src/config/os-temp-patterns.ts`. That data-only module declares policy match patterns; it does not create, open or write temporary files. S5443 flags the literal public-temp paths regardless of how they are used, so this narrow false-positive exception keeps the patterns readable rather than encoding path characters to evade analysis. All other rules remain enabled for the module, and S5443 remains enabled everywhere else. Do not add filesystem operations to the data-only module. Temp-file creation elsewhere must use unpredictable names and appropriate permissions.
+
+## Smoke tests
+
 Global-policy helper smoke test:
 
 ```bash

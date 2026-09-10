@@ -80,6 +80,25 @@ test("built-in default policy includes approved hard-protection sections", () =>
   assert.equal(new Set(allowPatterns).size, allowPatterns.length, "allowCommands contains duplicate patterns");
 });
 
+test("built-in temp policy preserves root and descendant patterns, order, actions and fresh rule objects", () => {
+  const roots = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders/*/*/T", "/private/var/folders/*/*/T"];
+  const defaults = createBuiltInDefaultPolicy();
+  const nextDefaults = createBuiltInDefaultPolicy();
+  const tempRules = defaults.allowPaths.slice(-12);
+  const nextTempRules = nextDefaults.allowPaths.slice(-12);
+
+  assert.deepEqual(tempRules.map((rule) => rule.pattern), [...roots, ...roots.map((root) => `${root}/**`)]);
+  assert.deepEqual(nextTempRules, tempRules);
+  for (const [index, rule] of tempRules.entries()) {
+    assert.deepEqual(rule.actions, ["read", "list", "write", "edit", "delete", "move", "rename"]);
+    assert.equal(rule.reason, index < roots.length
+      ? "Operating-system temp directory root, so copying or listing into it works like its contents."
+      : "Operating-system temp directory: scratch files, logs and downloads agents create while working. Credential-like names and .env files stay protected.");
+    assert.notEqual(rule, nextTempRules[index]);
+    assert.notEqual(rule.actions, nextTempRules[index].actions);
+  }
+});
+
 test("config path resolution uses approved global and local policy paths", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-config-paths-"));
   const home = join(root, "home");

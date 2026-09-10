@@ -10,10 +10,7 @@ import {
   isPolicyAction,
 } from "../policy/action.ts";
 
-const OS_TEMP_DIRECTORY = String.fromCharCode(47) + "tmp";
-const OS_PRIVATE_TEMP_DIRECTORY = String.fromCharCode(47) + "private" + String.fromCharCode(47) + "tmp";
-const OS_VAR_TEMP_DIRECTORY = String.fromCharCode(47) + "var" + String.fromCharCode(47) + "tmp";
-const OS_PRIVATE_VAR_TEMP_DIRECTORY = String.fromCharCode(47) + "private" + String.fromCharCode(47) + "var" + String.fromCharCode(47) + "tmp";
+import { OS_TEMP_ROOT_PATTERNS } from "./os-temp-patterns.ts";
 
 export const PATH_RULE_SECTIONS = [
   "allowPaths",
@@ -88,6 +85,22 @@ export function createEmptyPolicyConfig(version = POLICY_VERSION): GuardMePolicy
   };
 }
 
+function createTempRootRule(pattern: string): GuardMePathRule {
+  return {
+    pattern,
+    actions: [...ALL_PATH_ACTIONS],
+    reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
+  };
+}
+
+function createTempContentRule(rootPattern: string): GuardMePathRule {
+  return {
+    pattern: `${rootPattern}/**`,
+    actions: [...ALL_PATH_ACTIONS],
+    reason: "Operating-system temp directory: scratch files, logs and downloads agents create while working. Credential-like names and .env files stay protected.",
+  };
+}
+
 export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
   return {
     ...createEmptyPolicyConfig(POLICY_VERSION),
@@ -133,66 +146,8 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
         actions: ["read", "list"],
         reason: "agent-browser writes screenshots and session state there; agents read screenshots back as images.",
       },
-      {
-        pattern: OS_TEMP_DIRECTORY,
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
-      },
-      {
-        pattern: OS_PRIVATE_TEMP_DIRECTORY,
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
-      },
-      {
-        pattern: OS_VAR_TEMP_DIRECTORY,
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
-      },
-      {
-        pattern: OS_PRIVATE_VAR_TEMP_DIRECTORY,
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
-      },
-      {
-        pattern: "/var/folders/*/*/T",
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
-      },
-      {
-        pattern: "/private/var/folders/*/*/T",
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory root, so copying or listing into it works like its contents.",
-      },
-      {
-        pattern: "/tmp/**",
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory: scratch files, logs and downloads agents create while working. Credential-like names and .env files stay protected.",
-      },
-      {
-        pattern: "/private/tmp/**",
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory: scratch files, logs and downloads agents create while working. Credential-like names and .env files stay protected.",
-      },
-      {
-        pattern: "/var/tmp/**",
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory: scratch files, logs and downloads agents create while working. Credential-like names and .env files stay protected.",
-      },
-      {
-        pattern: "/private/var/tmp/**",
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory: scratch files, logs and downloads agents create while working. Credential-like names and .env files stay protected.",
-      },
-      {
-        pattern: "/var/folders/*/*/T/**",
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory: scratch files, logs and downloads agents create while working. Credential-like names and .env files stay protected.",
-      },
-      {
-        pattern: "/private/var/folders/*/*/T/**",
-        actions: ["read", "list", "write", "edit", "delete", "move", "rename"],
-        reason: "Operating-system temp directory: scratch files, logs and downloads agents create while working. Credential-like names and .env files stay protected.",
-      },
+      ...OS_TEMP_ROOT_PATTERNS.map(createTempRootRule),
+      ...OS_TEMP_ROOT_PATTERNS.map(createTempContentRule),
     ],
     allowCommands: [
       { pattern: "true", reason: "Allow no-op shell fallback in compound commands." },
