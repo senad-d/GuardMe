@@ -213,7 +213,7 @@ function evaluateCommandSegment(
 ): CommandSegmentEvaluation {
   const exactAllow = firstMatchingExactSegmentCommandRule(policy.allowCommands, segment);
   const wildcardOrExactAllow = firstMatchingSegmentCommandRule(policy.allowCommands, segment);
-  const projectScopedDelete = isProjectScopedDelete(segment, request.cwd);
+  const projectScopedDelete = isUnattendedPathMutation(segment, request.cwd, policy);
   const dangerousRule = firstMatchingSegmentCommandRule(policy.dangerousCommands, segment);
   const segmentRequiresExact = commandSegmentRequiresExactAllow(segment, Boolean(request.requiresExactCommandAllow), projectScopedDelete);
 
@@ -239,25 +239,35 @@ function segmentRequiresApproval(
   return !exactAllow && ((segment.dangerous && !projectScopedDelete) || Boolean(dangerousRule) || segmentRequiresExact);
 }
 
-const PROJECT_SCOPED_DELETE_COMMANDS: ReadonlySet<string> = new Set(["rm", "rmdir"]);
+const UNATTENDED_REMOVAL_COMMANDS: ReadonlySet<string> = new Set(["rm", "rmdir", "mv"]);
+const UNATTENDED_REMOVAL_ACTIONS: ReadonlySet<PolicyAction> = new Set(["delete", "move", "rename"]);
+const UNATTENDED_WRITE_ACTIONS: ReadonlySet<PolicyAction> = new Set(["write", "edit"]);
 const COMMAND_GLOB_CHARACTERS = /[*?[\]{}]/u;
 
-// rm/rmdir of concrete paths inside the project do not need an exact allow rule
-// or approval: their targets already passed the path protections (.env, .git,
-// credential paths, noDeletePaths, protected descendants), and agents must be
-// able to remove their own scratch files without a human. The project root,
-// globs, shell variables, ~, traversal outside the project and every other
-// delete-capable command (find -delete, rsync --delete, git clean) keep the
-// approval path, and so does any dangerousCommands rule a policy declares
-// (the built-in defaults no longer carry one for rm -rf). Recursive force
-// deletes inside the project are covered too; add `rm -rf *` back to
-// dangerousCommands locally if that turns out too broad.
-function isProjectScopedDelete(segment: ExecutableCommandSegment, cwd: string): boolean {
-  if (segment.action !== "delete" || segment.hardDenied || segment.targetPaths.length === 0) {
+// Path mutations on concrete targets do not need an exact allow rule or
+// approval when every target is inside the project or under an allowPaths rule
+// that grants the action (the temp directories by default): the targets
+// already passed the path protections (.env, .git, credential paths,
+// noDeletePaths, protected descendants), and agents must be able to write,
+// remove or rename their own files without a human. Removals are limited to
+// rm/rmdir/mv; writes and edits (redirections, tee, cp, sed -i) qualify with
+// any command because only the outside-ish target heuristic marked them
+// dangerous. The project root, globs, shell variables, ~, other outside paths
+// and every other delete-capable command (find -delete, rsync --delete, git
+// clean) keep the approval path, and so does any dangerousCommands rule a
+// policy declares (the built-in defaults no longer carry one for rm -rf).
+// Recursive force deletes inside the project are covered too; add `rm -rf *`
+// to dangerousCommands locally if that is too broad.
+function isUnattendedPathMutation(segment: ExecutableCommandSegment, cwd: string, policy: MergedGuardMePolicyConfig): boolean {
+  if (segment.hardDenied || segment.targetPaths.length === 0) {
     return false;
   }
-  const executable = basename(segment.normalizedText.split(" ")[0] ?? "");
-  if (!PROJECT_SCOPED_DELETE_COMMANDS.has(executable)) {
+  if (UNATTENDED_REMOVAL_ACTIONS.has(segment.action)) {
+    const executable = basename(segment.normalizedText.split(" ")[0] ?? "");
+    if (!UNATTENDED_REMOVAL_COMMANDS.has(executable)) {
+      return false;
+    }
+  } else if (!UNATTENDED_WRITE_ACTIONS.has(segment.action)) {
     return false;
   }
   return segment.targetPaths.every((raw) => {
@@ -265,7 +275,10 @@ function isProjectScopedDelete(segment: ExecutableCommandSegment, cwd: string): 
       return false;
     }
     const path = normalizedPathFromTarget({ kind: "path", raw }, cwd);
-    return path.isInsideProject && path.projectRelativePath !== undefined && path.projectRelativePath !== ".";
+    if (path.isInsideProject) {
+      return path.projectRelativePath !== undefined && path.projectRelativePath !== ".";
+    }
+    return firstPathAllow(policy, path, segment.action) !== undefined;
   });
 }
 

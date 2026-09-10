@@ -167,7 +167,7 @@ const ENV_DUMP_INLINE_CODE_MARKERS = ["process.env", "os.environ", "import.meta.
 const READ_COMMANDS = new Set(["cat", "less", "more", "head", "tail"]);
 const GREP_COMMANDS = new Set(["grep", "ggrep", "rg"]);
 const ADDITIONAL_READ_COMMANDS = new Set(["awk", "base64", "md5sum", "od", "readlink", "sed", "sha1sum", "sha256sum", "sha512sum", "shasum", "strings", "wc", "xxd"]);
-const LIST_COMMANDS = new Set(["ls", "find", "tree"]);
+const LIST_COMMANDS = new Set(["ls", "find", "tree", "cd"]);
 const COPY_COMMANDS = new Set(["cp", "install"]);
 const ARCHIVE_COMMANDS = new Set(["7z", "bunzip2", "bzip2", "gunzip", "gzip", "tar", "unxz", "xz", "zip"]);
 const WRITE_COMMANDS = new Set(["mkdir", "touch"]);
@@ -177,9 +177,10 @@ const FIND_EXEC_OPTIONS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 const DISKUTIL_HARD_DENIED_SUBCOMMANDS = new Set(["erasedisk", "partitiondisk", "zerodisk"]);
 const TEST_COMMANDS = new Set(["test", "[", "[["]);
 const SHELL_WRAPPERS = new Set(["sh", "bash", "zsh"]);
-const PREFIX_WRAPPERS = new Set(["command", "builtin", "noglob", "sudo", "doas"]);
+const PREFIX_WRAPPERS = new Set(["command", "builtin", "noglob", "nohup", "exec", "sudo", "doas"]);
 const INLINE_CODE_INTERPRETERS = new Set(["node", "perl", "php", "python", "python2", "python3", "ruby"]);
 const SHELL_LEADING_CONTROL_WORDS = new Set(["!", "(", "{", "if", "then", "do", "else", "elif", "while", "until", "for", "select", "case"]);
+const LOOP_HEADER_CONTROL_WORDS = new Set(["for", "select", "case"]);
 const SHELL_HARD_SEGMENT_BOUNDARY_TOKENS = new Set([";", "&&", "||", "|", "&"]);
 const SHELL_COMMAND_POSITION_BOUNDARY_TOKENS = new Set(["(", "{", "then", "do", "else", "elif", "fi", "done", "esac"]);
 const SHELL_CLOSING_SEGMENT_BOUNDARY_TOKENS = new Set([")", "}"]);
@@ -351,6 +352,7 @@ function classifyShellCommandInternal(command: string, depth: number): CommandCl
       });
 }
 
+// NOSONAR - this parser intentionally handles nested shell syntax in one pass.
 function extractExecutableCommandSegmentsInternal(
   command: string,
   depth: number,
@@ -375,6 +377,11 @@ function extractExecutableCommandSegmentsInternal(
   for (const segmentTokens of splitCommandSegments(tokens)) {
     const segmentText = joinTokensAsRuleCommand(segmentTokens);
     if (!segmentText) {
+      continue;
+    }
+    // "done < file" or "} > log" leave a segment made only of redirections; it
+    // runs nothing, and its file operands are already in the command's targets.
+    if (isRedirectionOnlySegment(segmentTokens)) {
       continue;
     }
 
@@ -403,6 +410,15 @@ function extractExecutableCommandSegmentsInternal(
   }
 
   return executableSegments;
+}
+
+function isRedirectionOnlySegment(tokens: readonly string[]): boolean {
+  let index = 0;
+  while (index < tokens.length && (isEnvAssignment(tokens[index] ?? "") || SHELL_LEADING_CONTROL_WORDS.has(basename(tokens[index] ?? "").toLowerCase()))) {
+    index += 1;
+  }
+  const first = tokens[index];
+  return first !== undefined && (OUTPUT_REDIRECTION_TOKENS.has(first) || INPUT_REDIRECTION_TOKENS.has(first) || REDIRECTION_TOKENS_WITH_TARGET.has(first));
 }
 
 function executableSegmentFromClassification(
@@ -1387,13 +1403,22 @@ function addCommandRuleCandidatesFromNestedCommand(candidates: Set<string>, comm
   }
 }
 
+// NOSONAR - wrapper parsing must preserve shell ordering and control-word semantics.
 function leadingWrapperInvokedCommandText(tokens: readonly string[]): string | undefined {
   let index = 0;
   while (index < tokens.length && isEnvAssignment(tokens[index] ?? "")) {
     index += 1;
   }
+  let lastControlWord: string | undefined;
   while (index < tokens.length && SHELL_LEADING_CONTROL_WORDS.has(basename(tokens[index] ?? "").toLowerCase())) {
+    lastControlWord = basename(tokens[index] ?? "").toLowerCase();
     index += 1;
+  }
+  // "for NAME in WORDS", "select NAME in WORDS" and "case WORD in" execute
+  // nothing themselves; substitutions inside them are extracted as their own
+  // segments. Match the header like the shell no-op.
+  if (lastControlWord !== undefined && LOOP_HEADER_CONTROL_WORDS.has(lastControlWord)) {
+    return "true";
   }
 
   const commandName = basename(tokens[index] ?? "").toLowerCase();
@@ -1405,9 +1430,14 @@ function leadingWrapperInvokedCommandText(tokens: readonly string[]): string | u
     return env.index < tokens.length ? joinTokensAsCommand(tokens.slice(env.index)) : undefined;
   }
 
-  if (commandName === "command" || commandName === "builtin" || commandName === "noglob") {
+  if (commandName === "command" || commandName === "builtin" || commandName === "noglob" || commandName === "nohup" || commandName === "exec") {
     const commandIndex = skipPrefixWrapper(commandName, tokens, index + 1);
     return commandIndex < tokens.length ? joinTokensAsCommand(tokens.slice(commandIndex)) : undefined;
+  }
+  // "if [ -f x ]", "while read -r line", "until false": the command after the
+  // control word is what runs, so it is what the rules should see.
+  if (index > 0 && index < tokens.length) {
+    return joinTokensAsCommand(tokens.slice(index));
   }
 
   return undefined;
@@ -2408,6 +2438,12 @@ function extractLikelyPathOperands(commandName: string | undefined, args: readon
   }
   if (commandName === "find") {
     return findPathOperands(argsWithoutRedirections);
+  }
+  if (commandName === "cd") {
+    // cd changes where later relative paths resolve, so its operand goes through
+    // the path checks; a bare cd or cd - goes home, which is outside the project.
+    const operands = argsWithoutRedirections.filter((arg) => arg !== "-" && !arg.startsWith("-"));
+    return operands.length > 0 ? operands : ["~"];
   }
   if (commandName === "tee") {
     return argsWithoutRedirections.filter((arg) => !arg.startsWith("-"));

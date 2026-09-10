@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { outsideRoot } from "./support/outside-root.mjs";
 
 import { mergePolicyConfigs, sourcePolicyConfig } from "../src/config/merge-policy.ts";
 import { createBuiltInDefaultPolicy, createEmptyPolicyConfig } from "../src/config/schema.ts";
@@ -385,21 +386,35 @@ test("outside-project reads require explicit allowPaths or readOnlyPaths", async
   assert.equal(allowed.matchedRules[0]?.category, "readOnlyPaths");
 });
 
-test("built-in defaults do not broadly allow arbitrary temporary paths", async () => {
-  const root = await mkdtemp(join(tmpdir(), "guardme-eval-temp-boundary-"));
-  const cwd = join(root, "project");
-  const outside = join(root, "outside.txt");
+test("built-in defaults allow the OS temp directory, keep protections inside it, and still deny other outside paths", async () => {
+  const cwd = join(outsideRoot("guardme-eval-temp-boundary-"), "project");
+  const scratch = await mkdtemp(join(tmpdir(), "guardme-eval-scratch-"));
   await mkdir(cwd, { recursive: true });
-  await writeFile(outside, "outside", "utf8");
+  await writeFile(join(cwd, "old.txt"), "old", "utf8");
+  await writeFile(join(scratch, "log.txt"), "log", "utf8");
   const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  const decide = (command) => {
+    const { request, classified } = shellRequest(cwd, command);
+    return evaluatePolicyRequest({ policy, request, commandClassification: classified });
+  };
 
-  const readDecision = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", outside) });
-  const writeDecision = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "write", outside) });
-
-  assert.equal(readDecision.outcome, "deny");
-  assert.match(readDecision.reason, /Outside-project read requires/);
-  assert.equal(writeDecision.outcome, "deny");
-  assert.match(writeDecision.reason, /Outside-project write requires/);
+  for (const command of [
+    `echo hi > ${scratch}/probe.log`, `cat ${scratch}/log.txt`, `ls ${scratch}`, `rm ${scratch}/log.txt`, `rm -rf ${scratch}`,
+    `mv old.txt ${scratch}/old.txt`, `cp old.txt ${scratch}/`, `mkdir -p ${scratch}/dir`, `tar -czf ${scratch}/a.tgz old.txt`,
+    "echo hi > /tmp/guardme-probe.log", "rm /tmp/guardme-probe.log", "mktemp -d",
+  ]) {
+    assert.equal(decide(command).outcome, "allow", command);
+  }
+  for (const command of [`cat ${scratch}/.env`, `rm ${scratch}/.env`, `cat ${scratch}/secrets.yaml`]) {
+    assert.equal(decide(command).outcome, "deny", command);
+  }
+  const outsideRead = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", "/etc/hosts") });
+  const outsideWrite = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "write", "/etc/guardme-probe") });
+  assert.equal(outsideRead.outcome, "deny");
+  assert.match(outsideRead.reason, /Outside-project read requires/);
+  assert.equal(outsideWrite.outcome, "deny");
+  assert.match(outsideWrite.reason, /Outside-project write requires/);
+  assert.equal(decide("mv old.txt /etc/old.txt").outcome, "deny");
 });
 
 test("built-in defaults allow reading Pi skill files and local Pi docs outside the project", async () => {
@@ -435,7 +450,7 @@ test("built-in defaults allow reading Pi skill files and local Pi docs outside t
 });
 
 test("@earendil-works defaults allow all scoped packages across installations without granting unrelated access", async () => {
-  const root = await mkdtemp(join(tmpdir(), "guardme-eval-pi-docs-"));
+  const root = outsideRoot("guardme-eval-pi-docs-");
   const cwd = join(root, "project");
   await mkdir(cwd, { recursive: true });
   const defaults = createBuiltInDefaultPolicy();
@@ -899,7 +914,8 @@ test("built-in defaults block direct writes into .git", async () => {
 });
 
 test("project-scoped rm and rmdir are allowed by the default policy, everything else still asks or denies", async () => {
-  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-project-delete-"));
+  const cwd = join(outsideRoot("guardme-eval-project-delete-"), "project");
+  await mkdir(cwd, { recursive: true });
   await mkdir(join(cwd, "build"), { recursive: true });
   await mkdir(join(cwd, "infra"), { recursive: true });
   await writeFile(join(cwd, "old.txt"), "old", "utf8");
@@ -911,12 +927,72 @@ test("project-scoped rm and rmdir are allowed by the default policy, everything 
     return evaluatePolicyRequest({ policy, request, commandClassification: classified });
   };
 
-  for (const command of ["rm old.txt", "rm -rf build", "rm -r -f build old.txt", "rmdir build", "rm infra/main.tf && rmdir infra", "/bin/rm old.txt"]) {
+  for (const command of ["rm old.txt", "rm -rf build", "rm -r -f build old.txt", "rmdir build", "rm infra/main.tf && rmdir infra", "/bin/rm old.txt", "mv old.txt new.txt", "mv -f old.txt build/", "rm -rf /tmp/x"]) {
     assert.equal(decide(command).outcome, "allow", command);
   }
-  for (const command of ["rm -rf .", "rm -rf ./", "rm -rf *", "rm -rf build/*", "rm -rf ../x", "rm $F", "rm -rf ~/.aws", "rm -rf /tmp/x", "find build -delete", "mv old.txt new.txt"]) {
+  for (const command of ["rm -rf .", "rm -rf ./", "rm -rf *", "rm -rf build/*", "rm -rf /etc/x", "rm $F", "rm -rf ~/.aws", "find build -delete", "mv old.txt /etc/old.txt", "mv build/* old.txt"]) {
     assert.notEqual(decide(command).outcome, "allow", command);
   }
   assert.equal(decide("rm .env").outcome, "deny");
   assert.equal(decide("rm -rf .git").outcome, "deny");
+});
+
+test("nohup is a prefix wrapper: the wrapped command decides the outcome", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-nohup-"));
+  await mkdir(join(cwd, "site"), { recursive: true });
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  const decide = (command) => {
+    const { request, classified } = shellRequest(cwd, command);
+    return evaluatePolicyRequest({ policy, request, commandClassification: classified });
+  };
+
+  assert.equal(decide("nohup python3 -m http.server 0 --bind 127.0.0.1 --directory site >/dev/null 2>&1 &").outcome, "allow");
+  assert.equal(decide("nohup aws s3 ls").outcome, "deny");
+  assert.notEqual(decide("nohup unknown-tool --flag").outcome, "allow");
+});
+
+test("shell control-word headers and builtins do not block compound commands, hijack exports and outside cd still do", async () => {
+  const cwd = join(outsideRoot("guardme-eval-shell-syntax-"), "project");
+  await mkdir(join(cwd, "site"), { recursive: true });
+  await writeFile(join(cwd, "old.txt"), "old", "utf8");
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  const decide = (command) => {
+    const { request, classified } = shellRequest(cwd, command);
+    return evaluatePolicyRequest({ policy, request, commandClassification: classified });
+  };
+
+  for (const command of [
+    "if [ -f old.txt ]; then echo y; fi", "ls -la; if [ -f docs/testing.md ]; then printf 'x\\n'; fi", "for f in a b; do echo $f; done",
+    "while read -r l; do echo $l; done < old.txt", "until false; do echo; done", "case x in a) echo;; esac",
+    "cd site && ls", "export X=1; echo $X", "unset X", "exec node x.js", "wait", "wait 123", "exit 0", "false || true", ":", "type node", "jobs", "disown",
+  ]) {
+    assert.equal(decide(command).outcome, "allow", command);
+  }
+  for (const command of ["cd /etc && ls", "cd ../.. && ls", "export PATH=/evil:$PATH", 'export "PATH=/evil"', "export LD_PRELOAD=/evil.so", "exec aws s3 ls", "for f in $(aws s3 ls); do echo; done"]) {
+    assert.equal(decide(command).outcome, "deny", command);
+  }
+});
+
+test("npx-launched tools and common toolchains are allowed by default", async () => {
+  const cwd = join(outsideRoot("guardme-eval-toolchains-"), "project");
+  await mkdir(join(cwd, "bin"), { recursive: true });
+  await writeFile(join(cwd, "old.txt"), "old", "utf8");
+  await writeFile(join(cwd, "bin", "deploy"), "#!/bin/sh\necho hi\n", "utf8");
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  const decide = (command) => {
+    const { request, classified } = shellRequest(cwd, command);
+    return evaluatePolicyRequest({ policy, request, commandClassification: classified });
+  };
+
+  for (const command of [
+    "npx serve site -l 5000", "npx vite", "npx playwright test", "vite build", "shellcheck bin/deploy", "bash -n bin/deploy", "shfmt -d bin/deploy",
+    "sha256sum old.txt", "md5 old.txt", "base64 old.txt", "java -version", "./gradlew test", "mvn -q test", "dotnet test", "composer install", "bundle exec rake",
+    "sqlite3 db.sqlite .tables", "pkill -f http.server", "wget -q http://127.0.0.1:1/", "netstat -an", "ln -s old.txt link.txt", "column -t old.txt", "seq 3",
+    "terraform validate", "helm lint chart", "kubectl get pods", "hadolint Dockerfile", "actionlint",
+  ]) {
+    assert.equal(decide(command).outcome, "allow", command);
+  }
+  for (const command of ["npx frobnicate", "ssh host ls", "kubectl apply -f x.yaml", "terraform apply", "helm install x ./chart"]) {
+    assert.notEqual(decide(command).outcome, "allow", command);
+  }
 });

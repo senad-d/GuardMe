@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { outsideRoot } from "./support/outside-root.mjs";
 
 import { createBuiltInDefaultPolicy } from "../src/config/schema.ts";
 import { mergePolicyConfigs, sourcePolicyConfig } from "../src/config/merge-policy.ts";
@@ -79,7 +80,7 @@ test("curl local reads and writes retain protected and outside-project path gate
     "--data-urlencode name@.env", "--form field=@.env", "--form field=<.env", "--header @.env",
     "--cookie .env", "--key .env", "--netrc", "-o .env", "--output=.env", "--cookie-jar=.env",
     "--dump-header .env", "--trace .env", "--libcurl .env", "--hsts .env", "--output-dir .ssh -o out",
-    "-o docs/download.txt", "--dump-header docs/headers.txt", "-T /etc/passwd", "-o /tmp/guardme-curl-out",
+    "-o docs/download.txt", "--dump-header docs/headers.txt", "-T /etc/passwd", "-o /etc/guardme-curl-out",
   ]) {
     assert.equal((await evaluate(`curl ${options} https://example.com`)).outcome, "deny", options);
   }
@@ -89,7 +90,7 @@ test("curl local reads and writes retain protected and outside-project path gate
 });
 
 test("curl target canonicalization catches project symlinks leading outside", async () => {
-  const root = await mkdtemp(join(tmpdir(), "guardme-curl-"));
+  const root = outsideRoot("guardme-curl-");
   const cwd = join(root, "project");
   const outside = join(root, "outside");
   await mkdir(cwd);

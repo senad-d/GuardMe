@@ -3,6 +3,7 @@ import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { outsideRoot } from "./support/outside-root.mjs";
 
 import { EXTENSION_STATUS_KEY } from "../src/constants.ts";
 import { writeGuardMeRuntimeSettings } from "../src/config/runtime-settings.ts";
@@ -13,7 +14,7 @@ import { beginGuardMeAgentTurn } from "../src/events/session-store.ts";
 import { resolveStatePaths } from "../src/state/warnings.ts";
 
 async function createGuardContext(options = {}) {
-  const root = await mkdtemp(join(tmpdir(), "guardme-tool-guard-"));
+  const root = outsideRoot("guardme-tool-guard-");
   const home = join(root, "home");
   const cwd = join(root, "project");
   await mkdir(cwd, { recursive: true });

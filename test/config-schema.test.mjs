@@ -39,13 +39,13 @@ test("built-in default policy includes approved hard-protection sections", () =>
   assert.ok(defaults.allowCommands.some((rule) => rule.pattern === "git *"));
   const shellTestCommands = [
     "shellcheck --version",
-    "shellcheck *.sh",
-    "bash -n *.sh",
-    "sh -n *.sh",
-    "shfmt -d *.sh",
-    "shfmt -l *.sh",
-    "checkbashisms *.sh",
-    "bashate *.sh",
+    "shellcheck *",
+    "bash -n *",
+    "sh -n *",
+    "shfmt -d *",
+    "shfmt -l *",
+    "checkbashisms *",
+    "bashate *",
     "bats test/*.bats",
   ];
   for (const pattern of shellTestCommands) {
