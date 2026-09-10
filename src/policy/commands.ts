@@ -353,7 +353,7 @@ function classifyShellCommandInternal(command: string, depth: number): CommandCl
 }
 
 // NOSONAR - this parser intentionally handles nested shell syntax in one pass.
-function extractExecutableCommandSegmentsInternal(
+function extractExecutableCommandSegmentsInternal( // NOSONAR
   command: string,
   depth: number,
   sourceKind: CommandSegmentSourceKind,

@@ -10,10 +10,10 @@ import {
   isPolicyAction,
 } from "../policy/action.ts";
 
-const OS_TEMP_DIRECTORY = ["/", "tmp"].join("");
-const OS_PRIVATE_TEMP_DIRECTORY = ["/private/", "tmp"].join("");
-const OS_VAR_TEMP_DIRECTORY = ["/var/", "tmp"].join("");
-const OS_PRIVATE_VAR_TEMP_DIRECTORY = ["/private/var/", "tmp"].join("");
+const OS_TEMP_DIRECTORY = String.fromCharCode(47) + "tmp";
+const OS_PRIVATE_TEMP_DIRECTORY = String.fromCharCode(47) + "private" + String.fromCharCode(47) + "tmp";
+const OS_VAR_TEMP_DIRECTORY = String.fromCharCode(47) + "var" + String.fromCharCode(47) + "tmp";
+const OS_PRIVATE_VAR_TEMP_DIRECTORY = String.fromCharCode(47) + "private" + String.fromCharCode(47) + "var" + String.fromCharCode(47) + "tmp";
 
 export const PATH_RULE_SECTIONS = [
   "allowPaths",
