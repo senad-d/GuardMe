@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 export const FAKE_ENV_SECRET = "guardme-e2e-fake-token-do-not-leak";
@@ -9,10 +9,15 @@ export const SAFE_SCRIPT_CONTENT = "#!/bin/sh\necho safe\n";
 export const SAFE_NOTE_CONTENT = "original safe note\n";
 export const EDITED_SAFE_NOTE_CONTENT = "edited safe note\n";
 
-const FIXTURE_PREFIX = join(realpathSync(tmpdir()), "guardme-e2e-");
+// OS-temp paths are allowed by default; use the home cache so discovery and
+// outside-project denial scenarios exercise the real policy boundaries.
+const FIXTURE_BASE = join(realpathSync(homedir()), ".cache", "guardme-tests");
+const FIXTURE_PREFIX = join(FIXTURE_BASE, "guardme-e2e-");
 
 export async function createProjectFixture(label = "rpc") {
-  const rootDir = await mkdtemp(`${FIXTURE_PREFIX}${safeFixtureLabel(label)}-`);
+  const prefix = `${FIXTURE_PREFIX}${safeFixtureLabel(label)}-`;
+  await mkdir(FIXTURE_BASE, { recursive: true });
+  const rootDir = await mkdtemp(prefix);
   const homeDir = join(rootDir, "home");
   const projectDir = join(rootDir, "project");
   const outsideReadDir = join(rootDir, "outside-read");

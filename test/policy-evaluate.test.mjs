@@ -1019,3 +1019,29 @@ test("npx-launched tools and common toolchains are allowed by default", async ()
     assert.notEqual(decide(command).outcome, "allow", command);
   }
 });
+
+test("shell function definitions and trap bodies are classified by what they run", async () => {
+  const cwd = join(outsideRoot("guardme-eval-functions-"), "project");
+  await mkdir(join(cwd, "infra"), { recursive: true });
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  const decide = (command) => {
+    const { request, classified } = shellRequest(cwd, command);
+    return evaluatePolicyRequest({ policy, request, commandClassification: classified });
+  };
+
+  for (const command of [
+    "cleanup() { rm -rf -- infra; }; trap cleanup EXIT; terraform -chdir=infra fmt",
+    "cleanup() {\n  rm -rf -- infra\n}\ntrap cleanup EXIT",
+    "function cleanup { rm -rf infra; }",
+    'trap "kill 0" EXIT',
+    "trap - EXIT",
+    "trap 'echo done' INT TERM",
+  ]) {
+    assert.equal(decide(command).outcome, "allow", command);
+  }
+  for (const command of ["f() { aws s3 ls; }", "trap 'aws s3 ls' EXIT", "function f { sudo ls; }"]) {
+    assert.equal(decide(command).outcome, "deny", command);
+  }
+  assert.notEqual(decide("trap frobnicate EXIT").outcome, "allow");
+  assert.notEqual(decide("trap 'frobnicate --now' EXIT").outcome, "allow");
+});

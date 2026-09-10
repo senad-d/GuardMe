@@ -245,7 +245,7 @@ export function commandRuleMatchCandidates(command: string): readonly string[] {
 export function commandSegmentRuleMatchCandidates(command: string): readonly string[] {
   const candidates = new Set<string>();
   addCommandRuleCandidate(candidates, command);
-  for (const segment of splitCommandSegments(tokenizeShellCommand(command))) {
+  for (const segment of splitCommandSegments(stripFunctionDefinitionHeaders(tokenizeShellCommand(command)).tokens)) {
     const leadingWrapperCommand = leadingWrapperInvokedCommandText(segment);
     if (leadingWrapperCommand) {
       addCommandRuleCandidate(candidates, leadingWrapperCommand);
@@ -362,7 +362,8 @@ function extractExecutableCommandSegmentsInternal( // NOSONAR
     return [];
   }
 
-  const tokens = tokenizeShellCommand(command);
+  const definitions = stripFunctionDefinitionHeaders(tokenizeShellCommand(command));
+  const tokens = definitions.tokens;
   if (tokens.length === 0) {
     return [];
   }
@@ -382,6 +383,16 @@ function extractExecutableCommandSegmentsInternal( // NOSONAR
     // "done < file" or "} > log" leave a segment made only of redirections; it
     // runs nothing, and its file operands are already in the command's targets.
     if (isRedirectionOnlySegment(segmentTokens)) {
+      continue;
+    }
+    // trap runs its first argument later: a function defined in this command
+    // was already classified from its body, "-" resets, and a command string
+    // is classified here as a nested command so the trap itself adds nothing.
+    const trapBody = trapCommandBody(segmentTokens, definitions.names);
+    if (trapBody !== undefined) {
+      if (trapBody !== "") {
+        executableSegments.push(...extractExecutableCommandSegmentsInternal(trapBody, depth + 1, "shell-wrapper"));
+      }
       continue;
     }
 
@@ -410,6 +421,59 @@ function extractExecutableCommandSegmentsInternal( // NOSONAR
   }
 
   return executableSegments;
+}
+
+const SHELL_FUNCTION_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/u;
+
+// "name () { ... }" and "function name { ... }" define a function; the header
+// executes nothing and the body splits into ordinary segments once the header
+// is gone. The names let trap recognise a locally defined cleanup function.
+function stripFunctionDefinitionHeaders(tokens: readonly string[]): { readonly tokens: readonly string[]; readonly names: ReadonlySet<string> } {
+  const kept: string[] = [];
+  const names = new Set<string>();
+  let index = 0;
+  while (index < tokens.length) {
+    const token = tokens[index] ?? "";
+    const next = tokens[index + 1] ?? "";
+    if (token === "function" && SHELL_FUNCTION_NAME.test(next)) {
+      names.add(next);
+      index += tokens[index + 2] === "(" && tokens[index + 3] === ")" ? 4 : 2;
+      continue;
+    }
+    if (SHELL_FUNCTION_NAME.test(token) && next === "(" && tokens[index + 2] === ")") {
+      names.add(token);
+      index += 3;
+      continue;
+    }
+    kept.push(token);
+    index += 1;
+  }
+  return { tokens: kept, names };
+}
+
+// Returns the command text a trap would run ("" when nothing runs), or
+// undefined when the segment is not a trap or its argument is a bare word that
+// is not a locally defined function; that case stays unclassified as before.
+function trapCommandBody(tokens: readonly string[], definedFunctions: ReadonlySet<string>): string | undefined {
+  let index = 0;
+  while (index < tokens.length && (isEnvAssignment(tokens[index] ?? "") || SHELL_LEADING_CONTROL_WORDS.has(basename(tokens[index] ?? "").toLowerCase()))) {
+    index += 1;
+  }
+  if (basename(tokens[index] ?? "").toLowerCase() !== "trap") {
+    return undefined;
+  }
+  const argument = tokens[index + 1];
+  if (argument === undefined || argument === "-" || argument === "") {
+    return "";
+  }
+  if (argument.startsWith("-")) {
+    // trap -l / trap -p only print.
+    return "";
+  }
+  if (SHELL_FUNCTION_NAME.test(argument)) {
+    return definedFunctions.has(argument) ? "" : undefined;
+  }
+  return argument;
 }
 
 function isRedirectionOnlySegment(tokens: readonly string[]): boolean {
@@ -1364,7 +1428,7 @@ function addNestedCommandRuleCandidates(candidates: Set<string>, command: string
   for (const subcommand of extractExecutableShellSubcommands(command)) {
     addCommandRuleCandidatesFromNestedCommand(candidates, subcommand.command, depth);
   }
-  for (const segment of splitCommandSegments(tokenizeShellCommand(command))) {
+  for (const segment of splitCommandSegments(stripFunctionDefinitionHeaders(tokenizeShellCommand(command)).tokens)) {
     addSegmentCommandRuleCandidates(candidates, segment, depth);
   }
 }
@@ -1806,6 +1870,13 @@ function unwrapExecutableStep(tokens: readonly string[], index: number): { reado
     const innerCommand = shellCommandString(args);
     if (innerCommand) {
       return { nextIndex: tokens.length, result: { args: [], innerCommand } };
+    }
+  }
+  if (commandName === "trap") {
+    // A quoted command string runs later exactly like a bash -c body.
+    const argument = args[0];
+    if (argument !== undefined && argument !== "" && !argument.startsWith("-") && !SHELL_FUNCTION_NAME.test(argument)) {
+      return { nextIndex: tokens.length, result: { args: [], innerCommand: argument } };
     }
   }
   return { nextIndex: tokens.length, result: { commandName, args } };

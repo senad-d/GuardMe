@@ -73,6 +73,8 @@ test("GuardMe RPC auto mode fails closed without an approval UI round trip", { t
     assert.match(resultText(allowedEnd), /GuardMe e2e fixture/);
     assert.match(eventsText(allowed.events), /SCENARIO TOOL RESULT RECEIVED: read/);
     assert.equal(restarted.exit, undefined, "RPC agent remains alive after the ordinary blocked result");
+    await assertAllowedProjectDelete(restarted, fixture);
+    assert.equal(await pathExists(fixture.localPolicyPath), false);
   } finally {
     for (const client of clients) {
       await client.stop();
@@ -182,6 +184,7 @@ test("GuardMe RPC e2e setup, policy enforcement, approvals, and persistence", { 
 
     await assertAllowedRead(client);
     await assertAllowedValidationCommand(client);
+    await assertAllowedProjectDelete(client, fixture);
     await assertAllowedWriteAndEdit(client, fixture);
     await assertAllowedScopedFind(client);
     await assertProtectedEnvRead(client, fixture);
@@ -225,6 +228,14 @@ async function assertAllowedValidationCommand(client) {
   const end = expectToolEnd(run.events, "bash", { error: false });
   assert.match(resultText(end), /guardme e2e validation ok/);
   assert.doesNotMatch(resultText(end), /GuardMe blocked/i);
+}
+
+async function assertAllowedProjectDelete(client, fixture) {
+  await fixture.recreateApprovalTarget();
+  const run = await runScenario(client, "allowed-project-delete");
+  expectToolEnd(run.events, "bash", { error: false });
+  assert.equal(await pathExists(fixture.approvalTargetPath), false, "concrete project-local removal runs unattended");
+  assert.equal(run.uiRequests.some((request) => request.method === "select"), false);
 }
 
 async function assertAllowedWriteAndEdit(client, fixture) {
@@ -383,7 +394,7 @@ async function assertPolicyMissingApproval(client, fixture) {
   const third = await runScenario(client, "policy-missing-generic-command", { uiHandler: createApprovalUiHandler("Allow once") });
   assert.ok(third.uiRequests.some((request) => request.method === "select" && /GuardMe approval required/i.test(request.title ?? "")));
   end = expectToolEnd(third.events, "bash", { error: false });
-  assert.match(resultText(end), /42/);
+  assert.match(resultText(end).trim(), /^\d+$/u);
   assert.equal(await fixture.readLocalPolicy(), beforeYaml, "allow once must not persist a YAML rule");
 }
 
@@ -400,7 +411,7 @@ async function assertDangerousDenyLocalPersistence(client, fixture) {
   assert.match(resultText(end), /user decision|deny-local|denied/i);
   assert.equal(await pathExists(fixture.denyTargetPath), true);
   assert.match(await fixture.readLocalPolicy(), /denyCommands:/);
-  assert.match(await fixture.readLocalPolicy(), /pattern: "rm -rf deny-target\/file\.txt"/);
+  assert.match(await fixture.readLocalPolicy(), /pattern: "find deny-target -name file\.txt -delete"/);
 
   client = await restartRpcClient(client, fixture);
   await fixture.recreateDenyTarget();
@@ -434,7 +445,7 @@ async function assertDangerousApprovalPersistence(client, fixture) {
   assert.equal(await pathExists(fixture.approvalTargetPath), false, "allow-local should let the delete run");
   const yaml = await fixture.readLocalPolicy();
   assert.match(yaml, /allowCommands:/);
-  assert.match(yaml, /pattern: "rm -rf approval-target\/file\.txt"/);
+  assert.match(yaml, /pattern: "find approval-target -name file\.txt -delete"/);
   assert.equal(await pathExists(fixture.globalPolicyPath), false, "approval persistence must be local, not global");
 
   client = await restartRpcClient(client, fixture);

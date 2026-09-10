@@ -108,7 +108,7 @@ function countScenarioToolCalls(context: any, scenario: string): number {
 function agentApprovalToolCall(): ScriptedToolCall {
   return {
     name: "bash",
-    arguments: { command: "rm -rf approval-target/file.txt && printf 'guardme agent automatic\\n'" },
+    arguments: { command: "rm -rf approval-target/*.txt && printf 'guardme agent automatic\\n'" },
   };
 }
 
@@ -157,6 +157,8 @@ function toolCallForScenario(scenario: string): ScriptedToolCall | undefined {
       return { name: "read", arguments: { path: "README.md" } };
     case "allowed-validation-command":
       return { name: "bash", arguments: { command: "npm test -- --help" } };
+    case "allowed-project-delete":
+      return { name: "bash", arguments: { command: "rm -rf approval-target/file.txt" } };
     case "allowed-write":
       return { name: "write", arguments: { path: "tmp/safe-write.txt", content: "safe write from guardme e2e\n" } };
     case "allowed-edit":
@@ -188,7 +190,7 @@ function toolCallForScenario(scenario: string): ScriptedToolCall | undefined {
     case "outside-delete-block":
       return { name: "bash", arguments: { command: `rm -rf ${shellQuote(outsideFixturePath("outside-delete"))}` } };
     case "command-allow-boundary":
-      return { name: "bash", arguments: { command: "npm test -- --help && rm -rf build" } };
+      return { name: "bash", arguments: { command: "npm test -- --help && rm -rf build/*.txt" } };
     case "script-write-denied-content":
       return {
         name: "write",
@@ -202,11 +204,12 @@ function toolCallForScenario(scenario: string): ScriptedToolCall | undefined {
     case "local-script-exec-denied-content":
       return { name: "bash", arguments: { command: "bash scripts/unsafe.sh" } };
     case "policy-missing-generic-command":
-      return { name: "bash", arguments: { command: "expr 20 + 22" } };
+      return { name: "bash", arguments: { command: "getconf ARG_MAX" } };
+    // find -delete retains approval and has no glob in the saved exact rule.
     case "approval-dangerous-delete":
-      return { name: "bash", arguments: { command: "rm -rf approval-target/file.txt" } };
+      return { name: "bash", arguments: { command: "find approval-target -name file.txt -delete" } };
     case "approval-dangerous-deny":
-      return { name: "bash", arguments: { command: "rm -rf deny-target/file.txt" } };
+      return { name: "bash", arguments: { command: "find deny-target -name file.txt -delete" } };
     default:
       return undefined;
   }
