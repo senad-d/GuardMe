@@ -123,6 +123,11 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
         actions: ["read", "list"],
         reason: "Allow reading all @earendil-works package contents across installation locations.",
       },
+      {
+        pattern: "~/.agent-browser/**",
+        actions: ["read", "list"],
+        reason: "agent-browser writes screenshots and session state there; agents read screenshots back as images.",
+      },
     ],
     allowCommands: [
       { pattern: "true", reason: "Allow no-op shell fallback in compound commands." },
@@ -234,6 +239,8 @@ export function createBuiltInDefaultPolicy(): GuardMePolicyConfig {
       { pattern: "pi *", reason: "Common project pi command." },
       { pattern: "tmux *", reason: "Common project tmux command." },
       { pattern: "agent-browser *", reason: "Common project agent-browser command." },
+      { pattern: "lsof *", reason: "Port and open-file checks while running local servers." },
+      { pattern: "kill *", reason: "Stopping processes the agent started, such as a local dev server." },
     ],
     denyPaths: [
       {
