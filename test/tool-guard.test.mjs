@@ -580,6 +580,172 @@ test("destructive shell commands cannot target directories containing protected 
   stopGuardMeSession(ctx);
 });
 
+test("compound shell scripts protect each path under its own segment's action", async () => {
+  const { cwd, ctx } = await createGuardContext();
+  await mkdir(join(cwd, ".git"), { recursive: true });
+  await writeFile(join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+  await mkdir(join(cwd, "infra", "modules", "x"), { recursive: true });
+  await writeFile(join(cwd, "infra", "main.tf"), "", "utf8");
+  await writeFile(join(cwd, "infra", "modules", "x", "main.tf"), "", "utf8");
+  await mkdir(join(cwd, "vendor", "module", ".git"), { recursive: true });
+  await writeFile(join(cwd, "src.txt"), "", "utf8");
+
+  const cleanupScript = (deleteLines) => [
+    "set -eu",
+    "printf '%s\\n' 'Created paths before cleanup:'",
+    "find infra -print | sort",
+    deleteLines,
+    "printf '%s\\n' 'Cleanup verification:'",
+    "test ! -e infra",
+    "printf '%s\\n' 'PASS: infra removed'",
+    "printf '%s\\n' 'Top-level entries after cleanup:'",
+    "find . -maxdepth 1 -mindepth 1 -print | sort",
+  ].join("\n");
+
+  // Deletes of plain project paths pass whatever list/read/test segments surround them.
+  for (const command of [
+    cleanupScript("rm -rf infra"),
+    cleanupScript("rm infra/main.tf\nrmdir infra"),
+    "rm -rf infra",
+    "rm infra/main.tf",
+    "rmdir infra/modules/x",
+    "find . -maxdepth 1 -print | sort\nrm -rf infra\nfind . -maxdepth 1 -print | sort",
+    "ls . && rm infra/main.tf && ls .",
+    "rm infra/modules/x/main.tf && rmdir infra/modules/x && find . -type d | sort",
+    "rm ./infra/main.tf; rmdir ./infra/modules/x; ls -la .",
+    "rm infra/main.tf; ls .git",
+    "rm infra/main.tf; cat .git/HEAD",
+    "set -eu\ntest -e infra && rm -rf infra\necho done",
+    "echo hi > infra/notes.txt && rm infra/notes.txt",
+  ]) {
+    assert.equal(await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx), undefined, command);
+  }
+
+  // Anything that really deletes, moves or renames .git stays refused, alone or next to a legal delete.
+  for (const command of [
+    "rm -rf .git",
+    "rm -rf infra/.git",
+    "rm -rf .",
+    "rm -rf ./",
+    "mv .git x",
+    "rm infra/main.tf && rm -rf .git",
+    "rm infra/main.tf; mv .git backup",
+    "find . -maxdepth 1 -print | sort; rm -rf .",
+    "ls . && rm -rf vendor",
+    "echo hi > infra/notes.txt && mv .git x",
+    "echo hi > infra/notes.txt && rm -rf vendor",
+  ]) {
+    const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx);
+    assert.equal(blocked?.block, true, command);
+    assert.match(blocked?.reason ?? "", /Repository metadata|\.git metadata/, command);
+  }
+  const glob = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "rm -rf *" } }, ctx);
+  assert.equal(glob?.block, true);
+  assert.match(glob?.reason ?? "", /exact allowCommands rule or user approval/);
+  stopGuardMeSession(ctx);
+});
+
+test("shell output redirections cannot hide behind reads of the same protected path", async () => {
+  const { cwd, ctx } = await createGuardContext();
+  await mkdir(join(cwd, ".git"), { recursive: true });
+  await writeFile(join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+
+  for (const command of [
+    "sh -c 'cat .git/HEAD' > .git/HEAD",
+    "cat .git/HEAD; sh -c 'echo hi' >> .git/HEAD",
+    "cat .git/HEAD; { echo hi; } > .git/HEAD",
+    "cat .git/HEAD; (echo hi) >| .git/HEAD",
+    "cat .git/HEAD; while false; do echo hi; done 2> .git/HEAD",
+    "env -S 'cat .git/HEAD' > .git/HEAD",
+    "trap 'cat .git/HEAD' EXIT > .git/HEAD",
+  ]) {
+    const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx);
+    assert.equal(blocked?.block, true, command);
+    assert.match(blocked?.reason ?? "", /Repository metadata is read-only/, command);
+  }
+
+  for (const command of [
+    "sh -c 'cat .git/HEAD' > output.txt",
+    "cat .git/HEAD; { echo hi; } > output.txt",
+    "cat .git/HEAD > output.txt",
+  ]) {
+    assert.equal(await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx), undefined, command);
+  }
+  stopGuardMeSession(ctx);
+});
+
+test("input redirections retain read actions under action-scoped path policy", async () => {
+  const { cwd, ctx } = await createGuardContext({
+    localPolicy: 'version: 1\ndenyPaths:\n  - pattern: "private-data.txt"\n    actions: [read]\n    reason: "Private data cannot be read."\nnoDeletePaths:\n  - pattern: "keep.txt"\n    reason: "Keep this file."\n',
+  });
+  await writeFile(join(cwd, "private-data.txt"), "private\n", "utf8");
+  await writeFile(join(cwd, "readable.txt"), "public\n", "utf8");
+  await writeFile(join(cwd, "keep.txt"), "keep\n", "utf8");
+
+  for (const command of [
+    "sort < private-data.txt",
+    "cat readable.txt; sort < private-data.txt",
+    "cat readable.txt; jq . < private-data.txt",
+    "cat readable.txt; read line 0< private-data.txt",
+    "cat readable.txt; { sort; } < private-data.txt",
+    "sh -c 'sort' < private-data.txt",
+    "cat private-data.txt > private-data.txt",
+    "sort < private-data.txt > output.txt",
+    "read line <> private-data.txt",
+    "read line 0<> private-data.txt",
+  ]) {
+    const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx);
+    assert.equal(blocked?.block, true, command);
+    assert.match(blocked?.reason ?? "", /Private data cannot be read/, command);
+  }
+
+  for (const command of ["cat keep.txt; rm keep.txt", "rm keep.txt < keep.txt"]) {
+    const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx);
+    assert.equal(blocked?.block, true, command);
+    assert.match(blocked?.reason ?? "", /Keep this file/, command);
+  }
+
+  for (const command of ["sort < readable.txt", "sh -c 'sort' < readable.txt", "echo hi > private-data.txt"]) {
+    assert.equal(await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx), undefined, command);
+  }
+  stopGuardMeSession(ctx);
+});
+
+test("read-only outside allows cannot authorize output redirections", async () => {
+  const { cwd, ctx } = await createGuardContext({
+    localPolicy: 'version: 1\nallowPaths:\n  - pattern: "../shared.txt"\n    actions: [read]\n',
+  });
+  await writeFile(join(cwd, "..", "shared.txt"), "shared\n", "utf8");
+
+  for (const command of ["sort < ../shared.txt", "sh -c 'cat ../shared.txt'"]) {
+    assert.equal(await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx), undefined, command);
+  }
+  for (const command of ["sh -c 'cat ../shared.txt' > ../shared.txt", "sort < ../shared.txt > ../shared.txt"]) {
+    const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx);
+    assert.equal(blocked?.block, true, command);
+    assert.match(blocked?.reason ?? "", /Outside-project write requires an explicit allowPaths/, command);
+  }
+  stopGuardMeSession(ctx);
+});
+
+test("script inspection preserves shell redirection path actions", async () => {
+  const { cwd, ctx } = await createGuardContext({
+    localPolicy: `version: 1\nallowCommands:\n  - pattern: "sh -c 'cat .git/HEAD' > .git/HEAD"\n`,
+  });
+  await mkdir(join(cwd, ".git"), { recursive: true });
+  await writeFile(join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+  const content = "#!/bin/sh\nsh -c 'cat .git/HEAD' > .git/HEAD\n";
+  await writeFile(join(cwd, "clobber.sh"), content, "utf8");
+
+  const execution = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "bash clobber.sh" } }, ctx);
+  const proposed = await evaluateGuardedToolCall({ toolName: "write", input: { path: "new-script.sh", content } }, ctx);
+  for (const blocked of [execution, proposed]) {
+    assert.equal(blocked?.block, true);
+    assert.match(blocked?.reason ?? "", /Repository metadata is read-only/);
+  }
+  stopGuardMeSession(ctx);
+});
+
 test("bash evasions for cloud CLIs and credential literals are hard blocked", async () => {
   const { ctx } = await createGuardContext();
 

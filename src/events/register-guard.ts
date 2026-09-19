@@ -11,6 +11,7 @@ import {
   detectPackageScriptExecutions,
   extractExecutableCommandSegments,
   tokenizeShellCommand,
+  type ExecutableCommandSegment,
   type LocalScriptExecution,
   type PackageScriptExecution,
 } from "../policy/commands.ts";
@@ -167,19 +168,17 @@ export async function mapToolCallToPolicyRequest(
       return { error: `GuardMe could not evaluate ${event.toolName} as bash because input.command is missing.` };
     }
     const commandClassification = classifyShellCommand(command);
-    const normalized = await normalizeTargets(commandClassification.targetPaths, cwd, homeDir, true);
-    if ("error" in normalized) {
-      return { error: normalized.error };
+    const targets = await shellCommandTargets(commandClassification, cwd, homeDir);
+    if ("error" in targets) {
+      return targets;
     }
-    const discoveryTargets = protectedShellDiscoveryTargets(commandClassification);
-    const mutationTargets = await protectedMutationDescendantTargets(commandClassification.primaryAction, normalized.targets);
     return {
       request: {
         toolName: event.toolName,
         action: commandClassification.primaryAction,
         cwd,
         command,
-        targets: [...normalized.targets, ...discoveryTargets, ...mutationTargets],
+        targets: targets.targets,
         riskHint: commandClassification.risk,
       },
       commandClassification,
@@ -758,12 +757,10 @@ async function scriptCommandPolicyRequest(
   | { readonly error: string }
 > {
   const commandClassification = classifyShellCommand(command.command);
-  const normalized = await normalizeTargets(commandClassification.targetPaths, parentRequest.cwd, homeDir, true);
-  if ("error" in normalized) {
-    return { error: normalized.error };
+  const targets = await shellCommandTargets(commandClassification, parentRequest.cwd, homeDir);
+  if ("error" in targets) {
+    return targets;
   }
-  const discoveryTargets = protectedShellDiscoveryTargets(commandClassification);
-  const mutationTargets = await protectedMutationDescendantTargets(commandClassification.primaryAction, normalized.targets);
   return {
     request: {
       toolName: parentRequest.toolName,
@@ -771,9 +768,7 @@ async function scriptCommandPolicyRequest(
       cwd: parentRequest.cwd,
       command: command.command,
       targets: [
-        ...normalized.targets,
-        ...discoveryTargets,
-        ...mutationTargets,
+        ...targets.targets,
         { kind: "tool", raw: `${source.sourceKind}:${source.sourcePath ?? source.snippetLabel}:${command.lineStart}:${command.preview}` },
       ],
       riskHint: commandClassification.risk,
@@ -1160,16 +1155,42 @@ function extractToolPathValues(contract: GuardedToolContract, input: unknown): r
   return [...new Set(candidates)];
 }
 
+// Use access provenance from classification, not executable-segment membership:
+// wrappers and groups can redirect a path that another segment only reads.
+// Keep every action for that path, and scan protected descendants only for
+// delete/move/rename accesses. Legacy targets without provenance stay conservative
+// by falling back to the command's primary action.
+async function shellCommandTargets(
+  commandClassification: ReturnType<typeof classifyShellCommand>,
+  cwd: string,
+  homeDir: string | undefined,
+): Promise<{ readonly targets: readonly PathTarget[] } | { readonly error: string }> {
+  const normalized = await normalizeTargets(commandClassification.targetPaths, cwd, homeDir, true);
+  if ("error" in normalized) {
+    return normalized;
+  }
+  const segments = extractExecutableCommandSegments(commandClassification.rawCommand);
+  const targets: PathTarget[] = [];
+  for (const target of normalized.targets) {
+    const actions = new Set(commandClassification.pathAccesses
+      .filter((access) => access.rawPath === target.raw)
+      .map((access) => access.action));
+    targets.push(...(actions.size > 0 ? [...actions].map((action) => ({ ...target, action })) : [target]));
+  }
+  const mutationTargets = await protectedMutationDescendantTargets(commandClassification.primaryAction, targets);
+  return { targets: [...targets, ...protectedShellDiscoveryTargets(segments), ...mutationTargets] };
+}
+
 async function protectedMutationDescendantTargets(
   action: PolicyAction,
   targets: readonly PathTarget[],
 ): Promise<readonly PathTarget[]> {
-  if (action !== "delete" && action !== "move" && action !== "rename") {
-    return [];
-  }
-
   const protectedTargets: PathTarget[] = [];
   for (const target of targets) {
+    const targetAction = target.action ?? action;
+    if (targetAction !== "delete" && targetAction !== "move" && targetAction !== "rename") {
+      continue;
+    }
     if (!target.exists || !target.canonicalPath) {
       continue;
     }
@@ -1182,6 +1203,7 @@ async function protectedMutationDescendantTargets(
         exists: true,
         projectRoot: target.projectRoot,
         isInsideProject: target.isInsideProject,
+        action: targetAction,
       });
     }
   }
@@ -1191,17 +1213,15 @@ async function protectedMutationDescendantTargets(
 // Broad search commands themselves are allowed; only searches that hunt for
 // credential-like file names (e.g. `find -name '.env*'`, a grep glob of
 // `*secret*`) are flagged, and the evaluator approval-gates them.
-function protectedShellDiscoveryTargets(
-  commandClassification: ReturnType<typeof classifyShellCommand>,
-): readonly PathTarget[] {
+function protectedShellDiscoveryTargets(segments: readonly ExecutableCommandSegment[]): readonly PathTarget[] {
   const protectedTargets: PathTarget[] = [];
-  for (const segment of extractExecutableCommandSegments(commandClassification.rawCommand)) {
+  for (const segment of segments) {
     if (segment.commandName !== "find") {
       continue;
     }
     const pattern = shellFindPattern(segment.originalText) ?? shellFindPattern(segment.normalizedText);
     if (pattern && isCredentialLikeDiscoveryPattern(pattern)) {
-      protectedTargets.push({ kind: "path", raw: pattern, discovery: true });
+      protectedTargets.push({ kind: "path", raw: pattern, discovery: true, action: segment.action });
     }
   }
   return protectedTargets;

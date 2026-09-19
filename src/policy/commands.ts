@@ -20,6 +20,11 @@ export type CommandClassificationKind =
   | "shell"
   | "ambiguous";
 
+export interface CommandPathAccess {
+  readonly rawPath: string;
+  readonly action: PolicyAction;
+}
+
 export interface CommandClassification {
   readonly rawCommand: string;
   readonly normalizedCommand: string;
@@ -34,6 +39,8 @@ export interface CommandClassification {
   readonly reason: string;
   readonly matchedPatterns: readonly string[];
   readonly targetPaths: readonly string[];
+  /** Retains every path/action pair before compound or redirection aggregation. */
+  readonly pathAccesses: readonly CommandPathAccess[];
   readonly credentialAccess: boolean;
 }
 
@@ -138,6 +145,7 @@ interface ClassificationOptions {
   readonly dangerous: boolean;
   readonly requiresUserDecision: boolean;
   readonly credentialAccess?: boolean;
+  readonly pathAccesses?: readonly CommandPathAccess[];
 }
 
 interface SegmentClassificationContext {
@@ -145,6 +153,7 @@ interface SegmentClassificationContext {
   readonly commandName?: string;
   readonly args: readonly string[];
   readonly segmentTokens: readonly string[];
+  readonly operandPaths: readonly string[];
   readonly inputRedirectionTargets: readonly string[];
   readonly targetPaths: readonly string[];
   readonly credentialAccess: boolean;
@@ -185,7 +194,8 @@ const SHELL_HARD_SEGMENT_BOUNDARY_TOKENS = new Set([";", "&&", "||", "|", "&"]);
 const SHELL_COMMAND_POSITION_BOUNDARY_TOKENS = new Set(["(", "{", "then", "do", "else", "elif", "fi", "done", "esac"]);
 const SHELL_CLOSING_SEGMENT_BOUNDARY_TOKENS = new Set([")", "}"]);
 const OUTPUT_REDIRECTION_TOKENS = new Set([">", ">>", ">|", "1>", "1>>", "1>|", "2>", "2>>", "2>|", "<>", "0<>"]);
-const INPUT_REDIRECTION_TOKENS = new Set(["<", "0<"]);
+// Read/write redirections must satisfy both read and write path policy.
+const INPUT_REDIRECTION_TOKENS = new Set(["<", "0<", "<>", "0<>"]);
 const REDIRECTION_TOKENS_WITH_TARGET = new Set([
   ...OUTPUT_REDIRECTION_TOKENS,
   ...INPUT_REDIRECTION_TOKENS,
@@ -866,8 +876,9 @@ function createSegmentClassificationContext(
 ): SegmentClassificationContext {
   const commandName = unwrapped.commandName;
   const args = unwrapped.args;
+  const operandPaths = extractLikelyPathOperands(commandName, args, segmentTokens);
   const inputRedirectionTargets = extractInputRedirectionTargets(segmentTokens);
-  const targetPaths = uniqueStrings([...extractLikelyPathOperands(commandName, args, segmentTokens), ...inputRedirectionTargets]);
+  const targetPaths = uniqueStrings([...operandPaths, ...inputRedirectionTargets]);
   const credentialAccess = targetPaths.some(isCredentialLikePath);
   const inlineCode = inlineCodeSnippets(commandName, args);
   return {
@@ -875,6 +886,7 @@ function createSegmentClassificationContext(
     ...(commandName ? { commandName } : {}),
     args,
     segmentTokens,
+    operandPaths,
     inputRedirectionTargets,
     targetPaths,
     credentialAccess,
@@ -1095,6 +1107,7 @@ function outputRedirectionClassification(context: ExecutableSegmentClassificatio
     reason: "Shell redirection writes to a file.",
     matchedPatterns: ["redirection"],
     targetPaths,
+    pathAccesses: redirectionPathAccesses(context.inputRedirectionTargets, outputRedirectionTargets),
     hardDenied: false,
     dangerous,
     requiresUserDecision: dangerous,
@@ -1108,6 +1121,7 @@ function wrapperRedirectionClassification(rawCommand: string, segmentTokens: rea
     return undefined;
   }
   const targetPaths = uniqueStrings([...inputTargets, ...outputTargets]);
+  const pathAccesses = redirectionPathAccesses(inputTargets, outputTargets);
   if (targetPaths.some(isCredentialLikePath)) {
     return classification({
       rawCommand,
@@ -1117,6 +1131,7 @@ function wrapperRedirectionClassification(rawCommand: string, segmentTokens: rea
       reason: "Credential-like file redirection detected on a shell wrapper.",
       matchedPatterns: ["credential-read"],
       targetPaths,
+      pathAccesses,
       hardDenied: true,
       dangerous: true,
       requiresUserDecision: false,
@@ -1133,6 +1148,7 @@ function wrapperRedirectionClassification(rawCommand: string, segmentTokens: rea
       reason: "Shell redirection writes to a file.",
       matchedPatterns: ["redirection"],
       targetPaths,
+      pathAccesses,
       hardDenied: false,
       dangerous,
       requiresUserDecision: dangerous,
@@ -1146,6 +1162,7 @@ function wrapperRedirectionClassification(rawCommand: string, segmentTokens: rea
     reason: "Shell redirection reads from a file.",
     matchedPatterns: ["redirection"],
     targetPaths,
+    pathAccesses,
     hardDenied: false,
     dangerous: false,
     requiresUserDecision: false,
@@ -1376,8 +1393,15 @@ function genericShellClassification(context: ExecutableSegmentClassificationCont
 }
 
 function segmentClassification(context: SegmentClassificationContext, options: SegmentClassificationOptions): CommandClassification {
-  const { targetPaths = context.targetPaths, ...classificationOptions } = options;
-  return classification({ rawCommand: context.rawCommand, targetPaths, ...classificationOptions });
+  const {
+    targetPaths = context.targetPaths,
+    pathAccesses = [
+      ...pathAccessesForAction(context.operandPaths, options.primaryAction),
+      ...pathAccessesForAction(context.inputRedirectionTargets, "read"),
+    ],
+    ...classificationOptions
+  } = options;
+  return classification({ rawCommand: context.rawCommand, targetPaths, pathAccesses, ...classificationOptions });
 }
 
 function classification(options: ClassificationOptions): CommandClassification {
@@ -1409,8 +1433,29 @@ function classification(options: ClassificationOptions): CommandClassification {
     reason,
     matchedPatterns,
     targetPaths,
+    pathAccesses: options.pathAccesses ?? pathAccessesForAction(targetPaths, primaryAction),
     credentialAccess,
   };
+}
+
+function pathAccessesForAction(paths: readonly string[], action: PolicyAction): readonly CommandPathAccess[] {
+  return paths.map((rawPath) => ({ rawPath, action }));
+}
+
+function redirectionPathAccesses(inputPaths: readonly string[], outputPaths: readonly string[]): readonly CommandPathAccess[] {
+  return [...pathAccessesForAction(inputPaths, "read"), ...pathAccessesForAction(outputPaths, "write")];
+}
+
+function uniquePathAccesses(accesses: readonly CommandPathAccess[]): readonly CommandPathAccess[] {
+  const seen = new Set<string>();
+  return accesses.filter((access) => {
+    const key = `${access.action}\u0000${access.rawPath}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function commandRuleMatchCandidatesInternal(command: string, depth: number): readonly string[] {
@@ -1626,6 +1671,7 @@ function aggregateCommandClassification(
     actions,
     matchedPatterns,
     targetPaths,
+    pathAccesses: uniquePathAccesses(classifications.flatMap((classification) => classification.pathAccesses)),
     credentialAccess: classifications.some((classification) => classification.credentialAccess),
   };
 }

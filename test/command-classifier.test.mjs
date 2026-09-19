@@ -200,6 +200,34 @@ test("compound command classifications keep guarded paths from lower-priority se
   assert.deepEqual(classified.targetPaths, ["build", "/etc/passwd"]);
 });
 
+test("classifications preserve each path access through compounds and redirections", () => {
+  for (const [command, expected] of [
+    ["rm -rf infra; find . -print", ["delete:infra", "list:."]],
+    ["cat file > output", ["read:file", "write:output"]],
+    ["sort < file", ["read:file"]],
+    ["read line 0< file", ["read:file"]],
+    ["sort < file > file", ["read:file", "write:file"]],
+    ["read line <> file", ["read:file", "write:file"]],
+    ["read line 0<> file", ["read:file", "write:file"]],
+    ["rm file < file", ["delete:file", "read:file"]],
+    ["cat file; rm file; cat file", ["delete:file", "read:file"]],
+    ["sh -c 'cat file' > file", ["read:file", "write:file"]],
+    ["env -S 'cat file' >> file", ["read:file", "write:file"]],
+    ["sh -c 'sort' < file", ["read:file"]],
+    ["cat file; { echo hi; } > file", ["read:file", "write:file"]],
+    ["cat file; (echo hi) >| file", ["read:file", "write:file"]],
+    ["cat file; while false; do echo hi; done 2> file", ["read:file", "write:file"]],
+    ["trap 'cat file' EXIT > file", ["read:file", "write:file"]],
+    ['cat "a b"; { echo hi; } >> "a b"', ["read:a b", "write:a b"]],
+    ["echo $(cat file) > output", ["read:file", "write:output"]],
+    ["cat file 2>/dev/null", ["read:file"]],
+  ]) {
+    const classified = classifyShellCommand(command);
+    assert.deepEqual(classified.pathAccesses.map((access) => `${access.action}:${access.rawPath}`).sort(), expected, command);
+    assert.deepEqual(new Set(classified.pathAccesses.map((access) => access.rawPath)), new Set(classified.targetPaths), command);
+  }
+});
+
 test("recursive force deletion and .git deletion are detected", () => {
   for (const command of ["rm -rf build", "rm -r -f build", "rm --recursive --force build", "rm -R --force build"]) {
     const recursive = classifyShellCommand(command);

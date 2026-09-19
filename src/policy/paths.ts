@@ -2,7 +2,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 
-import type { PathTarget } from "./action.ts";
+import type { PathTarget, PolicyAction } from "./action.ts";
 
 export interface NormalizePolicyPathOptions {
   readonly cwd: string;
@@ -29,6 +29,8 @@ export interface NormalizedPolicyPath {
   readonly nearestExistingParent?: string;
   /** Mirrors PathTarget.discovery for targets synthesized by discovery scans. */
   readonly discovery?: boolean;
+  /** Mirrors PathTarget.action: the access action this path is checked under. */
+  readonly action?: PolicyAction;
 }
 
 export interface PolicyPathMatchOptions {

@@ -97,6 +97,13 @@ export interface PathTarget {
    * hard-denied, except zeroAccessPaths.
    */
   readonly discovery?: boolean;
+  /**
+   * Action of this shell path access, including redirections. A command can
+   * access the same path in several ways; separate targets retain each action
+   * instead of replacing it with the command's primary action.
+   * Unset means the request action applies.
+   */
+  readonly action?: PolicyAction;
 }
 
 export interface CommandTarget {

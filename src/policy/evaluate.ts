@@ -554,6 +554,7 @@ function firstHardPathDenial(
   action: PolicyAction,
 ): { readonly rule: SourcedGuardMePathRule; readonly reason: string } | undefined {
   for (const path of paths) {
+    const pathAction = path.action ?? action;
     const zero = firstMatchingPathRule(policy.zeroAccessPaths, [path], action, true);
     if (zero) {
       return { rule: zero, reason: zero.reason ?? "Path is blocked by zeroAccessPaths." };
@@ -564,14 +565,14 @@ function firstHardPathDenial(
       return { rule: credential, reason: credential.reason ?? "Credential-like path is protected." };
     }
 
-    if (PATH_MUTATION_ACTIONS.has(action)) {
+    if (PATH_MUTATION_ACTIONS.has(pathAction)) {
       const readOnly = firstMatchingPathRule(policy.readOnlyPaths, [path], action, true);
       if (readOnly) {
         return { rule: readOnly, reason: readOnly.reason ?? "Path is read-only and cannot be mutated." };
       }
     }
 
-    if (DELETE_LIKE_ACTIONS.has(action)) {
+    if (DELETE_LIKE_ACTIONS.has(pathAction)) {
       const noDelete = firstMatchingPathRule(policy.noDeletePaths, [path], action, true);
       if (noDelete) {
         return { rule: noDelete, reason: noDelete.reason ?? "Path cannot be deleted, moved, or renamed." };
@@ -590,7 +591,8 @@ function firstPathAllow(
   if (allow) {
     return allow;
   }
-  if (action === "read" || action === "list") {
+  const pathAction = path.action ?? action;
+  if (pathAction === "read" || pathAction === "list") {
     // readOnlyPaths are protections first, read grants second: outside the
     // project only rules anchored to an absolute or home-relative location
     // grant reads, so `**/.git/**`-style globs cannot open the whole disk.
@@ -609,14 +611,13 @@ function firstMatchingPathRule(
   ignoreRuleActions = false,
   candidateScope: "all" | "resolved" = "all",
 ): SourcedGuardMePathRule | undefined {
-  return rules.find((rule) => {
-    if (!ignoreRuleActions && rule.actions && rule.actions.length > 0) {
-      if (!isPathRuleAction(action) || !rule.actions.includes(action)) {
-        return false;
-      }
+  return rules.find((rule) => paths.some((path) => {
+    const pathAction = path.action ?? action;
+    if (!ignoreRuleActions && rule.actions && rule.actions.length > 0 && (!isPathRuleAction(pathAction) || !rule.actions.includes(pathAction))) {
+      return false;
     }
-    return paths.some((path) => matchPolicyPathPattern(rule.pattern, path, { candidateScope }).matched);
-  });
+    return matchPolicyPathPattern(rule.pattern, path, { candidateScope }).matched;
+  }));
 }
 
 function isPathRuleAction(action: PolicyAction): action is PathPolicyAction {
@@ -1046,6 +1047,7 @@ function normalizedPathFromTarget(target: PathTarget, cwd: string): NormalizedPo
     isInsideProject,
     hadTraversal: target.hadTraversal ?? false,
     ...(target.discovery ? { discovery: true } : {}),
+    ...(target.action ? { action: target.action } : {}),
   };
 }
 
