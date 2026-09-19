@@ -43,6 +43,7 @@ GuardMe is a Pi extension for LLM tool-call safety. It checks Pi shell and files
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [How GuardMe Works](#how-guardme-works)
+  - [Diagram walkthroughs and editable sources](docs/DIAGRAMS.md)
 - [Policy and State Files](#policy-and-state-files)
 - [Configuration](#configuration)
 - [Commands](#commands)
@@ -116,6 +117,10 @@ GuardMe has no npm install-time setup step. Missing policy files are valid: the 
 ---
 
 ## How GuardMe Works
+
+[![GuardMe tool-call safety gate: built-in, global and trusted project policy feed pre-execution checks, leading to block, warning/review, or allow.](img/diagrams/guardme-tool-call-enforcement.png)](img/diagrams/guardme-tool-call-enforcement.png)
+
+*GuardMe checks tool actions before execution, not prompts or LLM API traffic. [Text walkthrough and editable source](docs/DIAGRAMS.md#1-tool-call-safety-gate).*
 
 GuardMe checks Pi LLM tool calls before they run:
 
@@ -247,6 +252,10 @@ The General pane includes project active/off state, Pi project-trust controls, w
 ---
 
 ## Approval Flow
+
+[![GuardMe approval flow: block and coach the first eligible attempt, then handle an identical retry using auto, interactive, agent or block mode. Hard denials never become approvals.](img/diagrams/guardme-approval-flow.png)](img/diagrams/guardme-approval-flow.png)
+
+*Compare the four approval modes, including agent mode’s later-turn retry gate. [Text walkthrough and editable source](docs/DIAGRAMS.md#2-warning-and-approval-flow).*
 
 For dangerous-but-not-hard-forbidden actions and policy-missing shell/script commands:
 

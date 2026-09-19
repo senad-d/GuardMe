@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="31.1.5">
+  <diagram id="guardme-approvals" name="Warning and approval flow">
+    <mxGraphModel grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1160" pageHeight="1380" background="#FFFFFF" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="eyebrow" value="GUARDME  /  02  /  WARNINGS &amp; APPROVALS" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=14;fontStyle=1;fontColor=#6D28D9;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="1080" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="title" value="Blocked once. What happens on retry?" style="text;html=1;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=32;fontStyle=1;fontColor=#172033;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="1080" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="Only eligible risky or policy-missing actions enter this flow. Repeating a hard denial never unlocks it." style="text;html=1;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=18;fontColor=#475569;" vertex="1" parent="1">
+          <mxGeometry x="40" y="137" width="1080" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="eligible" value="&lt;b&gt;1  Eligible action&lt;/b&gt;&lt;br&gt;&lt;br&gt;No deny or protection blocks it,&lt;br&gt;but it still needs approval.&lt;br&gt;No matching warned fingerprint yet." style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;strokeWidth=2;fontFamily=Helvetica;fontSize=18;fontColor=#172033;align=left;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="220" width="330" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="warn" value="&lt;b&gt;2  Block + coach&lt;/b&gt;&lt;br&gt;&lt;br&gt;Do not run the tool.&lt;br&gt;Record the warned fingerprint&lt;br&gt;and return safer-action guidance." style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#FFFBEB;strokeColor=#B45309;strokeWidth=2;fontFamily=Helvetica;fontSize=18;fontColor=#78350F;align=left;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="415" y="220" width="330" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="retry" value="&lt;b&gt;3  Identical retry&lt;/b&gt;&lt;br&gt;&lt;br&gt;The same fingerprint is seen again.&lt;br&gt;Recheck all protections.&lt;br&gt;If still eligible, resolve the mode." style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;strokeWidth=2;fontFamily=Helvetica;fontSize=18;fontColor=#172033;align=left;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="790" y="220" width="330" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="mode" value="&lt;b&gt;Which approvalMode is active?&lt;/b&gt;&lt;br&gt;Approval permits only the reviewed action; every remaining check must still pass before execution." style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;strokeWidth=2;fontFamily=Helvetica;fontSize=18;fontColor=#172033;align=left;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="435" width="1080" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="auto" value="&lt;b&gt;auto&lt;/b&gt;  ·  default&lt;br&gt;&lt;br&gt;TUI + approval UI:&lt;br&gt;&lt;b&gt;Ask the user.&lt;/b&gt;&lt;br&gt;&lt;br&gt;RPC, JSON, print or&lt;br&gt;missing approval UI:&lt;br&gt;&lt;b&gt;BLOCK.&lt;/b&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;strokeWidth=2;fontFamily=Helvetica;fontSize=18;fontColor=#172033;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="600" width="240" height="290" as="geometry"/>
+        </mxCell>
+        <mxCell id="interactive" value="&lt;b&gt;interactive&lt;/b&gt;&lt;br&gt;&lt;br&gt;Available approval UI:&lt;br&gt;&lt;b&gt;Ask the user.&lt;/b&gt;&lt;br&gt;&lt;br&gt;RPC needs a controller&lt;br&gt;that answers UI requests.&lt;br&gt;&lt;br&gt;No approval UI? &lt;b&gt;BLOCK.&lt;/b&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;strokeWidth=2;fontFamily=Helvetica;fontSize=18;fontColor=#172033;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="320" y="600" width="240" height="290" as="geometry"/>
+        </mxCell>
+        <mxCell id="agent-mode" value="&lt;b&gt;agent&lt;/b&gt;  ·  explicit opt-in&lt;br&gt;&lt;br&gt;&lt;b&gt;No approval UI.&lt;/b&gt;&lt;br&gt;First in-process attempt&lt;br&gt;and same-turn repeats:&lt;br&gt;&lt;b&gt;BLOCK.&lt;/b&gt;&lt;br&gt;&lt;br&gt;Identical later-turn retry:&lt;br&gt;&lt;b&gt;Automatic allow-once.&lt;/b&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFFBEB;strokeColor=#B45309;strokeWidth=2;fontFamily=Helvetica;fontSize=18;fontColor=#78350F;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="600" y="600" width="240" height="290" as="geometry"/>
+        </mxCell>
+        <mxCell id="block-mode" value="&lt;b&gt;block&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;b&gt;No approval UI.&lt;/b&gt;&lt;br&gt;Approval-required calls:&lt;br&gt;&lt;b&gt;BLOCK.&lt;/b&gt;&lt;br&gt;&lt;br&gt;Already-allowed actions&lt;br&gt;are unaffected." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#BE123C;strokeWidth=2;fontFamily=Helvetica;fontSize=18;fontColor=#881337;align=left;verticalAlign=top;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="880" y="600" width="240" height="290" as="geometry"/>
+        </mxCell>
+        <mxCell id="human-details" value="&lt;b&gt;When a person decides&lt;/b&gt;&lt;br&gt;&lt;br&gt;Allow / deny once, or save a narrow project / global rule.&lt;br&gt;Cancel means deny once. Saved rules reload policy.&lt;br&gt;&lt;br&gt;No UI available? Stay blocked with guidance;&lt;br&gt;do not invent a user decision or save an approval.&lt;br&gt;Warnings and user decisions are recorded in redacted state." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;strokeWidth=1;fontFamily=Helvetica;fontSize=18;fontColor=#172033;align=left;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="940" width="520" height="260" as="geometry"/>
+        </mxCell>
+        <mxCell id="agent-details" value="&lt;b&gt;When agent mode approves&lt;/b&gt;&lt;br&gt;&lt;br&gt;Dangerous actions: one use per block / retry cycle.&lt;br&gt;Policy-missing commands: session-scoped allowance.&lt;br&gt;&lt;br&gt;Automatic approvals and reuse are audited.&lt;br&gt;No YAML saved. Old warnings cannot skip the first block.&lt;br&gt;Never auto-enabled for child processes." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFFBEB;strokeColor=#B45309;strokeWidth=1;fontFamily=Helvetica;fontSize=18;fontColor=#78350F;align=left;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="600" y="940" width="520" height="260" as="geometry"/>
+        </mxCell>
+        <mxCell id="precedence" value="&lt;b&gt;Mode precedence&lt;/b&gt;   Built-in auto → global YAML → trusted project YAML → GUARDME_APPROVAL_MODE&lt;br&gt;Later sources override earlier modes. Invalid values resolve safely to block for that source / override.&lt;br&gt;&lt;b&gt;This changes approval behavior, not the deny-first rules.&lt;/b&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#CBD5E1;strokeWidth=1;fontFamily=Helvetica;fontSize=17;fontColor=#475569;align=left;spacing=20;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1250" width="1080" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="eligible-warn" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B45309;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="eligible" target="warn">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="392" y="295"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="warn-retry" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="warn" target="retry">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="767" y="295"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="retry-mode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.847222;entryY=0;" edge="1" parent="1" source="retry" target="mode">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="955" y="400"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="mode-auto" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;exitX=0.111111;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="mode" target="auto">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="160" y="560"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="mode-interactive" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;exitX=0.37037;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="mode" target="interactive">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="440" y="560"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="mode-agent" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#B45309;strokeWidth=2;endArrow=block;endFill=1;exitX=0.62963;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="mode" target="agent-mode">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="720" y="560"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="mode-block" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#BE123C;strokeWidth=2;endArrow=block;endFill=1;exitX=0.888889;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="mode" target="block-mode">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1000" y="560"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
