@@ -92,8 +92,14 @@ interface ScriptContentInspectionOptions extends ScriptInspectionSource {
   readonly allowCommandDefaultDeny?: boolean;
 }
 
+// Pi's inter-extension bus. Herdr's Pi integration reports the agent as
+// blocked while a "herdr:blocked" request is active, so an orchestrator sees a
+// pending approval instead of a tool call that is still running.
+let approvalEvents: Pick<ExtensionAPI["events"], "emit"> | undefined;
+
 /** Register GuardMe tool-call enforcement handlers. */
 export function registerGuard(pi: ExtensionAPI): void {
+  approvalEvents = pi.events;
   pi.on("turn_start", handleGuardMeTurnStart);
   pi.on("tool_call", async (event, ctx) => evaluateGuardedToolCall(event, ctx));
 }
@@ -233,7 +239,13 @@ async function handlePolicyDecision(
       return block(formatAgentModeBlockReason(request, decision, AGENT_APPROVAL_BLOCK_REASON, AGENT_APPROVAL_NEXT_STEP));
     }
 
-    const approval = await requestApprovalDecision(toApprovalContext(ctx, state.config.config.approvalMode), request, decision);
+    approvalEvents?.emit("herdr:blocked", { active: true, label: `GuardMe approval: ${request.toolName}` });
+    let approval: Awaited<ReturnType<typeof requestApprovalDecision>>;
+    try {
+      approval = await requestApprovalDecision(toApprovalContext(ctx, state.config.config.approvalMode), request, decision);
+    } finally {
+      approvalEvents?.emit("herdr:blocked", { active: false });
+    }
     if (approval.kind === "blocked") {
       recordDecisionGuidance(request, decision, APPROVAL_UNAVAILABLE_NEXT_STEP);
       return block(formatApprovalUnavailableBlockReason(request, decision, approval.reason));
@@ -1185,27 +1197,30 @@ async function protectedMutationDescendantTargets(
   action: PolicyAction,
   targets: readonly PathTarget[],
 ): Promise<readonly PathTarget[]> {
+  const groups = await Promise.all(targets.map((target) => protectedMutationTargetDescendants(action, target)));
+  return groups.flat();
+}
+
+async function protectedMutationTargetDescendants(action: PolicyAction, target: PathTarget): Promise<readonly PathTarget[]> {
   const protectedTargets: PathTarget[] = [];
-  for (const target of targets) {
-    const targetAction = target.action ?? action;
-    if (targetAction !== "delete" && targetAction !== "move" && targetAction !== "rename") {
-      continue;
-    }
-    if (!target.exists || !target.canonicalPath) {
-      continue;
-    }
-    for (const childPath of await protectedMutationDescendantPaths(target.canonicalPath)) {
-      protectedTargets.push({
-        kind: "path",
-        raw: childPath,
-        absolutePath: childPath,
-        canonicalPath: childPath,
-        exists: true,
-        projectRoot: target.projectRoot,
-        isInsideProject: target.isInsideProject,
-        action: targetAction,
-      });
-    }
+  const targetAction = target.action ?? action;
+  if (targetAction !== "delete" && targetAction !== "move" && targetAction !== "rename") {
+    return [];
+  }
+  if (!target.exists || !target.canonicalPath) {
+    return [];
+  }
+  for (const childPath of await protectedMutationDescendantPaths(target.canonicalPath)) {
+    protectedTargets.push({
+      kind: "path",
+      raw: childPath,
+      absolutePath: childPath,
+      canonicalPath: childPath,
+      exists: true,
+      projectRoot: target.projectRoot,
+      isInsideProject: target.isInsideProject,
+      action: targetAction,
+    });
   }
   return protectedTargets;
 }
@@ -1264,11 +1279,18 @@ async function protectedMutationDescendantPaths(directoryPath: string): Promise<
     scannedEntries: 0,
   };
 
-  for (let index = 0; index < scan.queue.length && scan.scannedEntries < MAX_PROTECTED_MUTATION_SCAN_ENTRIES; index += 1) {
-    await scanProtectedMutationDirectory(scan.queue[index]!, scan);
+  // Each directory updates the shared queue and entry budget before the next is selected.
+  for await (const _ of scanProtectedMutationDirectories(scan)) {
+    // Consume the bounded sequential traversal.
   }
 
   return [...new Set(scan.protectedPaths)];
+}
+
+async function* scanProtectedMutationDirectories(scan: ProtectedMutationScan): AsyncGenerator<void> {
+  for (let index = 0; index < scan.queue.length && scan.scannedEntries < MAX_PROTECTED_MUTATION_SCAN_ENTRIES; index += 1) {
+    yield scanProtectedMutationDirectory(scan.queue[index]!, scan);
+  }
 }
 
 interface ProtectedMutationScan {

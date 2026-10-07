@@ -1082,6 +1082,42 @@ test("registerGuard wires a tool_call handler", () => {
   assert.equal(typeof handlers.get("tool_call"), "function");
 });
 
+test("an interactive approval reports the agent blocked to Herdr while the dialog is open", async () => {
+  const emitted = [];
+  registerGuard({ on: () => {}, events: { emit: (name, data) => emitted.push([name, data]) } });
+  const root = await mkdtemp(join(tmpdir(), "guardme-herdr-blocked-"));
+  const cwd = join(root, "project");
+  await mkdir(cwd, { recursive: true });
+  let seenDuringDialog;
+  const ctx = {
+    cwd,
+    hasUI: true,
+    mode: "tui",
+    isProjectTrusted: () => true,
+    ui: {
+      setStatus: () => {},
+      notify: () => {},
+      custom: async () => {
+        seenDuringDialog = emitted.slice();
+        return undefined;
+      },
+    },
+  };
+  await startGuardMeSession(ctx, { homeDir: join(root, "home"), environment: {} });
+  const call = { toolName: "bash", input: { command: "find build -delete" } };
+
+  // The first attempt is coached; the later-turn retry opens the dialog.
+  await evaluateGuardedToolCall(call, ctx);
+  assert.deepEqual(emitted, []);
+  beginGuardMeAgentTurn();
+  const result = await evaluateGuardedToolCall(call, ctx);
+
+  assert.match(result?.reason ?? "", /deny-once/);
+  assert.deepEqual(seenDuringDialog, [["herdr:blocked", { active: true, label: "GuardMe approval: bash" }]]);
+  assert.deepEqual(emitted.at(-1), ["herdr:blocked", { active: false }]);
+  stopGuardMeSession(ctx);
+});
+
 test("concurrent identical later-turn retries consume only one automatic approval", async () => {
   const { ctx } = await createGuardContext({ environment: { GUARDME_APPROVAL_MODE: "agent" } });
   const call = { toolName: "bash", input: { command: "find build -delete" } };

@@ -261,19 +261,27 @@ export async function collectCustomRuleAdditions(
   }
 
   let config = initialConfig ? clonePolicyConfig(initialConfig) : createEmptyPolicyConfig();
+  // Consume interactive selections sequentially: each rule prompt must finish first.
+  for await (const section of collectCustomRuleSections(ctx, scope)) {
+    if (!section) return undefined;
+    const rule = await promptForRule(ctx, section, scope);
+    if (rule) config = appendSetupRule(config, section, rule);
+  }
+  return config;
+}
+
+async function* collectCustomRuleSections(
+  ctx: SetupWizardContext,
+  scope: SetupScope,
+): AsyncGenerator<Parameters<typeof promptForRule>[1] | undefined> {
   while (true) {
     const section = await chooseRuleSection(ctx, scope);
     if (!section) {
-      return undefined;
+      yield undefined;
+      return;
     }
-    if (section === "save") {
-      return config;
-    }
-
-    const rule = await promptForRule(ctx, section, scope);
-    if (rule) {
-      config = appendSetupRule(config, section, rule);
-    }
+    if (section === "save") return;
+    yield section;
   }
 }
 

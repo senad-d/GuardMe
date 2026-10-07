@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 - Unreleased
+
+- While an interactive approval dialog is open, GuardMe emits `herdr:blocked` (`{ active: true, label: "GuardMe approval: <tool>" }`, then `{ active: false }`, also on errors) on Pi's event bus. Herdr's Pi integration reports the agent as blocked instead of working, so orchestrators such as Mission see a pending approval instead of a tool call that never returns.
+
 ## 0.2.9 - Unreleased
 
 - Hardened shell wrapper unwrapping so `bash -c` and `env -S` forms keep their outer redirection targets; credential redirections such as `bash -c 'cat' < ~/.ssh/id_rsa` are hard-denied and redirected writes are classified and policy-checked.

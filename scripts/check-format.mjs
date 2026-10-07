@@ -22,21 +22,14 @@ function extensionOf(path) {
 
 async function collectFiles(root) {
   const entries = await readdir(root, { withFileTypes: true });
-  const files = [];
+  const groups = await Promise.all(entries.map((entry) => collectEntryFiles(root, entry)));
+  return groups.flat();
+}
 
-  for (const entry of entries) {
-    const path = join(root, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await collectFiles(path)));
-      continue;
-    }
-
-    if (entry.isFile() && checkExtensions.has(extensionOf(path))) {
-      files.push(path);
-    }
-  }
-
-  return files;
+async function collectEntryFiles(root, entry) {
+  const path = join(root, entry.name);
+  if (entry.isDirectory()) return collectFiles(path);
+  return entry.isFile() && checkExtensions.has(extensionOf(path)) ? [path] : [];
 }
 
 function hasTrailingWhitespace(line) {
@@ -66,33 +59,40 @@ async function checkFile(path) {
   return failures;
 }
 
-const files = [];
-for (const file of rootFiles) {
+async function optionalRootFile(file) {
   try {
     await access(file);
-    files.push(file);
+    return [file];
   } catch {
-    // Optional root files, such as package-lock.json before npm install, are skipped.
+    // Optional root files are skipped when absent.
+    return [];
   }
 }
-for (const root of roots) {
-  try {
-    files.push(...(await collectFiles(root)));
-  } catch {
-    // Optional roots are skipped when a prepared project has not created them yet.
-  }
-}
-files.sort((a, b) => a.localeCompare(b));
 
-const failures = [];
-for (const file of files) {
+async function optionalRootDirectory(root) {
   try {
-    const fileFailures = await checkFile(file);
-    for (const failure of fileFailures) failures.push(`${file}: ${failure}`);
-  } catch (error) {
-    failures.push(`${file}: could not be checked: ${error instanceof Error ? error.message : String(error)}`);
+    return await collectFiles(root);
+  } catch {
+    // Optional roots are skipped when absent.
+    return [];
   }
 }
+
+async function fileFailures(file) {
+  try {
+    const failures = await checkFile(file);
+    return failures.map((failure) => `${file}: ${failure}`);
+  } catch (error) {
+    return [`${file}: could not be checked: ${error instanceof Error ? error.message : String(error)}`];
+  }
+}
+
+const groups = await Promise.all([
+  ...rootFiles.map(optionalRootFile),
+  ...roots.map(optionalRootDirectory),
+]);
+const files = groups.flat().sort((a, b) => a.localeCompare(b));
+const failures = (await Promise.all(files.map(fileFailures))).flat();
 
 if (failures.length > 0) {
   console.error("Formatting check failed:");
