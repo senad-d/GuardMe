@@ -17,4 +17,15 @@ export const TOOL_LOCATION_PATTERNS = [
   "~/Library/pnpm/**",
   "~/.asdf/installs/**",
   "~/.local/share/mise/**",
+  // Directory roots need their own patterns: /** matches descendants only.
+  "~/.local/share/fnm",
+  "~/.local/share/fnm/**",
+  "~/go/bin",
+  "~/go/bin/**",
+  "~/.cargo/bin",
+  "~/.cargo/bin/**",
+  "~/.local/bin",
+  "~/.local/bin/**",
+  "~/.gem",
+  "~/.gem/**",
 ] as const;

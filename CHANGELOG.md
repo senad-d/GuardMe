@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3 - Unreleased
+
+- Added starter command allowances for Semgrep, OSV-Scanner, govulncheck, gosec, Bandit, pip-audit, Brakeman, bundle-audit, and zizmor. Deny rules, credential protections, and compound-command checks still take precedence.
+- Added read/list allowances for fnm installations, `~/go/bin`, `~/.cargo/bin`, `~/.local/bin`, and `~/.gem`, including their directory roots as well as descendants. Mutations remain unapproved by these defaults, and credential-like files remain protected.
+
 ## 0.3.1 - Unreleased
 
 - While an interactive approval dialog is open, GuardMe emits `herdr:blocked` (`{ active: true, label: "GuardMe approval: <tool>" }`, then `{ active: false }`, also on errors) on Pi's event bus. Herdr's Pi integration reports the agent as blocked instead of working, so orchestrators such as Mission see a pending approval instead of a tool call that never returns.

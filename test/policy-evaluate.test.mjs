@@ -506,6 +506,79 @@ test("@earendil-works defaults allow all scoped packages across installations wi
   }
 });
 
+test("user tool location defaults allow inspection without allowing mutations or credentials", async () => {
+  const root = outsideRoot("guardme-eval-user-tools-");
+  const cwd = join(root, "project");
+  const home = join(root, "home");
+  await mkdir(cwd, { recursive: true });
+  const defaults = createBuiltInDefaultPolicy();
+  const policy = policyFrom({
+    ...defaults,
+    allowPaths: defaults.allowPaths.map((rule) => ({
+      ...rule,
+      pattern: rule.pattern.startsWith("~/") ? join(home, rule.pattern.slice(2)) : rule.pattern,
+    })),
+  });
+
+  for (const directory of [".local/share/fnm", "go/bin", ".cargo/bin", ".local/bin", ".gem"]) {
+    const installation = join(home, directory);
+    const binary = join(installation, "scanner");
+    await mkdir(installation, { recursive: true });
+    await writeFile(binary, "example tool", "utf8");
+    for (const [action, target] of [["read", binary], ["list", installation]]) {
+      const decision = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, action, target) });
+      assert.equal(decision.outcome, "allow", `${action}: ${directory}`);
+      assert.equal(decision.matchedRules[0]?.category, "allowPaths", directory);
+    }
+    for (const action of ["write", "edit", "delete", "move", "rename"]) {
+      const decision = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, action, binary) });
+      assert.equal(decision.outcome, "deny", `${action}: ${directory}`);
+    }
+    for (const filename of [".env", "credentials.json", "api-token.txt"]) {
+      const decision = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", join(installation, filename)) });
+      assert.equal(decision.outcome, "deny", `${directory}/${filename}`);
+      assert.equal(decision.hard, true, `${directory}/${filename}`);
+    }
+  }
+  const unrelated = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", join(home, "Documents", "note.txt")) });
+  assert.equal(unrelated.outcome, "deny");
+});
+
+test("security scanner defaults allow bare, version and scan commands without weakening denials", async () => {
+  const cwd = outsideRoot("guardme-eval-scanners-");
+  const defaults = createBuiltInDefaultPolicy();
+  const policy = policyFrom(defaults);
+  const scans = [
+    ["semgrep", "scan --config auto ."],
+    ["osv-scanner", "scan source -r ."],
+    ["govulncheck", "./..."],
+    ["gosec", "./..."],
+    ["bandit", "-r src"],
+    ["pip-audit", "-r requirements.txt"],
+    ["brakeman", "--path ."],
+    ["bundle-audit", "check"],
+    ["zizmor", ".github/workflows"],
+  ];
+  for (const [scanner, args] of scans) {
+    for (const command of [scanner, `${scanner} --version`, `${scanner} ${args}`, `/usr/local/bin/${scanner} --version`]) {
+      const { request, classified } = shellRequest(cwd, command);
+      const decision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
+      assert.equal(decision.outcome, "allow", command);
+    }
+    for (const suffix of ["&& aws sts get-caller-identity", "&& cat .env", "&& cat /etc/passwd", "> .env"]) {
+      const { request, classified } = shellRequest(cwd, `${scanner} --version ${suffix}`);
+      assert.equal(evaluatePolicyRequest({ policy, request, commandClassification: classified }).outcome, "deny", `${scanner}: ${suffix}`);
+    }
+    for (const suffix of ["&& unknown-scanner", "&& rm -rf build/*.txt"]) {
+      const { request, classified } = shellRequest(cwd, `${scanner} --version ${suffix}`);
+      assert.equal(evaluatePolicyRequest({ policy, request, commandClassification: classified }).outcome, "coach", `${scanner}: ${suffix}`);
+    }
+    const deniedPolicy = policyFrom({ ...defaults, denyCommands: [...defaults.denyCommands, { pattern: `${scanner} *` }] });
+    const { request, classified } = shellRequest(cwd, `${scanner} --version`);
+    assert.equal(evaluatePolicyRequest({ policy: deniedPolicy, request, commandClassification: classified }).outcome, "deny", scanner);
+  }
+});
+
 test("outside-project mutations require explicit allow and no protection", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-eval-outside-write-"));
   const cwd = join(root, "project");

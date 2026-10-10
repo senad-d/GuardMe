@@ -80,6 +80,29 @@ test("built-in default policy includes approved hard-protection sections", () =>
   assert.equal(new Set(allowPatterns).size, allowPatterns.length, "allowCommands contains duplicate patterns");
 });
 
+test("built-in defaults allow security scanner command families", () => {
+  const defaults = createBuiltInDefaultPolicy();
+  for (const scanner of ["semgrep", "osv-scanner", "govulncheck", "gosec", "bandit", "pip-audit", "brakeman", "bundle-audit", "zizmor"]) {
+    assert.ok(defaults.allowCommands.some((rule) => rule.pattern === `${scanner} *`), scanner);
+  }
+});
+
+test("built-in user tool locations grant only read and list actions", () => {
+  const defaults = createBuiltInDefaultPolicy();
+  const nextDefaults = createBuiltInDefaultPolicy();
+  for (const root of ["~/.local/share/fnm", "~/go/bin", "~/.cargo/bin", "~/.local/bin", "~/.gem"]) {
+    for (const pattern of [root, `${root}/**`]) {
+      const rule = defaults.allowPaths.find((candidate) => candidate.pattern === pattern);
+      const nextRule = nextDefaults.allowPaths.find((candidate) => candidate.pattern === pattern);
+      assert.ok(rule, pattern);
+      assert.deepEqual(rule.actions, ["read", "list"], pattern);
+      assert.deepEqual(nextRule, rule, pattern);
+      assert.notEqual(nextRule, rule, pattern);
+      assert.notEqual(nextRule.actions, rule.actions, pattern);
+    }
+  }
+});
+
 test("built-in temp policy preserves root and descendant patterns, order, actions and fresh rule objects", () => {
   const roots = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders/*/*/T", "/private/var/folders/*/*/T"];
   const defaults = createBuiltInDefaultPolicy();
