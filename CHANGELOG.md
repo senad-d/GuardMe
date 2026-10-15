@@ -1,8 +1,11 @@
 # Changelog
 
-## 0.3.3 - Unreleased
+## 0.3.4 - Unreleased
 
 - Made **Insecure edits** on by default when runtime settings are missing or omit `insecureEdits`. Explicit saved OFF settings remain respected, invalid settings still fail safe to OFF, and path protections and shell execution checks remain enforced.
+
+## 0.3.3 - Unreleased
+
 - Added starter command allowances for Semgrep, OSV-Scanner, govulncheck, gosec, Bandit, pip-audit, Brakeman, bundle-audit, and zizmor. Deny rules, credential protections, and compound-command checks still take precedence.
 - Added read/list allowances for fnm installations, `~/go/bin`, `~/.cargo/bin`, `~/.local/bin`, and `~/.gem`, including their directory roots as well as descendants. Mutations remain unapproved by these defaults, and credential-like files remain protected.
 
