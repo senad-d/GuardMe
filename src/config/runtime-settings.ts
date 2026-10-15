@@ -35,9 +35,13 @@ export interface WriteGuardMeRuntimeSettingsOptions {
 }
 
 const MAX_SETTINGS_FILE_BYTES = 64 * 1024;
-const DEFAULT_RUNTIME_SETTINGS: GuardMeRuntimeSettings = {
+export const DEFAULT_RUNTIME_SETTINGS: GuardMeRuntimeSettings = {
   version: POLICY_VERSION,
   enabled: true,
+  insecureEdits: true,
+};
+const FAIL_SAFE_RUNTIME_SETTINGS: GuardMeRuntimeSettings = {
+  ...DEFAULT_RUNTIME_SETTINGS,
   insecureEdits: false,
 };
 
@@ -179,16 +183,16 @@ async function readExistingRuntimeSettingsForWrite(path: string): Promise<GuardM
   let text: string;
   try {
     text = await readFile(path, "utf8");
-  } catch {
-    return DEFAULT_RUNTIME_SETTINGS;
+  } catch (error) {
+    return isNodeError(error) && error.code === "ENOENT" ? DEFAULT_RUNTIME_SETTINGS : FAIL_SAFE_RUNTIME_SETTINGS;
   }
 
   try {
     const parsed = JSON.parse(text) as unknown;
     const validated = validateRuntimeSettings(parsed, path);
-    return validated.diagnostics.length === 0 ? validated.settings : DEFAULT_RUNTIME_SETTINGS;
+    return validated.diagnostics.length === 0 ? validated.settings : FAIL_SAFE_RUNTIME_SETTINGS;
   } catch {
-    return DEFAULT_RUNTIME_SETTINGS;
+    return FAIL_SAFE_RUNTIME_SETTINGS;
   }
 }
 
@@ -199,7 +203,7 @@ function defaultLoadedSettings(
 ): LoadedGuardMeRuntimeSettings {
   return {
     paths,
-    settings: DEFAULT_RUNTIME_SETTINGS,
+    settings: diagnostics.some((diagnostic) => diagnostic.severity === "error") ? FAIL_SAFE_RUNTIME_SETTINGS : DEFAULT_RUNTIME_SETTINGS,
     found,
     diagnostics,
   };
@@ -220,34 +224,34 @@ function skippedLocalRuntimeSettings(paths: GuardMeRuntimeSettingsPaths): Loaded
 function validateRuntimeSettings(parsed: unknown, path: string): { readonly settings: GuardMeRuntimeSettings; readonly diagnostics: readonly PolicyDiagnostic[] } {
   if (!isRecord(parsed)) {
     return {
-      settings: DEFAULT_RUNTIME_SETTINGS,
+      settings: FAIL_SAFE_RUNTIME_SETTINGS,
       diagnostics: [settingsDiagnostic("settings.invalidShape", "GuardMe runtime settings must be a JSON object.", path)],
     };
   }
 
   if (parsed.version !== POLICY_VERSION) {
     return {
-      settings: DEFAULT_RUNTIME_SETTINGS,
+      settings: FAIL_SAFE_RUNTIME_SETTINGS,
       diagnostics: [settingsDiagnostic("settings.invalidVersion", `GuardMe runtime settings version must be ${POLICY_VERSION}.`, path)],
     };
   }
 
   if (typeof parsed.enabled !== "boolean") {
     return {
-      settings: DEFAULT_RUNTIME_SETTINGS,
+      settings: FAIL_SAFE_RUNTIME_SETTINGS,
       diagnostics: [settingsDiagnostic("settings.invalidEnabled", "GuardMe runtime settings enabled must be a boolean.", path)],
     };
   }
 
   if (parsed.insecureEdits !== undefined && typeof parsed.insecureEdits !== "boolean") {
     return {
-      settings: DEFAULT_RUNTIME_SETTINGS,
+      settings: FAIL_SAFE_RUNTIME_SETTINGS,
       diagnostics: [settingsDiagnostic("settings.invalidInsecureEdits", "GuardMe runtime settings insecureEdits must be a boolean.", path)],
     };
   }
 
   return {
-    settings: { version: POLICY_VERSION, enabled: parsed.enabled, insecureEdits: parsed.insecureEdits ?? false },
+    settings: { version: POLICY_VERSION, enabled: parsed.enabled, insecureEdits: parsed.insecureEdits ?? DEFAULT_RUNTIME_SETTINGS.insecureEdits },
     diagnostics: [],
   };
 }

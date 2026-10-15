@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { resolvePolicyConfigPaths } from "../src/config/load-config.ts";
-import { resolveRuntimeSettingsPath } from "../src/config/runtime-settings.ts";
+import { resolveRuntimeSettingsPath, writeGuardMeRuntimeSettings } from "../src/config/runtime-settings.ts";
 import {
   getGuardMeArgumentCompletions,
   handleGuardMeCommand,
@@ -104,11 +104,21 @@ test("/guardme status shows current status paths and diagnostics", async () => {
   const output = notifications.at(-1)?.[0] ?? "";
 
   assert.match(output, /GuardMe: active/);
+  assert.match(output, /Insecure edits: on/);
   assert.doesNotMatch(output, /│▶ General\s+│▶ GuardMe/);
   assert.match(output, /Policy rules:/);
   assert.match(output, /Diagnostics: none/);
   assert.match(output, /State paths:/);
   stopGuardMeSession(ctx);
+});
+
+test("/guardme status defaults insecure edits on before session initialization", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-command-status-inactive-"));
+  const { ctx, notifications } = commandContext(cwd);
+
+  await handleGuardMeCommand("status", ctx);
+
+  assert.match(notifications.at(-1)?.[0] ?? "", /Insecure edits: on/);
 });
 
 test("/guardme setup degrades safely without UI confirmation", async () => {
@@ -476,6 +486,7 @@ test("/guardme General Insecure edits toggle persists content-scan bypass", asyn
   const homeDir = join(root, "home");
   const cwd = join(root, "project");
   await mkdir(cwd, { recursive: true });
+  await writeGuardMeRuntimeSettings({ cwd, insecureEdits: false });
   const settingsPath = resolveRuntimeSettingsPath(cwd).settingsPath;
   let customCalls = 0;
   let reopenedLines = [];

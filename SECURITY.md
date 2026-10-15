@@ -18,7 +18,7 @@ GuardMe guards LLM calls to these Pi built-in tools:
 - `find`
 - `ls`
 
-Initial scope does not guard user-entered `!` / `!!` shell escapes, commands run outside Pi, arbitrary child processes outside Pi's tool path, or broader network/git policy. GuardMe now evaluates `bash` commands by executable segment and fails closed for segments that lack explicit command policy, but a user-approved command still runs with the local user's normal permissions. If the project-local **Insecure edits** setting is enabled, GuardMe intentionally skips proposed content/script scanning for `write` and `edit`; path protections and deny rules still apply, and the mode should be used only as a temporary authoring escape hatch.
+Initial scope does not guard user-entered `!` / `!!` shell escapes, commands run outside Pi, arbitrary child processes outside Pi's tool path, or broader network/git policy. GuardMe now evaluates `bash` commands by executable segment and fails closed for segments that lack explicit command policy, but a user-approved command still runs with the local user's normal permissions. The project-local **Insecure edits** setting is enabled by default. GuardMe intentionally skips proposed content/script scanning for `write` and `edit` in this mode; path protections and deny rules still apply. Turn Insecure edits off in `/guardme` to scan proposed content before mutation. Explicit saved OFF settings are preserved; invalid or unreadable settings fail safe to Insecure edits off.
 
 ## Hard-deny behavior
 

@@ -174,6 +174,8 @@ test("GuardMe RPC e2e setup, policy enforcement, approvals, and persistence", { 
     assert.match(setupYaml, /protectedCredentialPaths:/);
     assert.equal(await pathExists(fixture.globalPolicyPath), false, "setup should not write a global policy");
 
+    // Content-scan denial scenarios explicitly opt in; insecure edits is on by default.
+    await writeGuardMeRuntimeSettings({ cwd: fixture.projectDir, insecureEdits: false });
     await client.stop();
     client = trackClient(await startRpcPi({
       projectDir: fixture.projectDir,

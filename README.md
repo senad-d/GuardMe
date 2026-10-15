@@ -155,7 +155,7 @@ See [`docs/POLICY.md`](docs/POLICY.md) for the full policy reference.
 | Global | `~/.pi/agent/guardme.yaml` | `~/.pi/agent/guardme-state.jsonl` | n/a |
 | Project local | `.pi/agent/guardme.yaml` | `.pi/agent/guardme-state.jsonl` | `.pi/agent/guardme-settings.json` |
 
-Global policy loads first. Project-local policy, runtime settings, and generated state load only after the project is trusted. Missing runtime settings mean GuardMe is active and Insecure edits is off. Turning GuardMe off from `/guardme` writes project-local settings and bypasses GuardMe enforcement for that trusted project until you turn it active again. Turning Insecure edits on writes the same project-local settings file and makes only `write`/`edit` skip proposed content/script scanning; path protections and deny rules still apply, and `bash`, reads, and discovery tools stay guarded.
+Global policy loads first. Project-local policy, runtime settings, and generated state load only after the project is trusted. Missing runtime settings mean GuardMe is active and Insecure edits is on. Existing settings that omit `insecureEdits` also default to on; an explicit `"insecureEdits": false` is preserved. Turning GuardMe off from `/guardme` writes project-local settings and bypasses GuardMe enforcement for that trusted project until you turn it active again. Insecure edits makes only `write`/`edit` skip proposed content/script scanning; path protections and deny rules still apply, and `bash`, reads, and discovery tools stay guarded. Turn Insecure edits off in `/guardme` to enable proposed content/script scanning; the choice is saved in the same project-local settings file.
 
 Policy YAML also accepts `guardedTools`, a mapping from third-party tool names to the built-in contract GuardMe should use. For example, a PowerShell replacement and a read-tool alias can be protected with:
 
@@ -196,7 +196,7 @@ The usual setup path is to run:
 Use the in-session TUI to:
 
 - turn GuardMe `active` or `off` for the current project
-- turn **Insecure edits** on/off when you need `write`/`edit` to author scripts that contain otherwise blocked commands
+- turn **Insecure edits** off to scan proposed `write`/`edit` content, or leave it on (the default) to author scripts containing otherwise blocked commands
 - review or enable Pi project trust
 - inspect warnings and diagnostics
 - review the resolved approval mode and effective guarded tool mappings in Policies
@@ -236,7 +236,7 @@ readOnlyPaths:
     reason: "Documentation is read-only"
 ```
 
-Common built-in protections include cloud CLIs, privilege escalation, disk formatting/raw disk operations, `.git` deletion, credential-like files, `.env` and non-template `.env.*` variants such as `.env.local`, environment dumps (`env`, `printenv`, inline `process.env`/`os.environ` reads), credential-printing subcommands (`gh auth token`, `git credential`), Pi's own `~/.pi/agent/auth.json`, SSH keys, unsafe generated script content, and destructive commands aimed at protected descendants. Broad content searches such as `rg` and `grep -r` are allowed even in repos containing `.env`; direct reads of protected files stay blocked, and searches that hunt for credential-like file names (for example `find -name '*secret*'`) are approval-gated. **Insecure edits** deliberately skips proposed content/script scanning only for `write` and `edit`; use it temporarily and remember that protected paths such as `.env` remain blocked. Note that package.json scripts written while Insecure edits is on can later run through allowed package-manager commands such as `npm test`, so turn it back off when you are done.
+Common built-in protections include cloud CLIs, privilege escalation, disk formatting/raw disk operations, `.git` deletion, credential-like files, `.env` and non-template `.env.*` variants such as `.env.local`, environment dumps (`env`, `printenv`, inline `process.env`/`os.environ` reads), credential-printing subcommands (`gh auth token`, `git credential`), Pi's own `~/.pi/agent/auth.json`, SSH keys, unsafe generated script content, and destructive commands aimed at protected descendants. Broad content searches such as `rg` and `grep -r` are allowed even in repos containing `.env`; direct reads of protected files stay blocked, and searches that hunt for credential-like file names (for example `find -name '*secret*'`) are approval-gated. **Insecure edits** is on by default and deliberately skips proposed content/script scanning only for `write` and `edit`; protected paths such as `.env` remain blocked. Turn it off if you want generated content scanned before mutation. Local scripts and package.json scripts are still inspected before `bash` execution, including allowed package-manager commands such as `npm test`.
 
 ---
 

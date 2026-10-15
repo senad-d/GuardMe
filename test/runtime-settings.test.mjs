@@ -10,14 +10,14 @@ import {
   writeGuardMeRuntimeSettings,
 } from "../src/config/runtime-settings.ts";
 
-test("missing runtime settings default GuardMe to active", async () => {
+test("missing runtime settings default GuardMe to active with insecure edits on", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-settings-missing-"));
 
   const loaded = await loadGuardMeRuntimeSettings({ cwd });
 
   assert.equal(loaded.found, false);
   assert.equal(loaded.settings.enabled, true);
-  assert.equal(loaded.settings.insecureEdits, false);
+  assert.equal(loaded.settings.insecureEdits, true);
   assert.equal(loaded.diagnostics.length, 0);
 });
 
@@ -29,7 +29,7 @@ test("runtime settings persist enabled false and true", async () => {
   let loaded = await loadGuardMeRuntimeSettings({ cwd });
   assert.equal(loaded.found, true);
   assert.equal(loaded.settings.enabled, false);
-  assert.equal(loaded.settings.insecureEdits, false);
+  assert.equal(loaded.settings.insecureEdits, true);
   assert.match(await readFile(paths.settingsPath, "utf8"), /"enabled": false/);
 
   await writeGuardMeRuntimeSettings({ cwd, enabled: true });
@@ -54,7 +54,7 @@ test("runtime settings persist insecureEdits while preserving enabled", async ()
   assert.equal(loaded.settings.insecureEdits, true);
 });
 
-test("legacy runtime settings default insecure edits to false", async () => {
+test("legacy runtime settings default insecure edits to true", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-settings-legacy-"));
   const paths = resolveRuntimeSettingsPath(cwd);
   await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
@@ -64,18 +64,40 @@ test("legacy runtime settings default insecure edits to false", async () => {
 
   assert.equal(loaded.found, true);
   assert.equal(loaded.settings.enabled, true);
-  assert.equal(loaded.settings.insecureEdits, false);
+  assert.equal(loaded.settings.insecureEdits, true);
   assert.equal(loaded.diagnostics.length, 0);
+});
+
+test("explicit insecure edits off persists across loads and enabled changes", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-settings-secure-edits-"));
+  const paths = resolveRuntimeSettingsPath(cwd);
+
+  await writeGuardMeRuntimeSettings({ cwd, insecureEdits: false });
+  let loaded = await loadGuardMeRuntimeSettings({ cwd });
+  assert.equal(loaded.settings.enabled, true);
+  assert.equal(loaded.settings.insecureEdits, false);
+  assert.match(await readFile(paths.settingsPath, "utf8"), /"insecureEdits": false/);
+
+  await writeGuardMeRuntimeSettings({ cwd, enabled: false });
+  loaded = await loadGuardMeRuntimeSettings({ cwd });
+  assert.equal(loaded.settings.enabled, false);
+  assert.equal(loaded.settings.insecureEdits, false);
+
+  await writeGuardMeRuntimeSettings({ cwd, enabled: true });
+  loaded = await loadGuardMeRuntimeSettings({ cwd });
+  assert.equal(loaded.settings.enabled, true);
+  assert.equal(loaded.settings.insecureEdits, false);
 });
 
 test("untrusted projects skip local runtime settings", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-settings-untrusted-"));
-  await writeGuardMeRuntimeSettings({ cwd, enabled: false });
+  await writeGuardMeRuntimeSettings({ cwd, enabled: false, insecureEdits: false });
 
   const loaded = await loadGuardMeRuntimeSettings({ cwd, loadLocalSettings: false });
 
   assert.equal(loaded.found, false);
   assert.equal(loaded.settings.enabled, true);
+  assert.equal(loaded.settings.insecureEdits, true);
   assert.ok(loaded.diagnostics.some((diagnostic) => diagnostic.code === "settings.localSettingsSkippedUntrustedProject"));
 });
 
@@ -89,6 +111,7 @@ test("invalid runtime settings fail safe to active with diagnostics", async () =
 
   assert.equal(loaded.found, true);
   assert.equal(loaded.settings.enabled, true);
+  assert.equal(loaded.settings.insecureEdits, false);
   assert.ok(loaded.diagnostics.some((diagnostic) => diagnostic.code === "settings.invalidJson"));
 });
 
@@ -127,6 +150,7 @@ test("oversized runtime settings fail safe to active", async () => {
   const loaded = await loadGuardMeRuntimeSettings({ cwd });
 
   assert.equal(loaded.settings.enabled, true);
+  assert.equal(loaded.settings.insecureEdits, false);
   assert.ok(loaded.diagnostics.some((diagnostic) => diagnostic.code === "settings.fileTooLarge"));
 });
 
@@ -153,5 +177,6 @@ test("runtime settings writes refuse symlinked project settings paths", async ()
 
   const loaded = await loadGuardMeRuntimeSettings({ cwd });
   assert.equal(loaded.settings.enabled, true);
+  assert.equal(loaded.settings.insecureEdits, false);
   assert.ok(loaded.diagnostics.some((diagnostic) => diagnostic.code === "settings.symlinkRejected"));
 });

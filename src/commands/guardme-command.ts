@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 
 import { BUILT_IN_GUARDED_TOOLS, GUARDME_COMMAND_NAME } from "../constants.ts";
 import { resolvePolicyConfigPaths } from "../config/load-config.ts";
-import { resolveRuntimeSettingsPath, writeGuardMeRuntimeSettings } from "../config/runtime-settings.ts";
+import { DEFAULT_RUNTIME_SETTINGS, resolveRuntimeSettingsPath, writeGuardMeRuntimeSettings } from "../config/runtime-settings.ts";
 import type { MergedGuardMePolicyConfig } from "../config/merge-policy.ts";
 import { appendPolicyConfigRules, validatePolicyWriteTarget, writePolicyConfigFile, type AppendPolicyConfigRule } from "../config/write-policy.ts";
 import { COMMAND_RULE_SECTIONS, PATH_RULE_SECTIONS, type GuardMePolicyConfig, createBuiltInDefaultPolicy } from "../config/schema.ts";
@@ -646,7 +646,7 @@ function createConfigSnapshot(ctx: GuardMeStatusContext): ConfigSnapshot {
     cwd: ctx.cwd,
     projectTrusted: trusted,
     guardMe: snapshotGuardMeStatus(state),
-    insecureEdits: state?.insecureEdits ?? false,
+    insecureEdits: state?.insecureEdits ?? DEFAULT_RUNTIME_SETTINGS.insecureEdits,
     approvalMode: config.approvalMode ?? "auto",
     guardedTools: { ...BUILT_IN_GUARDED_TOOLS, ...config.guardedTools },
     policyRules: countPolicyRules(config),

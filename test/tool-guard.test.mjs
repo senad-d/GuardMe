@@ -26,6 +26,9 @@ async function createGuardContext(options = {}) {
     await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
     await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), options.localPolicy, "utf8");
   }
+  if (options.insecureEdits !== undefined) {
+    await writeGuardMeRuntimeSettings({ cwd, insecureEdits: options.insecureEdits });
+  }
   const statuses = [];
   const ctx = {
     cwd,
@@ -43,6 +46,7 @@ async function createGuardContext(options = {}) {
 
 test("configured shell and path aliases use their canonical enforcement contracts", async () => {
   const { cwd, ctx } = await createGuardContext({
+    insecureEdits: false,
     globalPolicy: "version: 1\nguardedTools:\n  pwsh: bash\n  file_put: write\n  file_scan: find\n",
   });
 
@@ -161,8 +165,8 @@ test("write and edit tool calls are treated as inside-project mutations", async 
   stopGuardMeSession(ctx);
 });
 
-test("write and edit script content are inspected before mutation", async () => {
-  const { cwd, ctx } = await createGuardContext();
+test("write and edit script content are inspected when insecure edits is explicitly off", async () => {
+  const { cwd, ctx } = await createGuardContext({ insecureEdits: false });
   await writeFile(join(cwd, "safe.sh"), "#!/bin/sh\necho safe\n", "utf8");
 
   const write = await evaluateGuardedToolCall({
@@ -195,16 +199,14 @@ test("write and edit script content are inspected before mutation", async () => 
   stopGuardMeSession(ctx);
 });
 
-test("insecure edits skips content scanning but preserves path protections and bash execution", async () => {
-  const { home, cwd, ctx, statuses } = await createGuardContext({
+test("insecure edits defaults on but preserves path protections and bash execution", async () => {
+  const { cwd, ctx, statuses } = await createGuardContext({
     localPolicy: 'version: 1\nzeroAccessPaths:\n  - pattern: "vault/**"\nreadOnlyPaths:\n  - pattern: "docs/**"\nprotectedCredentialPaths:\n  - pattern: "private/**"\n',
   });
   await mkdir(join(cwd, "docs"), { recursive: true });
   await writeFile(join(cwd, "docs", "guide.md"), "guide\n", "utf8");
   await writeFile(join(cwd, "safe.sh"), "#!/bin/sh\necho safe\n", "utf8");
-  await writeGuardMeRuntimeSettings({ cwd, insecureEdits: true });
-  await stopGuardMeSession(ctx);
-  await startGuardMeSession(ctx, { homeDir: home });
+  assert.equal(getGuardMeSessionState()?.insecureEdits, true);
   assert.deepEqual(statuses.at(-1), [EXTENSION_STATUS_KEY, "🛡️\u00a0"]);
 
   const scriptWrite = await evaluateGuardedToolCall({
@@ -730,6 +732,7 @@ test("read-only outside allows cannot authorize output redirections", async () =
 
 test("script inspection preserves shell redirection path actions", async () => {
   const { cwd, ctx } = await createGuardContext({
+    insecureEdits: false,
     localPolicy: `version: 1\nallowCommands:\n  - pattern: "sh -c 'cat .git/HEAD' > .git/HEAD"\n`,
   });
   await mkdir(join(cwd, ".git"), { recursive: true });
@@ -1186,7 +1189,7 @@ test("agent mode in TUI blocks without prompting and allows the later-turn retry
 test("quoted interpreter heredocs are inspected consistently in bash, local scripts and proposed content", async () => {
   const safe = "node --input-type=module <<'JS'\nconst commands = [`curl --head https://example.com`];\nconsole.log(commands.map((command) => ({command})));\nJS\n";
   // Local/proposed scripts retain their existing exact-command approval requirement.
-  const { cwd, ctx } = await createGuardContext({ globalPolicy: `version: 1\nallowCommands:\n  - pattern: ${JSON.stringify(safe)}\n` });
+  const { cwd, ctx } = await createGuardContext({ insecureEdits: false, globalPolicy: `version: 1\nallowCommands:\n  - pattern: ${JSON.stringify(safe)}\n` });
   const unsafe = "node <<'JS'\nconsole.log(process.env);\nJS\n";
   try {
     assert.equal(await evaluateGuardedToolCall({ toolName: "bash", input: { command: safe } }, ctx), undefined);

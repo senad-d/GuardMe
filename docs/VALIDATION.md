@@ -61,14 +61,14 @@ Manual/interactive smoke scenarios for TUI sessions:
 7. Repeated dangerous attempt opens approval UI in TUI under default `approvalMode: auto`; RPC opens it only with explicit `approvalMode: interactive` or `GUARDME_APPROVAL_MODE=interactive`.
 8. Default `auto` RPC and explicit `block` return bounded `WARNINGS & DECISIONS` denials without calling interactive UI methods, writing policy decisions, or terminating the agent; persisted warned fingerprints behave identically.
 9. `/guardme` opens on General; toggling GuardMe off requires confirmation, writes `.pi/agent/guardme-settings.json`, and allows a normally blocked guarded action until toggled active again in a trusted project.
-10. `/guardme` General shows Insecure edits directly below GuardMe; enabling it requires confirmation, writes `.pi/agent/guardme-settings.json`, allows `write`/`edit` to author scripts with otherwise blocked commands on otherwise allowed paths, preserves path protections such as `.env`, and still blocks `bash ./script.sh` when the script content fails policy.
+10. `/guardme` General shows Insecure edits directly below GuardMe and ON by default, including when an existing settings file omits `insecureEdits`. It allows `write`/`edit` to author scripts with otherwise blocked commands on otherwise allowed paths, preserves path protections such as `.env`, and still blocks `bash ./script.sh` when the script content fails policy. Turning it off saves `"insecureEdits": false` in `.pi/agent/guardme-settings.json`, restores content scanning, and survives a reload; turning it back on requires confirmation.
 11. In an untrusted project, `/guardme` can save the active/off and Insecure edits settings but explains that project-local settings apply only after project trust is enabled.
 12. `/guardme` can update the Pi project trust row through Pi's saved trust store, with the expected reload/restart note.
 13. `/guardme` opens human-readable warning/decision and diagnostic detail screens, and `Esc` returns to General.
 14. `/guardme` can create global/local defaults and custom rules through the framed Setup and Confirm flow.
 15. Saving a local/global approval writes the expected GuardMe YAML rule and refuses symlinked project config paths.
 16. In an untrusted project, project-local policy/settings/state is skipped and warned-once state is recorded globally for that cwd.
-17. Oversized or malformed project runtime settings fail safe to active and report diagnostics.
+17. Oversized or malformed project runtime settings fail safe to active with Insecure edits off and report diagnostics.
 18. Unsupported policy versions report diagnostics and do not apply their rules.
 19. Malformed, empty, or path-incompatible path rule `actions` values report diagnostics and do not become broad allow rules.
 20. Approval modals and `/guardme` notifications strip terminal control sequences from untrusted command, path, rule, and command-argument text. In a short or narrow terminal pane, verify the approval view remains within the available rows and columns, the selected decision/count/detail and deny-on-cancel guidance remain visible, and configured `tui.select.*` bindings navigate, confirm, and cancel correctly. This is a component/manual check, not automated multiplexer coverage.
