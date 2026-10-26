@@ -6,7 +6,13 @@ import { clearGuardMeGuidance, getGuardMeSessionState, type GuardMeGuidanceEvent
 
 /** Register GuardMe model-facing guidance hooks. */
 export function registerGuidance(pi: ExtensionAPI): void {
-  pi.on("before_agent_start", () => {
+  pi.on("before_agent_start", (event) => {
+    // Pi 1.2+ also starts custom runs; keep guidance for a user prompt.
+    // Legacy Pi user events have no messageType and must still receive it.
+    if ("messageType" in event && event.messageType === "custom") {
+      return;
+    }
+
     const guidance = getGuardMeSessionState()?.lastGuidance;
     if (!guidance) {
       return;

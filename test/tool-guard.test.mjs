@@ -44,6 +44,44 @@ async function createGuardContext(options = {}) {
   return { root, home, cwd, ctx, statuses };
 }
 
+function createBeforeAgentStartEvent(cwd, messageType) {
+  const common = {
+    type: "before_agent_start",
+    systemPrompt: "You are a coding assistant.",
+    systemPromptOptions: {
+      cwd,
+      selectedTools: ["read", "bash", "edit", "write"],
+      hiddenTools: [],
+      toolSnippets: {},
+      toolGuidelines: {},
+      promptGuidelines: [],
+      appendSystemPrompt: "",
+      sections: {},
+      contextFiles: [],
+      skills: [],
+    },
+  };
+  if (messageType === "custom") {
+    return {
+      ...common,
+      messageType,
+      message: {
+        role: "custom",
+        customType: "test-background-run",
+        content: "Check background status.",
+        display: false,
+        timestamp: 1_700_000_000_000,
+      },
+    };
+  }
+  return {
+    ...common,
+    ...(messageType ? { messageType } : {}),
+    prompt: "Continue with a safe alternative.",
+    images: [],
+  };
+}
+
 test("configured shell and path aliases use their canonical enforcement contracts", async () => {
   const { cwd, ctx } = await createGuardContext({
     insecureEdits: false,
@@ -376,6 +414,82 @@ test("generic browser launch commands default-deny and repeat fails closed witho
   stopGuardMeSession(ctx);
 });
 
+test("custom runs preserve pending guidance for exactly one subsequent user run", async () => {
+  const { cwd, ctx } = await createGuardContext();
+  const handlers = new Map();
+  registerGuidance({
+    on: (name, handler) => handlers.set(name, handler),
+  });
+  const beforeAgentStart = handlers.get("before_agent_start");
+  assert.equal(typeof beforeAgentStart, "function");
+
+  try {
+    const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "brave https://example.com" } }, ctx);
+    assert.equal(blocked?.block, true);
+    const pending = getGuardMeSessionState()?.lastGuidance;
+    assert.ok(pending);
+
+    const customResult = await beforeAgentStart(createBeforeAgentStartEvent(cwd, "custom"), ctx);
+    assert.equal(customResult, undefined);
+    assert.strictEqual(getGuardMeSessionState()?.lastGuidance, pending);
+
+    const userResult = await beforeAgentStart(createBeforeAgentStartEvent(cwd, "user"), ctx);
+    assert.equal(userResult.message.customType, "guardme-guidance");
+    assert.equal(userResult.message.display, true);
+    assert.match(userResult.message.content, /WARNINGS & DECISIONS/);
+    assert.match(userResult.message.content, /GuardMe blocked the previous bash:shell request/);
+    assert.match(userResult.message.content, /allowCommands/);
+    assert.equal(getGuardMeSessionState()?.lastGuidance, undefined);
+
+    assert.equal(await beforeAgentStart(createBeforeAgentStartEvent(cwd, "user"), ctx), undefined);
+  } finally {
+    stopGuardMeSession(ctx);
+  }
+});
+
+test("guidance is absent without pending state for custom, user, legacy, and empty events", async () => {
+  const { cwd, ctx } = await createGuardContext();
+  const handlers = new Map();
+  registerGuidance({
+    on: (name, handler) => handlers.set(name, handler),
+  });
+  const beforeAgentStart = handlers.get("before_agent_start");
+  assert.equal(typeof beforeAgentStart, "function");
+
+  try {
+    for (const event of [createBeforeAgentStartEvent(cwd, "custom"), createBeforeAgentStartEvent(cwd, "user"), createBeforeAgentStartEvent(cwd), {}]) {
+      assert.equal(await beforeAgentStart(event, ctx), undefined);
+      assert.equal(getGuardMeSessionState()?.lastGuidance, undefined);
+    }
+  } finally {
+    stopGuardMeSession(ctx);
+  }
+});
+
+test("legacy Pi 1.1.0 user events without messageType receive pending guidance once", async () => {
+  const { cwd, ctx } = await createGuardContext();
+  const handlers = new Map();
+  registerGuidance({
+    on: (name, handler) => handlers.set(name, handler),
+  });
+  const beforeAgentStart = handlers.get("before_agent_start");
+  assert.equal(typeof beforeAgentStart, "function");
+
+  try {
+    const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "brave https://example.com" } }, ctx);
+    assert.equal(blocked?.block, true);
+    const result = await beforeAgentStart(createBeforeAgentStartEvent(cwd), ctx);
+
+    assert.equal(result.message.customType, "guardme-guidance");
+    assert.match(result.message.content, /GuardMe blocked the previous bash:shell request/);
+    assert.equal(result.message.display, true);
+    assert.equal(getGuardMeSessionState()?.lastGuidance, undefined);
+    assert.equal(await beforeAgentStart(createBeforeAgentStartEvent(cwd), ctx), undefined);
+  } finally {
+    stopGuardMeSession(ctx);
+  }
+});
+
 test("blocked policy-missing attempts inject concise follow-up guidance", async () => {
   const { ctx } = await createGuardContext();
   const handlers = new Map();
@@ -393,20 +507,34 @@ test("blocked policy-missing attempts inject concise follow-up guidance", async 
   stopGuardMeSession(ctx);
 });
 
-test("blocked follow-up guidance redacts secrets and strips terminal controls", async () => {
-  const { ctx } = await createGuardContext();
+test("blocked follow-up guidance stays redacted and sanitized across repeated custom runs", async () => {
+  const { cwd, ctx } = await createGuardContext();
   const handlers = new Map();
   registerGuidance({
     on: (name, handler) => handlers.set(name, handler),
   });
+  const beforeAgentStart = handlers.get("before_agent_start");
+  assert.equal(typeof beforeAgentStart, "function");
 
-  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "brave --token supersecret \u001B[31mhttps://example.com" } }, ctx);
-  const result = await handlers.get("before_agent_start")?.({}, ctx);
+  try {
+    const blocked = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "brave --token supersecret \u001B[31mhttps://example.com" } }, ctx);
+    assert.equal(blocked?.block, true);
 
-  assert.doesNotMatch(result.message.content, /supersecret/);
-  assert.doesNotMatch(result.message.content, /\u001B/);
-  assert.match(result.message.content, /--token <redacted>/);
-  stopGuardMeSession(ctx);
+    for (const display of [false, true]) {
+      const customEvent = createBeforeAgentStartEvent(cwd, "custom");
+      customEvent.message.display = display;
+      assert.equal(await beforeAgentStart(customEvent, ctx), undefined);
+    }
+    const result = await beforeAgentStart(createBeforeAgentStartEvent(cwd, "user"), ctx);
+
+    assert.equal(result.message.customType, "guardme-guidance");
+    assert.equal(result.message.display, true);
+    assert.doesNotMatch(result.message.content, /supersecret/);
+    assert.doesNotMatch(result.message.content, /\u001B/);
+    assert.match(result.message.content, /--token <redacted>/);
+  } finally {
+    stopGuardMeSession(ctx);
+  }
 });
 
 test("blocked follow-up guidance includes the relevant matched rule without dumping policy files", async () => {
