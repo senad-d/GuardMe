@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { matchPolicyPathPattern, normalizePolicyPath } from "../src/policy/paths.ts";
+import { expandStableShellVariables, matchPolicyPathPattern, normalizePolicyPath } from "../src/policy/paths.ts";
 
 test("path normalization strips Pi @ prefix and resolves relative paths against cwd", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-path-relative-"));
@@ -87,4 +87,32 @@ test("glob matching supports project-relative, absolute, and protected patterns"
   assert.equal(matchPolicyPathPattern(`${normalized.projectRoot}/src/**`, normalized).matched, true);
   assert.equal(matchPolicyPathPattern("**/.env*", normalized).matched, true);
   assert.equal(matchPolicyPathPattern("docs/**", normalized).matched, false);
+});
+
+test("stable shell variables expand to literal paths only where the shell would use the agent's value", () => {
+  const variables = { HOME: "/home/a", TMPDIR: "/tmp/mission/p/1/", PWD: "/work/p" };
+  for (const [command, expected] of [
+    ['mkdir -p "$TMPDIR/x" && cp a "${TMPDIR}/x/"', 'mkdir -p "/tmp/mission/p/1//x" && cp a "/tmp/mission/p/1//x/"'],
+    ['cat "$PWD/a" $HOME/b', 'cat "/work/p/a" /home/a/b'],
+    ["rm -f '$TMPDIR/a' \\$HOME/b", "rm -f '$TMPDIR/a' \\$HOME/b"],
+    ['TMPDIR=/etc; rm -f "$TMPDIR/passwd"', 'TMPDIR=/etc; rm -f "$TMPDIR/passwd"'],
+    ['cd /tmp && rm -rf "$PWD/x"', 'cd /tmp && rm -rf "$PWD/x"'],
+    ['cat "$TMPDIRX/a" "${TMPDIR:-/x}/b"', 'cat "$TMPDIRX/a" "${TMPDIR:-/x}/b"'],
+    ["python3 - <<'PY'\nopen('$TMPDIR/a')\nPY", "python3 - <<'PY'\nopen('$TMPDIR/a')\nPY"],
+  ]) {
+    assert.equal(expandStableShellVariables(command, variables), expected, command);
+  }
+  assert.equal(expandStableShellVariables('rm -f "$TMPDIR/a"', { TMPDIR: "relative dir" }), 'rm -f "$TMPDIR/a"');
+});
+
+test("stable shell expansion preserves trailing separators and ignores other environment values", () => {
+  const variables = { TMPDIR: "/tmp/run/", PWD: "/stale", OTHER: "/etc" };
+  assert.equal(expandStableShellVariables('cat "${TMPDIR}file"', variables), 'cat "/tmp/run/file"');
+  assert.equal(expandStableShellVariables('cat "$PWD/file"', variables, "/work/project"), 'cat "/work/project/file"');
+  assert.equal(expandStableShellVariables('cat "$OTHER/file"', variables), 'cat "$OTHER/file"');
+  assert.equal(expandStableShellVariables('cat "$HOME/file"', variables), 'cat "$HOME/file"');
+  assert.equal(expandStableShellVariables('cat "${TMPDIR}file"', { TMPDIR: "/" }), 'cat "/file"');
+  assert.equal(expandStableShellVariables('cat "$TMPDIR/file"', { TMPDIR: "/tmp/unsafe path" }), 'cat "$TMPDIR/file"');
+  const longValue = `/tmp/${"/".repeat(20_000)}suffix/`;
+  assert.equal(expandStableShellVariables('cat "${TMPDIR}file"', { TMPDIR: longValue }), `cat "${longValue}file"`);
 });

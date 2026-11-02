@@ -694,6 +694,19 @@ test("allowed command families can discard output through /dev/null", async () =
   }
 });
 
+// A detached server's empty stdin: the live guard tags the redirect target as a read.
+test("allowed commands can read stdin from /dev/null", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-null-stdin-"));
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  for (const command of ["npm run dev </dev/null", "nohup npm run dev >/dev/null 2>&1 </dev/null &"]) {
+    const { request, classified } = shellRequest(cwd, command);
+    const targets = classified.pathAccesses.map((access) => ({ kind: "path", raw: access.rawPath, action: access.action }));
+    const decision = evaluatePolicyRequest({ policy, request: { ...request, targets }, commandClassification: classified });
+
+    assert.equal(decision.outcome, "allow", command);
+  }
+});
+
 test("compound command allowlists block the first missing or dangerous segment", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-segment-missing-"));
   const policy = policyFrom({
@@ -1118,4 +1131,32 @@ test("shell function definitions and trap bodies are classified by what they run
   }
   assert.notEqual(decide("trap frobnicate EXIT").outcome, "allow");
   assert.notEqual(decide("trap 'frobnicate --now' EXIT").outcome, "allow");
+});
+
+// Commands agents run on the container/EC2 image and in Electron and Android
+// projects; wrappers stay checked by the command they launch.
+test("built-in rules cover lookups, image tools, Electron and Android while wrapped commands stay checked", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-toolchains-"));
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  const decide = (command) => {
+    const { request, classified } = shellRequest(cwd, command);
+    return evaluatePolicyRequest({ policy, request, commandClassification: classified }).outcome;
+  };
+  for (const command of [
+    "command -v mise fnm nvm",
+    "command -V node",
+    "pgrep -f vite",
+    "xvfb-run -a npm test",
+    "uvx ruff check .",
+    "npx electron-builder --linux",
+    "./gradlew assembleDebug",
+    "adb devices",
+    "npx cap sync android",
+    "psql --version",
+  ]) {
+    assert.equal(decide(command), "allow", command);
+  }
+  for (const command of ["command cowsay hi", "xvfb-run -a cowsay hi", "uvx --from x cowsay"]) {
+    assert.notEqual(decide(command), "allow", command);
+  }
 });

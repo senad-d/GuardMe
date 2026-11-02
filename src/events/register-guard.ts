@@ -16,7 +16,7 @@ import {
   type PackageScriptExecution,
 } from "../policy/commands.ts";
 import { createPolicyFingerprint, evaluatePolicyRequest, isAgentAutomaticApprovalEligible } from "../policy/evaluate.ts";
-import { normalizePolicyPath, pathTargetFromNormalizedPath } from "../policy/paths.ts";
+import { expandStableShellVariables, normalizePolicyPath, pathTargetFromNormalizedPath } from "../policy/paths.ts";
 import { containsCredentialKeyword, isProtectedEnvFileSegment } from "../policy/sensitive-paths.ts";
 import { redactSensitiveText } from "../policy/redact.ts";
 import {
@@ -80,6 +80,27 @@ const AGENT_SESSION_ALLOW_AUDIT_REASON =
   "GuardMe agent mode allowed this policy-missing command again under the session allowance granted by its earlier automatic approval.";
 const AGENT_APPROVAL_BLOCK_REASON =
   "GuardMe approvalMode 'agent' blocks the first attempt in this process and duplicate attempts from the same agent turn. An identical fingerprint may receive one automatic allow-once only in a later agent turn.";
+const AGENT_FINAL_REASON =
+  "GuardMe approvalMode 'agent': this refusal is final. No retry, rephrasing or approval lifts it, and nobody can approve it from here.";
+
+// Agent mode has no approval dialog and no user to ask, so the guidance names
+// the way that does pass instead of "ask the user" or "propose a rule".
+function agentModeAlternative(decision: PolicyDecision): string {
+  const reason = decision.reason;
+  if (/environment variables/i.test(reason)) {
+    return "Environment values are never shown to agents; use the values your instructions give.";
+  }
+  if (/outside-project/i.test(reason)) {
+    return "Keep files in the project, or put scratch under the run's TMPDIR (as $TMPDIR or its literal path).";
+  }
+  if (/heredoc|inline code|ambiguous destructive|generic shell command/i.test(reason)) {
+    return "Write the code to a script file in the project or under $TMPDIR with the write tool, then run that file; GuardMe inspects script files before they run.";
+  }
+  if (/no allowcommands rule/i.test(reason)) {
+    return "Use a guarded built-in tool (read, edit, write) or a command that is allowed.";
+  }
+  return "Reach the goal another way: a guarded built-in tool (read, edit, write) or a narrower command inside the project.";
+}
 
 interface ScriptInspectionSource {
   readonly sourceKind: ScriptInspectionSourceKind;
@@ -169,10 +190,13 @@ export async function mapToolCallToPolicyRequest(
   | { readonly error: string }
 > {
   if (contract === "bash") {
-    const command = readStringProperty(event.input, "command");
-    if (!command) {
+    const rawCommand = readStringProperty(event.input, "command");
+    if (!rawCommand) {
       return { error: `GuardMe could not evaluate ${event.toolName} as bash because input.command is missing.` };
     }
+    // The shell expands these from the agent's own environment; the literal
+    // path is what gets checked, so scratch under $TMPDIR passes like its path.
+    const command = expandStableShellVariables(rawCommand, process.env, cwd);
     const commandClassification = classifyShellCommand(command);
     const targets = await shellCommandTargets(commandClassification, cwd, homeDir);
     if ("error" in targets) {
@@ -224,48 +248,67 @@ async function handlePolicyDecision(
   }
   if (decision.outcome === "coach" && usesAgentApprovalMode(state)) {
     recordAgentApprovalBlock(decision.fingerprint);
-    const guidance = `${decision.guidance} ${AGENT_APPROVAL_NEXT_STEP}`;
-    recordDecisionGuidance(request, decision, guidance);
-    return block(formatAgentModeBlockReason(request, decision, `GuardMe coaching: ${decision.guidance}`, AGENT_APPROVAL_NEXT_STEP));
+    const alternative = agentModeAlternative(decision);
+    recordDecisionGuidance(request, decision, `${alternative} ${AGENT_APPROVAL_NEXT_STEP}`);
+    return block(formatAgentModeBlockReason(request, decision, `GuardMe coaching: ${alternative}`, AGENT_APPROVAL_NEXT_STEP));
   }
   if (decision.outcome === "needs-user-decision") {
-    const agentApproval = await resolveAgentModeApproval(state, decision);
-    if (agentApproval === "allowed") {
-      refreshGuardMeStatus(ctx);
-      return undefined;
-    }
-    if (agentApproval === "blocked") {
-      recordDecisionGuidance(request, decision, AGENT_APPROVAL_NEXT_STEP);
-      return block(formatAgentModeBlockReason(request, decision, AGENT_APPROVAL_BLOCK_REASON, AGENT_APPROVAL_NEXT_STEP));
-    }
-
-    approvalEvents?.emit("herdr:blocked", { active: true, label: `GuardMe approval: ${request.toolName}` });
-    let approval: Awaited<ReturnType<typeof requestApprovalDecision>>;
-    try {
-      approval = await requestApprovalDecision(toApprovalContext(ctx, state.config.config.approvalMode), request, decision);
-    } finally {
-      approvalEvents?.emit("herdr:blocked", { active: false });
-    }
-    if (approval.kind === "blocked") {
-      recordDecisionGuidance(request, decision, APPROVAL_UNAVAILABLE_NEXT_STEP);
-      return block(formatApprovalUnavailableBlockReason(request, decision, approval.reason));
-    }
-    const persisted = await persistApprovalRuleIfRequested(state, request, approval.decision, decision);
-    if (!persisted.saved) {
-      recordDecisionGuidance(request, decision, persisted.reason);
-      return block(persisted.reason);
-    }
-    await reloadPolicyAfterPersistentDecision(state, persisted.persistedTo);
-    await appendApprovalDecisionRecord(state, approval.decision, persisted.persistedTo, decision.fingerprint);
-    refreshGuardMeStatus(ctx);
-    if (isAllowDecision(approval.decision)) {
-      return undefined;
-    }
-    const reason = `GuardMe denied this action by user decision: ${approval.decision}.`;
-    recordDecisionGuidance(request, decision, reason);
-    return block(reason);
+    return handleApprovalDecision(state, ctx, request, decision);
+  }
+  if (decision.outcome === "deny" && usesAgentApprovalMode(state)) {
+    const alternative = agentModeAlternative(decision);
+    recordDecisionGuidance(request, decision, alternative);
+    return block(`${decision.reason}\n\n${AGENT_FINAL_REASON}\nNext step: ${alternative}`);
   }
   return policyDecisionToToolBlock(request, decision);
+}
+
+async function handleApprovalDecision(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  request: PolicyRequest,
+  decision: Extract<PolicyDecision, { readonly outcome: "needs-user-decision" }>,
+): Promise<ToolCallBlockResult | undefined> {
+  const agentApproval = await resolveAgentModeApproval(state, decision);
+  if (agentApproval === "allowed") {
+    refreshGuardMeStatus(ctx);
+    return undefined;
+  }
+  if (agentApproval === "blocked" && !isAgentAutomaticApprovalEligible(decision)) {
+    const alternative = agentModeAlternative(decision);
+    recordDecisionGuidance(request, decision, alternative);
+    return block(formatAgentModeBlockReason(request, decision, AGENT_FINAL_REASON, alternative));
+  }
+  if (agentApproval === "blocked") {
+    recordDecisionGuidance(request, decision, AGENT_APPROVAL_NEXT_STEP);
+    return block(formatAgentModeBlockReason(request, decision, AGENT_APPROVAL_BLOCK_REASON, AGENT_APPROVAL_NEXT_STEP));
+  }
+
+  approvalEvents?.emit("herdr:blocked", { active: true, label: `GuardMe approval: ${request.toolName}` });
+  let approval: Awaited<ReturnType<typeof requestApprovalDecision>>;
+  try {
+    approval = await requestApprovalDecision(toApprovalContext(ctx, state.config.config.approvalMode), request, decision);
+  } finally {
+    approvalEvents?.emit("herdr:blocked", { active: false });
+  }
+  if (approval.kind === "blocked") {
+    recordDecisionGuidance(request, decision, APPROVAL_UNAVAILABLE_NEXT_STEP);
+    return block(formatApprovalUnavailableBlockReason(request, decision, approval.reason));
+  }
+  const persisted = await persistApprovalRuleIfRequested(state, request, approval.decision, decision);
+  if (!persisted.saved) {
+    recordDecisionGuidance(request, decision, persisted.reason);
+    return block(persisted.reason);
+  }
+  await reloadPolicyAfterPersistentDecision(state, persisted.persistedTo);
+  await appendApprovalDecisionRecord(state, approval.decision, persisted.persistedTo, decision.fingerprint);
+  refreshGuardMeStatus(ctx);
+  if (isAllowDecision(approval.decision)) {
+    return undefined;
+  }
+  const reason = `GuardMe denied this action by user decision: ${approval.decision}.`;
+  recordDecisionGuidance(request, decision, reason);
+  return block(reason);
 }
 
 type AgentModeApprovalResolution = "not-applicable" | "blocked" | "allowed";

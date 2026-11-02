@@ -253,6 +253,75 @@ function hasTraversalSegment(pathValue: string): boolean {
   return pathValue.split(/[\\/]+/).includes("..");
 }
 
+export interface StableShellVariables {
+  readonly HOME?: string;
+  readonly TMPDIR?: string;
+  readonly PWD?: string;
+}
+
+// A value written back into command text: absolute, no quotes, spaces or expansions.
+const SAFE_VARIABLE_VALUE = /^\/[\w@%+=:,./-]*$/;
+
+/**
+ * Replaces `$HOME`, `$TMPDIR` and `$PWD` (bare or braced, outside single
+ * quotes) with their values, so a path the shell would expand is checked as
+ * the literal path it becomes. Left alone: a variable the command itself
+ * names without `$` (assignment, export, unset, read, for), `$PWD` after a
+ * directory change, any command with a heredoc (its body may be literal),
+ * and unsafe or relative values.
+ */
+export function expandStableShellVariables(command: string, variables: StableShellVariables, cwd = variables.PWD): string {
+  if (!command.includes("$") || command.includes("<<")) {
+    return command;
+  }
+  const values = new Map<string, string>();
+  // Only these path variables may be resolved, even when given a full process
+  // environment. Reading them creates no temporary files or policy allowances.
+  for (const name of ["HOME", "TMPDIR", "PWD"] as const) {
+    const value = name === "PWD" ? cwd : variables[name];
+    if (typeof value !== "string" || !SAFE_VARIABLE_VALUE.test(value)) continue;
+    if (new RegExp(String.raw`(^|[^$\w{])${name}\b`).test(command)) continue;
+    if (name === "PWD" && /(^|[\s;&|(])(cd|pushd|popd)\b/.test(command)) continue;
+    values.set(name, value);
+  }
+  return values.size === 0 ? command : replaceShellVariables(command, values);
+}
+
+function replaceShellVariables(command: string, values: ReadonlyMap<string, string>): string {
+  let output = "";
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index] ?? "";
+    if (character === "\\" && !singleQuoted) {
+      output += command.slice(index, index + 2);
+      index += 1;
+      continue;
+    }
+    if (character === "'" && !doubleQuoted) singleQuoted = !singleQuoted;
+    if (character === '"' && !singleQuoted) doubleQuoted = !doubleQuoted;
+    const replacement = character === "$" && !singleQuoted ? shellVariableReplacement(command, index, values) : undefined;
+    if (replacement) {
+      output += replacement.value;
+      index += replacement.length - 1;
+      continue;
+    }
+    output += character;
+  }
+  return output;
+}
+
+function shellVariableReplacement(
+  command: string,
+  offset: number,
+  values: ReadonlyMap<string, string>,
+): { readonly value: string; readonly length: number } | undefined {
+  const match = /^\$(?:\{(\w+)\}|(\w+))/.exec(command.slice(offset));
+  if (!match) return undefined;
+  const value = values.get(match[1] ?? match[2] ?? "");
+  return value === undefined ? undefined : { value, length: match[0].length };
+}
+
 function containsUnresolvedShellReference(pathValue: string): boolean {
   return pathValue.includes("$") || pathValue.includes("`") || pathValue.startsWith("~");
 }

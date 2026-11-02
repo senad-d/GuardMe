@@ -30,7 +30,7 @@ test("built-in default policy includes approved hard-protection sections", () =>
   assert.equal(piDocsAllowRules.length, 2);
   assert.ok(piDocsAllowRules.every((rule) => JSON.stringify(rule.actions) === JSON.stringify(["read", "list"])));
   const nullSinkRule = defaults.allowPaths.find((rule) => rule.pattern === "/dev/null");
-  assert.deepEqual(nullSinkRule?.actions, ["write"]);
+  assert.deepEqual(nullSinkRule?.actions, ["read", "write"]);
   assert.ok(defaults.allowCommands.some((rule) => rule.pattern === "pwd *"));
   assert.ok(defaults.allowCommands.some((rule) => rule.pattern === "ls *"));
   assert.ok(defaults.allowCommands.some((rule) => rule.pattern === "find *"));

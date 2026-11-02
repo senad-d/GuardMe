@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.6 - Unreleased
+
+- Expanded starter command allowances for host diagnostics, database clients, graphics tools, Electron, Android, and other development toolchains; wrapped commands launched by `xvfb-run` and `uvx` remain independently checked.
+- Allowed `command -v`/`-V` lookups without treating the queried names as executions, and skipped local script-content inspection for project-relative Gradle and Maven wrappers.
+- Resolved stable `$HOME`, `$TMPDIR`, and `$PWD` shell paths conservatively before policy checks, and allowed `/dev/null` reads for detached-process stdin.
+- Made final agent-mode refusals explicit and supplied alternatives without directing agents to a nonexistent approval dialog.
+- Preserved trailing separators during shell-variable expansion, restricted environment normalization to the three documented path variables, and simplified approval handling and shell parsing after Sonar review.
+
 ## 0.3.4 - Unreleased
 
 - Made **Insecure edits** on by default when runtime settings are missing or omit `insecureEdits`. Explicit saved OFF settings remain respected, invalid settings still fail safe to OFF, and path protections and shell execution checks remain enforced.

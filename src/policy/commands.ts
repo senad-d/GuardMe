@@ -187,6 +187,20 @@ const DISKUTIL_HARD_DENIED_SUBCOMMANDS = new Set(["erasedisk", "partitiondisk", 
 const TEST_COMMANDS = new Set(["test", "[", "[["]);
 const SHELL_WRAPPERS = new Set(["sh", "bash", "zsh"]);
 const PREFIX_WRAPPERS = new Set(["command", "builtin", "noglob", "nohup", "exec", "sudo", "doas"]);
+
+// `command -v` / `-V` only looks names up and runs nothing, so it stays a
+// segment of its own (matched by the `command -v *` rule) instead of being
+// unwrapped into the names it looks up.
+function isPrefixWrapper(tokens: readonly string[], index: number): boolean {
+  const commandName = basename(tokens[index] ?? "").toLowerCase();
+  if (!PREFIX_WRAPPERS.has(commandName)) return false;
+  if (commandName !== "command") return true;
+  for (const token of tokens.slice(index + 1)) {
+    if (!token.startsWith("-") || token === "-" || token === "--") break;
+    if (/[vV]/.test(token)) return false;
+  }
+  return true;
+}
 const INLINE_CODE_INTERPRETERS = new Set(["node", "perl", "php", "python", "python2", "python3", "ruby"]);
 const SHELL_LEADING_CONTROL_WORDS = new Set(["!", "(", "{", "if", "then", "do", "else", "elif", "while", "until", "for", "select", "case"]);
 const LOOP_HEADER_CONTROL_WORDS = new Set(["for", "select", "case"]);
@@ -1524,7 +1538,7 @@ function leadingWrapperInvokedCommandText(tokens: readonly string[]): string | u
   if (commandName === "env") {
     return commandAfterEnv(tokens, index);
   }
-  if (PREFIX_WRAPPERS.has(commandName)) {
+  if (isPrefixWrapper(tokens, index)) {
     return commandAfterPrefixWrapper(tokens, index, commandName);
   }
   return index > 0 ? joinTokensAsCommand(tokens.slice(index)) : undefined;
@@ -1906,7 +1920,7 @@ function unwrapExecutableStep(tokens: readonly string[], index: number): { reado
   if (SHELL_LEADING_CONTROL_WORDS.has(commandName)) {
     return { nextIndex: index + 1 };
   }
-  if (PREFIX_WRAPPERS.has(commandName)) {
+  if (isPrefixWrapper(tokens, index)) {
     return { nextIndex: skipPrefixWrapper(commandName, tokens, index + 1) };
   }
   if (commandName === "env") {
@@ -1969,11 +1983,22 @@ function localScriptExecutionFromSegment(tokens: readonly string[]): LocalScript
     return scriptPath ? { rawPath: scriptPath, invocation, shellHint: true, via: "shell-wrapper" } : undefined;
   }
 
-  if (isLocalScriptExecutableToken(commandToken)) {
+  if (isLocalScriptExecutableToken(commandToken) && !isProjectBuildWrapper(commandToken)) {
     return { rawPath: commandToken, invocation, shellHint: false, via: "direct" };
   }
 
   return undefined;
+}
+
+// The generated Gradle and Maven wrappers only locate Java and start the build
+// tool, which runs the project's build files exactly like `gradle *` and
+// `mvn *` (allowed without inspection); their own boilerplate (symlink loops,
+// JAVA_HOME probes) would otherwise block every Android and Java build. Only a
+// project-relative wrapper qualifies; the segment still needs its allow rule.
+const PROJECT_BUILD_WRAPPERS = new Set(["gradlew", "mvnw"]);
+
+function isProjectBuildWrapper(commandToken: string): boolean {
+  return PROJECT_BUILD_WRAPPERS.has(basename(commandToken)) && !commandToken.startsWith("/") && !commandToken.split("/").includes("..");
 }
 
 function localScriptExecutableTokenIndex(tokens: readonly string[]): number | undefined {
@@ -1989,7 +2014,7 @@ function localScriptExecutableTokenIndex(tokens: readonly string[]): number | un
       index += 1;
       continue;
     }
-    if (PREFIX_WRAPPERS.has(commandName)) {
+    if (isPrefixWrapper(tokens, index)) {
       index = skipPrefixWrapper(commandName, tokens, index + 1);
       continue;
     }
@@ -2214,10 +2239,18 @@ function wrapperInvokedCommandText(commandName: string, args: readonly string[])
   if (commandName === "npm" || commandName === "pnpm" || commandName === "yarn" || commandName === "bun") {
     return packageManagerInvokedCommandText(args);
   }
+  if (commandName === "xvfb-run") {
+    return commandTextAfterOptions(args, XVFB_RUN_OPTIONS_WITH_VALUES);
+  }
+  if (commandName === "uvx") {
+    return commandTextAfterOptions(args, UVX_OPTIONS_WITH_VALUES);
+  }
   return undefined;
 }
 
 const EMPTY_OPTIONS_WITH_VALUES = new Set<string>();
+const XVFB_RUN_OPTIONS_WITH_VALUES = new Set(["-n", "-s", "-f", "-e", "-p", "-w", "--server-num", "--server-args", "--auth-file", "--error-file", "--xauth-protocol", "--wait"]);
+const UVX_OPTIONS_WITH_VALUES = new Set(["--from", "--with", "--with-editable", "--with-requirements", "--python", "-p", "--index", "--index-url", "--extra-index-url", "--default-index", "--cache-dir", "--directory", "--project", "--config-file"]);
 const EXEC_OPTIONS_WITH_VALUES = new Set(["-a"]);
 const WRAPPER_OPTIONS_WITH_VALUES = new Set(["-I", "-i", "-E", "-n", "-L", "-s", "-P", "-d", "--replace", "--eof", "--max-args", "--max-lines", "--max-chars", "--max-procs", "--delimiter"]);
 const SUDO_DOAS_OPTIONS_WITH_VALUES = new Set(["-C", "-T", "-g", "-h", "-p", "-u", "--chdir", "--close-from", "--command-timeout", "--group", "--host", "--prompt", "--user"]);

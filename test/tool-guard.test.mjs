@@ -1023,11 +1023,33 @@ test("agent mode never auto-allows hard denials, explicit denies, protected path
     const retried = await evaluateGuardedToolCall(call, ctx);
     assert.equal(first?.block, true);
     assert.equal(retried?.block, true);
+    // No user exists in agent mode: the text says the refusal is final and never sends the agent to one.
+    assert.match(first?.reason ?? "", /this refusal is final/);
+    assert.doesNotMatch(first?.reason ?? "", /ask the user|retry it once/);
   }
 
   assert.equal(getGuardMeSessionState()?.agentApprovals.blockedTurnByFingerprint.size, 0);
   assert.equal(getGuardMeSessionState()?.warnings.records.some((record) => record.type === "automatic-decision"), false);
   stopGuardMeSession(ctx);
+});
+
+test("scratch under $TMPDIR and the project's Gradle wrapper pass the full guard", async () => {
+  const { root, cwd, ctx } = await createGuardContext({ environment: { GUARDME_APPROVAL_MODE: "agent" } });
+  const scratch = join(tmpdir(), "guardme-scratch-test");
+  const previous = process.env.TMPDIR;
+  process.env.TMPDIR = scratch;
+  await writeFile(join(cwd, "gradlew"), '#!/bin/sh\nwhile [ -h "$PRG" ] ; do ls -ld "$PRG"; done\nexec java -jar gradle/wrapper/gradle-wrapper.jar "$@"\n', "utf8");
+  await writeFile(join(root, "gradlew"), "#!/bin/sh\nexit 0\n", "utf8");
+  try {
+    for (const command of ['mkdir -p "$TMPDIR/x" && rm -f "$TMPDIR/x/a.txt"', "./gradlew assembleDebug"]) {
+      assert.equal(await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx), undefined, command);
+    }
+    assert.equal((await evaluateGuardedToolCall({ toolName: "bash", input: { command: "../gradlew build" } }, ctx))?.block, true);
+  } finally {
+    if (previous === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previous;
+    stopGuardMeSession(ctx);
+  }
 });
 
 test("persisted warnings fail closed with bounded guidance in auto RPC mode without calling UI", async () => {
