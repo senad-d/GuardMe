@@ -2758,9 +2758,22 @@ function isDdBlockDeviceOperand(arg: string): boolean {
   return ddOperandPath(arg)?.startsWith("/dev/") ?? false;
 }
 
+// Only file operators take paths: `-f x`, `a -nt b`. Comparison operands such
+// as `"$result" -eq 1` or `"$a" = b` are strings or numbers; read as paths, an
+// unresolved `$result` counted as an outside-project target and blocked the
+// whole command around it.
+const TEST_UNARY_FILE_OPERATORS = new Set(["-b", "-c", "-d", "-e", "-f", "-g", "-G", "-h", "-k", "-L", "-N", "-O", "-p", "-r", "-s", "-S", "-u", "-w", "-x"]);
+const TEST_BINARY_FILE_OPERATORS = new Set(["-nt", "-ot", "-ef"]);
+
 function testPathOperands(args: readonly string[]): readonly string[] {
-  const nonPathTestTokens = new Set(["=", "==", "!=", "<", ">", "]", "]]", "!", "-a", "-o", "(", ")"]);
-  return args.filter((arg) => !arg.startsWith("-") && !isShellControlToken(arg) && !nonPathTestTokens.has(arg));
+  const operands: (string | undefined)[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (TEST_UNARY_FILE_OPERATORS.has(args[index]!)) operands.push(args[index + 1]);
+    if (TEST_BINARY_FILE_OPERATORS.has(args[index]!)) operands.push(args[index - 1], args[index + 1]);
+  }
+  return uniqueStrings(
+    operands.filter((arg): arg is string => arg !== undefined && arg !== "]" && arg !== "]]" && !isShellControlToken(arg)),
+  );
 }
 
 function isRecursiveForceRm(args: readonly string[]): boolean {

@@ -278,6 +278,11 @@ test("credential reads are detected without reading files", () => {
   assert.equal(shellTest.hardDenied, false);
   assert.equal(shellTest.credentialAccess, true);
   assert.equal(shellTest.primaryAction, "list");
+  // Comparison operands are values, not paths; file operators keep theirs.
+  assert.deepEqual(classifyShellCommand('test "$result" -eq 1').targetPaths, []);
+  assert.deepEqual(classifyShellCommand('[ "$a" = .env ]').targetPaths, []);
+  assert.deepEqual(classifyShellCommand("[[ -f a.txt ]]").targetPaths, ["a.txt"]);
+  assert.deepEqual(classifyShellCommand("[ b -nt c ]").targetPaths, ["b", "c"]);
 
   const redirectedGrep = classifyShellCommand("grep root < /etc/passwd");
   assert.equal(redirectedGrep.primaryAction, "read");

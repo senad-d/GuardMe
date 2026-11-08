@@ -1041,7 +1041,12 @@ test("scratch under $TMPDIR and the project's Gradle wrapper pass the full guard
   await writeFile(join(cwd, "gradlew"), '#!/bin/sh\nwhile [ -h "$PRG" ] ; do ls -ld "$PRG"; done\nexec java -jar gradle/wrapper/gradle-wrapper.jar "$@"\n', "utf8");
   await writeFile(join(root, "gradlew"), "#!/bin/sh\nexit 0\n", "utf8");
   try {
-    for (const command of ['mkdir -p "$TMPDIR/x" && rm -f "$TMPDIR/x/a.txt"', "./gradlew assembleDebug"]) {
+    for (const command of [
+      'mkdir -p "$TMPDIR/x" && rm -f "$TMPDIR/x/a.txt"',
+      "./gradlew assembleDebug",
+      // A Mission tester's mutation probe: the comparison's `$result` is no path.
+      `node --test x.test.js > ${scratch}/probe.log 2>&1; result=$?; tail -n 5 ${scratch}/probe.log; test "$result" -eq 1`,
+    ]) {
       assert.equal(await evaluateGuardedToolCall({ toolName: "bash", input: { command } }, ctx), undefined, command);
     }
     assert.equal((await evaluateGuardedToolCall({ toolName: "bash", input: { command: "../gradlew build" } }, ctx))?.block, true);
