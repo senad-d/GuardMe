@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.8 - Unreleased
+
+- Stopped treating shell `test`, `[`, and `[[` string and numeric comparison values as file paths, so exit-status checks no longer cause false outside-project denials. Unary file checks and file comparisons still receive path and credential protections.
+
 ## 0.3.6 - Unreleased
 
 - Expanded starter command allowances for host diagnostics, database clients, graphics tools, Electron, Android, and other development toolchains; wrapped commands launched by `xvfb-run` and `uvx` remain independently checked.
