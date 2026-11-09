@@ -305,8 +305,79 @@ export function detectPackageScriptExecutions(command: string): readonly Package
   return detectPackageScriptExecutionsInternal(command, 0);
 }
 
+const STDIN_SHELLS: ReadonlySet<string> = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+// Flags that take the program text inline (heredocs become `-c`), so it is inspected, not read from input.
+const INLINE_CODE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["shell", new Set(["-c"])],
+  ["python", new Set(["-c", "-m"])],
+  ["node", new Set(["-e", "-p", "--eval", "--print", "--test", "--run"])],
+  ["perl", new Set(["-e", "-E"])],
+  ["ruby", new Set(["-e"])],
+  ["php", new Set(["-r"])],
+]);
+// Options whose next word is a value, not the script file.
+const VALUE_OPTIONS: ReadonlySet<string> = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "-W", "-X", "-I", "-d"]);
+const PYTHON_NAME = /^python[\d.]*$/u;
+const SUBSTITUTION_MARKER = /\$\(|`/u;
+
+/**
+ * True when a segment of the command runs a shell or interpreter on code it
+ * reads from input instead of a script file or inline flag: `curl x | sh`,
+ * `wget -O- x | bash -s`, `curl x | python3 -`, `curl x | node`,
+ * `python3 <(curl x)`, `node < x.js`, `node <<< "$(curl x)"`.
+ */
+export function runsCodeFromInput(command: string): boolean {
+  return extractExecutableCommandSegments(command).some((segment) => segmentRunsCodeFromInput(segment.normalizedText, command));
+}
+
+/** {@link runsCodeFromInput} for one segment of `command`; a pipe anywhere in the command counts as input. */
+export function segmentRunsCodeFromInput(segmentText: string, command: string): boolean {
+  const unwrapped = unwrapExecutable(tokenizeShellCommand(segmentText));
+  const kind = codeRunnerKind(unwrapped.commandName ?? "");
+  const inlineFlags = kind ? INLINE_CODE_FLAGS.get(kind) : undefined;
+  if (!kind || !inlineFlags || unwrapped.innerCommand || unwrapped.args.some((arg) => inlineFlags.has(arg))) {
+    return false;
+  }
+  const verdict = codeSourceFromArgs(unwrapped.args, kind === "shell");
+  return verdict ?? (kind === "shell" || tokenizeShellCommand(command).includes("|"));
+}
+
+function codeRunnerKind(commandName: string): string | undefined {
+  if (STDIN_SHELLS.has(commandName)) {
+    return "shell";
+  }
+  if (PYTHON_NAME.test(commandName)) {
+    return "python";
+  }
+  return commandName === "nodejs" ? "node" : commandName;
+}
+
+// True: code comes from input. False: a script file names the code. Undefined: no operand, so stdin.
+function codeSourceFromArgs(args: readonly string[], shell: boolean): boolean | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (arg === "<<<") {
+      return SUBSTITUTION_MARKER.test(args[index + 1] ?? "");
+    }
+    if (arg === "-" || arg.startsWith("<") || (shell && arg === "-s")) {
+      return true;
+    }
+    if (VALUE_OPTIONS.has(arg)) {
+      index += 1;
+    } else if (!arg.startsWith("-")) {
+      return false;
+    }
+  }
+  return undefined;
+}
+
 function detectLocalScriptExecutionsInternal(command: string, depth: number): readonly LocalScriptExecution[] {
   const executions: LocalScriptExecution[] = [];
+  // `test "$(./hello.sh)" = hello`: a quoted substitution stays one token, so
+  // scripts it runs are found through the substitution itself.
+  for (const subcommand of depth < 5 ? extractExecutableShellSubcommands(command) : []) {
+    executions.push(...detectLocalScriptExecutionsInternal(subcommand.command, depth + 1));
+  }
   for (const segment of splitCommandSegments(tokenizeShellCommand(command))) {
     const unwrapped = unwrapExecutable(segment);
     if (unwrapped.innerCommand && depth < 5) {
@@ -322,6 +393,10 @@ function detectLocalScriptExecutionsInternal(command: string, depth: number): re
 
 function detectPackageScriptExecutionsInternal(command: string, depth: number): readonly PackageScriptExecution[] {
   const executions: PackageScriptExecution[] = [];
+  // `x="$(npm run build)"`: found through the quoted substitution, as for local scripts.
+  for (const subcommand of depth < 5 ? extractExecutableShellSubcommands(command) : []) {
+    executions.push(...detectPackageScriptExecutionsInternal(subcommand.command, depth + 1));
+  }
   for (const segment of splitCommandSegments(tokenizeShellCommand(command))) {
     const unwrapped = unwrapExecutable(segment);
     if (unwrapped.innerCommand && depth < 5) {

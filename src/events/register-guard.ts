@@ -11,6 +11,7 @@ import {
   detectLocalScriptExecutions,
   detectPackageScriptExecutions,
   extractExecutableCommandSegments,
+  runsCodeFromInput,
   tokenizeShellCommand,
   type ExecutableCommandSegment,
   type LocalScriptExecution,
@@ -25,7 +26,8 @@ import {
   type InterpreterScriptExecution,
 } from "../policy/interpreter-scripts.ts";
 import { expandStableShellVariables, normalizePolicyPath, pathTargetFromNormalizedPath, resolveScriptDirnameZero } from "../policy/paths.ts";
-import { nativeExecutableTokens, trackedRemovalTargets } from "../policy/shell-target-facts.ts";
+import { nativeExecutableTokens, sessionScratchRoots, trackedRemovalTargets } from "../policy/shell-target-facts.ts";
+import { analyzeScriptShellFacts, substituteResolvedVariables, type ScriptShellFacts } from "../policy/script-variables.ts";
 import { expandMktempVariables } from "../policy/temp-variables.ts";
 import { isHiddenBelow, recursiveSearchRoots, type RecursiveSearchRoot } from "../policy/recursive-search.ts";
 import { containsCredentialKeyword, isProtectedEnvFileSegment } from "../policy/sensitive-paths.ts";
@@ -121,6 +123,8 @@ interface ScriptInspectionSource {
   readonly exactCommandAllow?: boolean;
   /** Absolute directory of the shell script being inspected; resolves `$(dirname "$0")`. */
   readonly scriptDirectory?: string;
+  /** Resolved assignments and top-level lines of the shell script being inspected. */
+  readonly shellFacts?: ScriptShellFacts;
 }
 
 interface ScriptContentInspectionOptions extends ScriptInspectionSource {
@@ -128,6 +132,8 @@ interface ScriptContentInspectionOptions extends ScriptInspectionSource {
   readonly allowCommandDefaultDeny?: boolean;
   /** Scripts already inspected in this chain; set when scripts it runs must be inspected too. */
   readonly visitedScripts?: Set<string>;
+  /** Segments the user already allowed in this tool call (shell directory + command); asked once per call. */
+  readonly approvedSegments?: Set<string>;
 }
 
 // Pi's inter-extension bus. Herdr's Pi integration reports the agent as
@@ -223,7 +229,7 @@ export async function mapToolCallToPolicyRequest(
     const trackedPaths = await trackedRemovalTargets(commandClassification, cwd);
     // Use the same stable-path resolver for the executable and its scratch root.
     const tmpDir = expandStableShellVariables("$TMPDIR", process.env, cwd);
-    const nativeExecutables = await nativeExecutableTokens(command, cwd, tmpDir);
+    const [nativeExecutables, scratchRoots] = await Promise.all([nativeExecutableTokens(command, cwd, tmpDir), sessionScratchRoots(tmpDir)]);
     return {
       request: {
         toolName: event.toolName,
@@ -234,6 +240,7 @@ export async function mapToolCallToPolicyRequest(
         riskHint: commandClassification.risk,
         ...(trackedPaths.length > 0 ? { trackedPaths } : {}),
         ...(nativeExecutables.length > 0 ? { nativeExecutables } : {}),
+        ...(scratchRoots.length > 0 ? { scratchRoots } : {}),
       },
       commandClassification,
     };
@@ -419,8 +426,9 @@ async function inspectLocalScriptsBeforeExecution(
     return undefined;
   }
 
+  const approvedSegments = new Set<string>();
   for (const script of detectLocalScriptExecutions(request.command)) {
-    const blockResult = await inspectLocalScriptBeforeExecution(state, ctx, request, script);
+    const blockResult = await inspectLocalScriptBeforeExecution(state, ctx, request, script, new Set(), approvedSegments);
     if (blockResult) {
       return blockResult;
     }
@@ -449,6 +457,7 @@ async function inspectLocalScriptBeforeExecution(
   request: PolicyRequest,
   script: LocalScriptExecution,
   visitedScripts: Set<string> = new Set(),
+  approvedSegments: Set<string> = new Set(),
 ): Promise<ToolCallBlockResult | undefined> {
   // Native binaries have no script text; policy evaluation already checked them.
   if (script.via === "direct" && request.nativeExecutables?.includes(script.rawPath)) {
@@ -458,13 +467,18 @@ async function inspectLocalScriptBeforeExecution(
   if ("block" in read) {
     return read.block;
   }
-  if ("skip" in read || visitedScripts.has(read.path)) {
+  if ("skip" in read) {
+    return undefined;
+  }
+  // The shell directory changes how a script's relative paths resolve, so it is part of the visit.
+  const visitKey = `${read.path}\0${request.shellDirectory ?? ""}`;
+  if (visitedScripts.has(visitKey)) {
     return undefined;
   }
   if (visitedScripts.size >= MAX_NESTED_SCRIPTS) {
     return uninspectableScriptBlock(state, ctx, request, script, script.rawPath, `Script '${script.rawPath}' is nested more than ${MAX_NESTED_SCRIPTS} scripts deep to inspect.`);
   }
-  visitedScripts.add(read.path);
+  visitedScripts.add(visitKey);
   // `./tool.py` runs its interpreter, not the shell: inspect it as code.
   const language = script.via === "direct" ? interpreterScriptLanguage(read.path, read.content) : undefined;
   if (language) {
@@ -481,7 +495,9 @@ async function inspectLocalScriptBeforeExecution(
     snippetLabel: script.invocation,
     shellHint: script.shellHint,
     scriptDirectory: dirname(read.path),
+    shellFacts: analyzeScriptShellFacts(read.content, dirname(read.path)),
     visitedScripts,
+    approvedSegments,
   });
 }
 
@@ -504,7 +520,7 @@ async function readScriptForInspection(
   request: PolicyRequest,
   script: LocalScriptExecution,
 ): Promise<ScriptReadResult> {
-  const normalized = await normalizeTargets([script.rawPath], request.cwd, state.homeDir, true);
+  const normalized = await normalizeTargets([script.rawPath], request.cwd, state.homeDir, true, request.shellDirectory);
   if ("error" in normalized) {
     return { block: await uninspectableScriptBlock(state, ctx, request, script, script.rawPath, normalized.error) };
   }
@@ -746,8 +762,9 @@ async function evaluateScriptContentInspection(
     return handlePolicyDecision(state, ctx, synthetic, decision);
   }
 
+  let shellDirectory = parentRequest.shellDirectory;
   for (const command of inspection.commands) {
-    const derived = await scriptCommandPolicyRequest(parentRequest, command, source, state.homeDir);
+    const derived = await scriptCommandPolicyRequest(parentRequest, command, source, state.homeDir, shellDirectory);
     if ("error" in derived) {
       const synthetic = uninspectableContentRequest(parentRequest, source, derived.error);
       const decision = evaluatePolicyRequest({
@@ -764,20 +781,62 @@ async function evaluateScriptContentInspection(
       commandClassification: derived.commandClassification,
       warnedFingerprints: currentWarnedFingerprints(state),
     });
-    if (source.allowCommandDefaultDeny && isCommandDefaultDenyDecision(decision)) {
+    // Package scripts may run tools without an allow rule, but not a shell or interpreter fed piped or downloaded code.
+    if (source.allowCommandDefaultDeny && isCommandDefaultDenyDecision(decision) && !runsCodeFromInput(derived.request.command ?? "")) {
       continue;
     }
-    const handled = await handlePolicyDecision(state, ctx, derived.request, decision);
+    const handled = await handleScriptCommandDecision(state, ctx, derived.request, decision, source.approvedSegments);
     if (handled) {
       return block(formatScriptContentBlockReason(source.sourceKind, source.sourcePath, command, handled.reason));
     }
-    const nestedBlock = await inspectNestedLocalScripts(state, ctx, parentRequest, derived.request.command, source.visitedScripts);
+    const nestedRequest = shellDirectory ? { ...parentRequest, shellDirectory } : parentRequest;
+    const nestedBlock = await inspectNestedLocalScripts(state, ctx, nestedRequest, derived.request.command, source);
     if (nestedBlock) {
       return nestedBlock;
     }
+    shellDirectory = trackedDirectoryChange(command, derived.request, source.shellFacts) ?? shellDirectory;
   }
 
   return undefined;
+}
+
+// The same segment from the same shell directory asks once per tool call:
+// `sh t.sh; sh t.sh` inspects t.sh twice but shows one dialog.
+async function handleScriptCommandDecision(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  request: PolicyRequest,
+  decision: PolicyDecision,
+  approvedSegments: Set<string> | undefined,
+): Promise<ToolCallBlockResult | undefined> {
+  const key = `${request.shellDirectory ?? request.cwd}\0${request.command ?? ""}`;
+  if (decision.outcome === "needs-user-decision" && approvedSegments?.has(key)) {
+    return undefined;
+  }
+  const handled = await handlePolicyDecision(state, ctx, request, decision);
+  if (!handled && decision.outcome === "needs-user-decision") {
+    approvedSegments?.add(key);
+  }
+  return handled;
+}
+
+// A `cd <path>` alone on a top-level line of an inspected shell script moves
+// the shell directory for the lines after it. A `cd` inside a block, in a
+// compound line, or to a path that does not exist leaves it unchanged.
+function trackedDirectoryChange(command: ExtractedScriptCommand, request: PolicyRequest, facts: ScriptShellFacts | undefined): string | undefined {
+  if (!facts?.topLevelLines.has(command.lineStart) || command.lineStart !== command.lineEnd) {
+    return undefined;
+  }
+  const [name, operand, ...rest] = tokenizeShellCommand(request.command ?? "");
+  if (name !== "cd" || !operand || operand.startsWith("-") || rest.length > 0) {
+    return undefined;
+  }
+  const target = request.targets.find((candidate): candidate is PathTarget => candidate.kind === "path" && candidate.raw === operand && candidate.directoryChange === true);
+  if (!target?.exists) {
+    return undefined;
+  }
+  // Keep project directories under cwd as given, so they compare with the (possibly symlinked) project root.
+  return target.isInsideProject && target.projectRelativePath !== undefined ? resolvePath(request.cwd, target.projectRelativePath) : target.canonicalPath ?? target.absolutePath;
 }
 
 async function inspectNestedLocalScripts(
@@ -785,13 +844,13 @@ async function inspectNestedLocalScripts(
   ctx: GuardedToolCallContext,
   parentRequest: PolicyRequest,
   command: string | undefined,
-  visitedScripts: Set<string> | undefined,
+  source: ScriptContentInspectionOptions,
 ): Promise<ToolCallBlockResult | undefined> {
-  if (!command || !visitedScripts) {
+  if (!command || !source.visitedScripts) {
     return undefined;
   }
   for (const script of detectLocalScriptExecutions(command)) {
-    const blockResult = await inspectLocalScriptBeforeExecution(state, ctx, parentRequest, script, visitedScripts);
+    const blockResult = await inspectLocalScriptBeforeExecution(state, ctx, parentRequest, script, source.visitedScripts, source.approvedSegments);
     if (blockResult) {
       return blockResult;
     }
@@ -1093,13 +1152,15 @@ async function scriptCommandPolicyRequest(
   command: ExtractedScriptCommand,
   source: ScriptInspectionSource,
   homeDir: string | undefined,
+  shellDirectory?: string,
 ): Promise<
   | { readonly request: PolicyRequest; readonly commandClassification: ReturnType<typeof classifyShellCommand> }
   | { readonly error: string }
 > {
-  const commandText = source.scriptDirectory ? resolveScriptDirnameZero(command.command, source.scriptDirectory) : command.command;
+  const dirnameResolved = source.scriptDirectory ? resolveScriptDirnameZero(command.command, source.scriptDirectory) : command.command;
+  const commandText = source.shellFacts ? substituteResolvedVariables(dirnameResolved, command.lineStart, source.shellFacts.variables) : dirnameResolved;
   const commandClassification = classifyShellCommand(commandText);
-  const targets = await shellCommandTargets(commandClassification, parentRequest.cwd, homeDir);
+  const targets = await shellCommandTargets(commandClassification, parentRequest.cwd, homeDir, shellDirectory);
   if ("error" in targets) {
     return targets;
   }
@@ -1120,6 +1181,8 @@ async function scriptCommandPolicyRequest(
       policyMissingGuidance: "Do not write or run generated scripts with unapproved commands. Use safe built-in tools, ask the user for approval, or propose a narrow allowCommands rule.",
       policyMissingRecommendation: "Request user approval for the exact extracted command before retrying.",
       requiresExactCommandAllow: source.exactCommandAllow ?? true,
+      ...(parentRequest.scratchRoots ? { scratchRoots: parentRequest.scratchRoots } : {}),
+      ...(shellDirectory ? { shellDirectory } : {}),
     },
     commandClassification,
   };
@@ -1506,8 +1569,9 @@ async function shellCommandTargets(
   commandClassification: ReturnType<typeof classifyShellCommand>,
   cwd: string,
   homeDir: string | undefined,
+  baseDirectory?: string,
 ): Promise<{ readonly targets: readonly PathTarget[] } | { readonly error: string }> {
-  const normalized = await normalizeTargets(commandClassification.targetPaths, cwd, homeDir, true);
+  const normalized = await normalizeTargets(commandClassification.targetPaths, cwd, homeDir, true, baseDirectory);
   if ("error" in normalized) {
     return normalized;
   }
@@ -1783,11 +1847,12 @@ async function normalizeTargets(
   cwd: string,
   homeDir?: string,
   shellExpansion = false,
+  baseDirectory?: string,
 ): Promise<{ readonly targets: readonly PathTarget[] } | { readonly error: string }> {
   const targets: PolicyTarget[] = [];
   for (const pathValue of pathValues) {
     try {
-      const normalized = await normalizePolicyPath(pathValue, { cwd, shellExpansion, ...(homeDir ? { homeDir } : {}) });
+      const normalized = await normalizePolicyPath(pathValue, { cwd, shellExpansion, ...(homeDir ? { homeDir } : {}), ...(baseDirectory ? { baseDirectory } : {}) });
       targets.push(pathTargetFromNormalizedPath(normalized));
     } catch (error) {
       return { error: `GuardMe could not safely resolve one or more tool paths (${formatPathResolutionError(error)}). Blocking by default.` };

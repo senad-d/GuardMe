@@ -23,6 +23,7 @@ import {
   type ExecutableCommandSegment,
   classifyShellCommand,
   isEnvAssignment,
+  segmentRunsCodeFromInput,
   tokenizeShellCommand,
 } from "./commands.ts";
 import { type NormalizedPolicyPath, isAnchoredPolicyPathPattern, isPathInside, matchPolicyPathPattern, toPosixPath } from "./paths.ts";
@@ -175,7 +176,7 @@ export function createPolicyFingerprint(request: PolicyRequest): string {
 }
 
 interface CommandSegmentFailure {
-  readonly kind: "dangerous" | "policy-missing";
+  readonly kind: "dangerous" | "policy-missing" | "low-risk";
   readonly segment: ExecutableCommandSegment;
   readonly request: PolicyRequest;
   readonly reason: string;
@@ -256,19 +257,22 @@ function evaluateCommandSegment(
   const wildcardOrExactAllow = firstMatchingSegmentCommandRule(policy.allowCommands, segment);
   const trackedRemoval = trackedRemovalTarget(segment, request.trackedPaths);
   const runnerVariable = runnerVariableAssignment(segment);
-  if (!exactAllow && (trackedRemoval || runnerVariable)) {
-    const reason = trackedRemoval
-      ? `Removing '${redactSensitiveText(trackedRemoval)}' would delete files git tracks in this project.`
-      : `Setting ${runnerVariable} can redirect which programs later segments run, or how they load.`;
-    return { failure: builtinApprovalFailure(request, segment, reason, failureIndex) };
+  const codeFromInput = segmentRunsCodeFromInput(segment.normalizedText, request.command ?? "");
+  const builtinReason = builtinApprovalReason(trackedRemoval, runnerVariable, codeFromInput);
+  if (!exactAllow && builtinReason) {
+    return { failure: builtinApprovalFailure(request, segment, builtinReason, failureIndex) };
   }
   const projectScopedDelete = isUnattendedPathMutation(segment, request.cwd, policy);
   const dangerousRule = firstMatchingSegmentCommandRule(policy.dangerousCommands, segment);
   const segmentRequiresExact = commandSegmentRequiresExactAllow(segment, Boolean(request.requiresExactCommandAllow), projectScopedDelete);
 
-  if (!exactAllow && !dangerousRule && !commandWritesPaths(command) && isHarmlessShellSegment(segment, (rawPath) => projectRelativeTargetPath(request, rawPath))) {
+  if (!exactAllow && !dangerousRule && isHarmlessReadOnlySegment(segment, command, request)) {
     const wildcardAllow = request.requiresExactCommandAllow ? undefined : wildcardOrExactAllow;
     return { matchedAllow: wildcardAllow ? matchedRule(wildcardAllow) : HARMLESS_SHELL_SEGMENT_RULE, allowedSegment: segment.normalizedText };
+  }
+
+  if (request.requiresExactCommandAllow && !exactAllow && !dangerousRule && isUnresolvedMetadataTest(segment)) {
+    return { failure: lowRiskSegmentFailure(request, segment, failureIndex) };
   }
 
   if (segmentRequiresApproval(segment, dangerousRule, segmentRequiresExact, exactAllow, projectScopedDelete)) {
@@ -287,6 +291,21 @@ function evaluateCommandSegment(
   return { failure: policyMissingSegmentFailure(request, segment, allowedSegments) };
 }
 
+function isHarmlessReadOnlySegment(segment: ExecutableCommandSegment, command: CommandClassification | undefined, request: PolicyRequest): boolean {
+  return !commandWritesPaths(command) && isHarmlessShellSegment(segment, (rawPath) => allowedRootRelativePath(request, rawPath));
+}
+
+function builtinApprovalReason(trackedRemoval: string | undefined, runnerVariable: string | undefined, codeFromInput: boolean): string | undefined {
+  if (trackedRemoval) {
+    return `Removing '${redactSensitiveText(trackedRemoval)}' would delete files git tracks in this project.`;
+  }
+  if (runnerVariable) {
+    return `Setting ${runnerVariable} can redirect which programs later segments run, or how they load.`;
+  }
+  // `curl x | python3 -`: the program text arrives at run time, so neither policy nor script inspection sees it.
+  return codeFromInput ? "It runs code read from a pipe or redirect, which GuardMe cannot inspect before it runs." : undefined;
+}
+
 const HARMLESS_SHELL_SEGMENT_RULE: MatchedRule = {
   category: "defaultProjectPolicy",
   source: { kind: "builtin", label: "harmless shell built-in or project script" },
@@ -301,11 +320,64 @@ function commandWritesPaths(command: CommandClassification | undefined): boolean
 }
 
 // Resolves a segment operand through the request's normalized targets, which
-// carry symlink-resolved paths, and falls back to resolving it against cwd.
-function projectRelativeTargetPath(request: PolicyRequest, rawPath: string): string | undefined {
+// carry symlink-resolved paths, and falls back to resolving it against the
+// shell directory (cwd unless an inspected script changed it). Returns the
+// path relative to the project or the session TMPDIR, whichever holds it.
+function allowedRootRelativePath(request: PolicyRequest, rawPath: string): string | undefined {
   const target = request.targets.find((candidate): candidate is PathTarget => candidate.kind === "path" && candidate.raw === rawPath);
-  const path = normalizedPathFromTarget(target ?? { kind: "path", raw: rawPath }, request.cwd);
-  return path.isInsideProject ? path.projectRelativePath : undefined;
+  const fallback: PathTarget = request.shellDirectory ? { kind: "path", raw: rawPath, absolutePath: resolve(request.shellDirectory, rawPath) } : { kind: "path", raw: rawPath };
+  const path = normalizedPathFromTarget(target ?? fallback, request.cwd);
+  if (path.isInsideProject) {
+    return path.projectRelativePath;
+  }
+  const scratchRoot = request.scratchRoots?.find((root) => isPathInside(root, path.canonicalPath));
+  return scratchRoot ? toPosixPath(relative(scratchRoot, path.canonicalPath) || ".") : undefined;
+}
+
+// `test -x "$script"` with a variable GuardMe could not resolve only reads
+// metadata, so inside an inspected script it asks at low risk (the dialog
+// starts on "Allow once") instead of dangerous. Command substitution in the
+// operand, binary operators and compound expressions keep the normal path.
+const METADATA_TEST_OPERATORS: ReadonlySet<string> = new Set([
+  "-a", "-b", "-c", "-d", "-e", "-f", "-g", "-h", "-k", "-L", "-N", "-O", "-G", "-p", "-r", "-s", "-S", "-u", "-w", "-x",
+]);
+// Test command name to its closing bracket; `test` has none.
+const TEST_COMMAND_CLOSERS: ReadonlyMap<string, string | undefined> = new Map([["test", undefined], ["[", "]"], ["[[", "]]"]]);
+function isPlainVariableOperand(operand: string): boolean {
+  if (!operand.includes("$") || operand.includes("`")) {
+    return false;
+  }
+  const literalParts = operand.replace(/\$(?:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})/gu, "");
+  return !literalParts.includes("$");
+}
+
+function isUnresolvedMetadataTest(segment: ExecutableCommandSegment): boolean {
+  if (segment.hardDenied || segment.dangerous || segment.credentialAccess) {
+    return false;
+  }
+  const [name = "", ...args] = tokenizeShellCommand(segment.normalizedText);
+  if (!TEST_COMMAND_CLOSERS.has(name)) {
+    return false;
+  }
+  const closing = TEST_COMMAND_CLOSERS.get(name);
+  if (closing && args.at(-1) !== closing) {
+    return false;
+  }
+  const expression = closing ? args.slice(0, -1) : args;
+  const [operator = "", operand = "", ...rest] = expression[0] === "!" ? expression.slice(1) : expression;
+  return rest.length === 0 && METADATA_TEST_OPERATORS.has(operator) && isPlainVariableOperand(operand);
+}
+
+function lowRiskSegmentFailure(request: PolicyRequest, segment: ExecutableCommandSegment, failureIndex: number): CommandSegmentFailure {
+  const prefix = failureIndex === 0 ? "" : "Another ";
+  return {
+    kind: "low-risk",
+    segment,
+    request: commandSegmentPolicyRequest(request, segment),
+    reason: `${prefix}Shell segment '${redactSensitiveText(segment.normalizedText)}' tests a path GuardMe could not resolve. It only reads file metadata.`,
+    matchedRules: [commandDefaultDenyRule(segment)],
+    risk: "low",
+  };
 }
 
 // Running a binary the agent built (./target/debug/app, $TMPDIR/target/...)
@@ -519,6 +591,18 @@ function commandSegmentFailureDecision(
 ): PolicyDecision {
   const selectedFailure = selectHighestRiskSegmentFailure(failures);
   const reason = appendAdditionalFailureSummary(selectedFailure.reason, selectedFailure, failures);
+  if (selectedFailure.kind === "low-risk") {
+    return coachableDecision({
+      request: { ...selectedFailure.request, policyMissingReason: reason },
+      risk: "low",
+      reason,
+      matchedRules: selectedFailure.matchedRules,
+      warnedFingerprints,
+      reasonCode: request.reasonCode ?? "policy-missing-command",
+      guidance: request.policyMissingGuidance ?? "Use a literal project path, or ask the user to allow this check once.",
+      recommendation: "Allow once if the tested path is expected.",
+    });
+  }
   if (selectedFailure.kind === "dangerous") {
     return dangerousDecision(
       { ...selectedFailure.request, policyMissingReason: reason },
@@ -1033,7 +1117,7 @@ function segmentFailurePriority(failure: CommandSegmentFailure): number {
   if (failure.kind === "dangerous" || failure.risk === "dangerous") {
     return 2;
   }
-  return 1;
+  return failure.kind === "low-risk" ? 0 : 1;
 }
 
 function appendAdditionalFailureSummary(

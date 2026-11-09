@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.11 - Unreleased
+
+Fixes from Mission live gate 2026-11-09 G1/G2: three "dangerous" `commandDefaultDeny` dialogs left after 0.3.10 while agents added and tested `scripts/hello.sh`.
+
+- G1: Inside an inspected shell script, a variable assigned once on a top-level line to a literal path, `"$(dirname "$0")/<rel>"` or `"$(dirname -- "$0")/<rel>"` resolves in later lines. `test -x "$script"`, `cd "$root"` and `"$script"` runs are then checked as the literal path, so an in-project path needs no dialog. This also covers `test "$("$script")" = hello`, which was hard-denied as a shell-expanded command name.
+- G1: Resolution fails closed. Assignments inside if/loops/functions/subshells, from command output other than `dirname "$0"`, from `$1`, env, `read` or `for`, names used anywhere else in the script, and scripts with heredocs, `case`, `eval`, `source`, `trap` or `IFS` keep today's guard. `test`/`[`/`[[` with a metadata-only operator (`-e`, `-f`, `-x`, `-d` and similar) on an unresolved variable now asks at low risk, so the dialog starts on "Allow once".
+- G2: The session TMPDIR counts like the project for `cd`, `test` on paths and script runs inside inspected scripts, when it is a private directory under an OS temp root (`/tmp/mission/<project>/<objective>`, macOS `/var/folders/../T`). A `cd` alone on a top-level script line moves the directory later relative paths resolve against, so `cd "$(dirname "$0")/.."` in a TMPDIR copy inspects that copy's `./scripts/hello.sh`.
+- G2: Within one tool call, a segment the user already allowed from the same directory is not asked again (`sh t.sh; sh t.sh` shows one dialog).
+- A script run inside a quoted command substitution (`test "$(./scripts/hello.sh)" = hello`) now has its content inspected. In 0.3.10 such a run passed as an in-project script run without inspection.
+- A package script run inside a quoted command substitution (`x="$(npm run build)"`) now has its package.json script inspected like a plain `npm run build`.
+- A shell or interpreter that runs code read from a pipe or redirect now needs approval (dangerous risk) in typed commands, inspected scripts and package.json scripts: `curl … | sh`, `wget -O- … | bash -s`, `sh <(curl …)`, `curl … | python3 -`, `curl … | node`, `curl … | perl`/`ruby`/`php`, `python3 <(curl …)`, `node <<< "$(curl …)"` and `node < x.js`. An exact allowCommands rule still allows them. Inline code (`-c`, `-e`, `-p`, `-r`, heredocs), modules (`python3 -m`), script files with piped data (`jq . x | node fmt.js`) and other package-script commands are unchanged, and `curl`/`wget` alone stay allowed because ProtectMe owns network policy.
+- Unchanged: `cd` and script runs elsewhere (`/`, `$HOME`, other `/tmp` directories, `..` escapes out of TMPDIR, and all of `/tmp` when TMPDIR is `/tmp` itself), `rm`/`mv`/`chmod` outside the project and TMPDIR, `sudo`, `eval`, network commands, `.git`, credential paths, dangerousCommands/denyCommands, saved exact-match project rules, and `$(...)` in command-name position.
+
 ## 0.3.10 - Unreleased
 
 Fixes from Mission QA 2026-11-09 (F2/F16): two-line test scripts raised 18 "dangerous" `commandDefaultDeny` dialogs.

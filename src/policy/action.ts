@@ -148,6 +148,14 @@ export interface PolicyRequest {
   readonly trackedPaths?: readonly TrackedPath[];
   /** Executable tokens that resolve to a native binary inside the project or the session TMPDIR. */
   readonly nativeExecutables?: readonly string[];
+  /**
+   * Session TMPDIR, canonical and as given, when it is a private directory
+   * under an OS temp root; `cd`, `test` and script runs there count like
+   * project paths.
+   */
+  readonly scratchRoots?: readonly string[];
+  /** Shell directory of an inspected script after a resolved `cd`; relative operands resolve against it. */
+  readonly shellDirectory?: string;
 }
 
 export interface TrackedPath {

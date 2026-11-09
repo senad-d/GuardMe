@@ -4,10 +4,10 @@ import { tokenizeShellCommand, type ExecutableCommandSegment } from "./commands.
 // allowCommands rule, including inside inspected scripts where every other
 // segment needs an exact rule (Mission QA 2026-11-09, F2/F16). Each check is
 // narrow: no file redirection, no unresolved path, nothing outside the project
-// or in .git. Path protections and deny rules run before this check, and a
+// or the session TMPDIR (Mission live gate 2026-11-09, G2), nothing in .git. Path protections and deny rules run before this check, and a
 // script run here still has its own content inspected by the guard.
 
-/** Project-relative path of a raw operand, or undefined when it resolves outside the project. */
+/** Path of a raw operand relative to the project or the session TMPDIR, or undefined when it resolves outside both. */
 export type ProjectPathResolver = (rawPath: string) => string | undefined;
 
 const OUTPUT_COMMANDS: ReadonlySet<string> = new Set(["echo", "printf"]);

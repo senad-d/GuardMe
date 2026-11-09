@@ -511,7 +511,7 @@ function commandRecord(
   };
 }
 
-function joinContinuationLines(content: string): readonly { readonly text: string; readonly lineStart: number; readonly lineEnd: number }[] {
+export function joinContinuationLines(content: string): readonly { readonly text: string; readonly lineStart: number; readonly lineEnd: number }[] {
   const joined: { text: string; lineStart: number; lineEnd: number }[] = [];
   let current = "";
   let start = 1;
@@ -613,7 +613,7 @@ function isShellFunctionDeclaration(line: string): boolean {
   return cursor === line.length;
 }
 
-function stripShellComment(line: string): string {
+export function stripShellComment(line: string): string {
   let quote: '"' | "'" | undefined;
   let escaped = false;
   for (let index = 0; index < line.length; index += 1) {

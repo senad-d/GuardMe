@@ -107,3 +107,32 @@ async function hasNativeMagic(path: string): Promise<boolean> {
     await handle.close();
   }
 }
+
+// Shared temp roots: TMPDIR must sit strictly below one of these, so `cd /tmp/other` stays guarded.
+const SHARED_TEMP_ROOTS: readonly string[] = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"];
+// macOS per-user temp directory (`$TMPDIR` by default): private to the user, so it may be the root itself.
+const USER_TEMP_ROOT = /^\/(?:private\/)?var\/folders\/[^/]+\/[^/]+\/T(?:\/|$)/u;
+
+/**
+ * Session TMPDIR, canonical and as given (`/var/folders/..` and
+ * `/private/var/folders/..` on macOS), when it is a private directory under
+ * an OS temp root (`/tmp/mission/<project>/<objective>`, macOS
+ * `/var/folders/../T`). `cd` into it and script runs or `test` on paths
+ * inside it count like project paths. Empty for an unset, relative or shared
+ * value such as `/tmp` itself.
+ */
+export async function sessionScratchRoots(tmpDir: string | undefined): Promise<readonly string[]> {
+  if (!tmpDir || !isAbsolute(tmpDir) || UNRESOLVED_PATH.test(tmpDir)) {
+    return [];
+  }
+  const real = await realpath(tmpDir).catch(() => undefined);
+  if (!real) {
+    return [];
+  }
+  const belowSharedRoot = SHARED_TEMP_ROOTS.some((root) => real !== root && isPathInside(root, real));
+  if (!belowSharedRoot && !USER_TEMP_ROOT.test(real)) {
+    return [];
+  }
+  const given = resolve(tmpDir);
+  return given === real ? [real] : [real, given];
+}

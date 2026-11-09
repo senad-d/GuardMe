@@ -15,6 +15,12 @@ export interface NormalizePolicyPathOptions {
    * outside-project and fall through to the default-deny/approval flow.
    */
   readonly shellExpansion?: boolean;
+  /**
+   * Directory relative paths resolve against when it differs from the
+   * project root (`cwd`): the shell's directory after a `cd` in an inspected
+   * script. The project boundary stays `cwd`.
+   */
+  readonly baseDirectory?: string;
 }
 
 export interface NormalizedPolicyPath {
@@ -70,7 +76,7 @@ export async function normalizePolicyPath(
   const expandedPath = expandHome(inputPath, homeDir);
   const hadTraversal = hasTraversalSegment(expandedPath);
   const unresolvedShellReference = options.shellExpansion === true && containsUnresolvedShellReference(expandedPath);
-  const absolutePath = isAbsolute(expandedPath) ? resolve(expandedPath) : resolve(projectRoot, expandedPath);
+  const absolutePath = isAbsolute(expandedPath) ? resolve(expandedPath) : resolve(options.baseDirectory ?? projectRoot, expandedPath);
   const canonical = await canonicalizePath(absolutePath);
   const isInsideProject = !unresolvedShellReference && isPathInside(projectRoot, canonical.canonicalPath);
   const projectRelativePath = isInsideProject ? toPosixPath(relative(projectRoot, canonical.canonicalPath) || ".") : undefined;
@@ -296,7 +302,7 @@ export function resolveScriptDirnameZero(command: string, scriptDirectory: strin
   return command.replace(DIRNAME_OF_SCRIPT, (match: string, offset: number) => (isInsideSingleQuotes(command, offset) ? match : scriptDirectory));
 }
 
-function isInsideSingleQuotes(command: string, offset: number): boolean {
+export function isInsideSingleQuotes(command: string, offset: number): boolean {
   let singleQuoted = false;
   let doubleQuoted = false;
   for (const character of command.slice(0, offset)) {
