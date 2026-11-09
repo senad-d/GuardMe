@@ -278,6 +278,37 @@ const SAFE_VARIABLE_VALUE = /^\/[\w@%+=:,./-]*$/;
  * directory change, heredoc bodies (they may be literal), and unsafe or
  * relative values.
  */
+// `$(dirname "$0")`, `$(dirname -- "$0")`, `$(dirname $0)` and `${0}` forms.
+const DIRNAME_OF_SCRIPT = /\$\(\s*dirname\s+(?:--\s+)?(?:"\$0"|"\$\{0\}"|\$0(?!\w)|\$\{0\})\s*\)/gu;
+
+/**
+ * Rewrites `$(dirname "$0")` in a command taken from an inspected script to
+ * that script's directory, so `cd "$(dirname "$0")/.."` is checked as the
+ * path it names. Only for script content: a top-level command runs as `shell
+ * -c`, where `$0` is the shell, so it keeps its unresolved form there. A match
+ * inside single quotes stays literal, and an unsafe directory value leaves
+ * the command unchanged.
+ */
+export function resolveScriptDirnameZero(command: string, scriptDirectory: string): string {
+  if (!command.includes("dirname") || !SAFE_VARIABLE_VALUE.test(scriptDirectory)) {
+    return command;
+  }
+  return command.replace(DIRNAME_OF_SCRIPT, (match: string, offset: number) => (isInsideSingleQuotes(command, offset) ? match : scriptDirectory));
+}
+
+function isInsideSingleQuotes(command: string, offset: number): boolean {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  for (const character of command.slice(0, offset)) {
+    if (character === "'" && !doubleQuoted) {
+      singleQuoted = !singleQuoted;
+    } else if (character === '"' && !singleQuoted) {
+      doubleQuoted = !doubleQuoted;
+    }
+  }
+  return singleQuoted;
+}
+
 export function expandStableShellVariables(command: string, variables: StableShellVariables, cwd = variables.PWD): string {
   if (!command.includes("$")) {
     return command;

@@ -37,6 +37,7 @@ export const APPROVAL_CHOICES: readonly ApprovalChoice[] = [
 ];
 
 const DEFAULT_SELECTED_INDEX = 1;
+const LOW_RISK_SELECTED_INDEX = 0;
 const MAX_APPROVAL_TARGET_WIDTH = 512;
 const MAX_APPROVAL_REASON_WIDTH = 768;
 const MAX_APPROVAL_RULE_WIDTH = 384;
@@ -229,7 +230,8 @@ function createApprovalComponent(
   request: PolicyRequest,
   decision: PolicyDecision,
 ): { render: (width: number) => string[]; invalidate: () => void; handleInput: (data: string) => void } {
-  let selectedIndex = DEFAULT_SELECTED_INDEX;
+  // Low-risk prompts start on "Allow once"; everything else starts on "Deny once".
+  let selectedIndex = decision.risk === "low" ? LOW_RISK_SELECTED_INDEX : DEFAULT_SELECTED_INDEX;
   let cachedWidth: number | undefined;
   let cachedRows: number | undefined;
   let cachedLines: string[] | undefined;

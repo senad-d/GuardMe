@@ -918,7 +918,8 @@ test("generic shell commands default-deny as policy-missing and prompt on repeat
 test("script-content command requests require exact command allows", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-script-content-exact-"));
   const policy = policyFrom({ ...createEmptyPolicyConfig(), allowCommands: [{ pattern: "*", reason: "too broad" }] });
-  const { request, classified } = shellRequest(cwd, "echo ok");
+  // Not a built-in harmless segment (echo, set, test, cd, project scripts pass without a rule).
+  const { request, classified } = shellRequest(cwd, "make build");
 
   const decision = evaluatePolicyRequest({
     policy,

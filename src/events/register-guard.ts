@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Dirent } from "node:fs";
 import { glob, readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve as resolvePath } from "node:path";
+import { basename, dirname, join, resolve as resolvePath } from "node:path";
 
 import { BUILT_IN_GUARDED_TOOLS, EXTENSION_STATUS_KEY, type GuardedToolContract } from "../constants.ts";
 import type { PathTarget, PolicyAction, PolicyDecision, PolicyDiagnostic, PolicyRequest, PolicyTarget, UserDecision } from "../policy/action.ts";
@@ -24,7 +24,7 @@ import {
   type InterpreterScriptAnalysis,
   type InterpreterScriptExecution,
 } from "../policy/interpreter-scripts.ts";
-import { expandStableShellVariables, normalizePolicyPath, pathTargetFromNormalizedPath } from "../policy/paths.ts";
+import { expandStableShellVariables, normalizePolicyPath, pathTargetFromNormalizedPath, resolveScriptDirnameZero } from "../policy/paths.ts";
 import { nativeExecutableTokens, trackedRemovalTargets } from "../policy/shell-target-facts.ts";
 import { expandMktempVariables } from "../policy/temp-variables.ts";
 import { isHiddenBelow, recursiveSearchRoots, type RecursiveSearchRoot } from "../policy/recursive-search.ts";
@@ -119,11 +119,15 @@ interface ScriptInspectionSource {
   readonly snippetLabel: string;
   /** False for commands spawned by interpreter scripts: they follow the same rules as typed commands. */
   readonly exactCommandAllow?: boolean;
+  /** Absolute directory of the shell script being inspected; resolves `$(dirname "$0")`. */
+  readonly scriptDirectory?: string;
 }
 
 interface ScriptContentInspectionOptions extends ScriptInspectionSource {
   readonly shellHint?: boolean;
   readonly allowCommandDefaultDeny?: boolean;
+  /** Scripts already inspected in this chain; set when scripts it runs must be inspected too. */
+  readonly visitedScripts?: Set<string>;
 }
 
 // Pi's inter-extension bus. Herdr's Pi integration reports the agent as
@@ -444,6 +448,7 @@ async function inspectLocalScriptBeforeExecution(
   ctx: GuardedToolCallContext,
   request: PolicyRequest,
   script: LocalScriptExecution,
+  visitedScripts: Set<string> = new Set(),
 ): Promise<ToolCallBlockResult | undefined> {
   // Native binaries have no script text; policy evaluation already checked them.
   if (script.via === "direct" && request.nativeExecutables?.includes(script.rawPath)) {
@@ -453,13 +458,17 @@ async function inspectLocalScriptBeforeExecution(
   if ("block" in read) {
     return read.block;
   }
-  if ("skip" in read) {
+  if ("skip" in read || visitedScripts.has(read.path)) {
     return undefined;
   }
+  if (visitedScripts.size >= MAX_NESTED_SCRIPTS) {
+    return uninspectableScriptBlock(state, ctx, request, script, script.rawPath, `Script '${script.rawPath}' is nested more than ${MAX_NESTED_SCRIPTS} scripts deep to inspect.`);
+  }
+  visitedScripts.add(read.path);
   // `./tool.py` runs its interpreter, not the shell: inspect it as code.
   const language = script.via === "direct" ? interpreterScriptLanguage(read.path, read.content) : undefined;
   if (language) {
-    return evaluateInterpreterAnalysis(state, ctx, request, script, analyzeInterpreterScript(read.content, language, script.rawPath));
+    return evaluateInterpreterAnalysis(state, ctx, request, script, analyzeInterpreterScript(read.content, language, script.rawPath), visitedScripts);
   }
   return evaluateScriptContentInspection(state, ctx, request, extractScriptCommandsFromContent({
     path: read.path,
@@ -471,8 +480,16 @@ async function inspectLocalScriptBeforeExecution(
     sourcePath: script.rawPath,
     snippetLabel: script.invocation,
     shellHint: script.shellHint,
+    scriptDirectory: dirname(read.path),
+    visitedScripts,
   });
 }
+
+// Scripts run by an inspected script (`./hello.sh` inside tests/test_hello.sh)
+// pass the command check as in-project script runs, so their own content is
+// inspected here. Revisits are skipped, and a chain deeper than this fails
+// closed.
+const MAX_NESTED_SCRIPTS = 16;
 
 type ScriptReadResult =
   | { readonly content: string; readonly path: string }
@@ -633,6 +650,7 @@ async function evaluateInterpreterAnalysis(
   request: PolicyRequest,
   script: LocalScriptExecution,
   analysis: InterpreterScriptAnalysis,
+  visitedScripts: Set<string> = new Set(),
 ): Promise<ToolCallBlockResult | undefined> {
   const findings = [...analysis.findings].sort((a, b) => (FINDING_SEVERITY_ORDER[a.severity] ?? 1) - (FINDING_SEVERITY_ORDER[b.severity] ?? 1));
   for (const found of findings) {
@@ -649,6 +667,7 @@ async function evaluateInterpreterAnalysis(
     sourcePath: script.rawPath,
     snippetLabel: script.invocation,
     exactCommandAllow: false,
+    visitedScripts,
   });
   if (commandBlock) {
     return commandBlock;
@@ -752,8 +771,31 @@ async function evaluateScriptContentInspection(
     if (handled) {
       return block(formatScriptContentBlockReason(source.sourceKind, source.sourcePath, command, handled.reason));
     }
+    const nestedBlock = await inspectNestedLocalScripts(state, ctx, parentRequest, derived.request.command, source.visitedScripts);
+    if (nestedBlock) {
+      return nestedBlock;
+    }
   }
 
+  return undefined;
+}
+
+async function inspectNestedLocalScripts(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  parentRequest: PolicyRequest,
+  command: string | undefined,
+  visitedScripts: Set<string> | undefined,
+): Promise<ToolCallBlockResult | undefined> {
+  if (!command || !visitedScripts) {
+    return undefined;
+  }
+  for (const script of detectLocalScriptExecutions(command)) {
+    const blockResult = await inspectLocalScriptBeforeExecution(state, ctx, parentRequest, script, visitedScripts);
+    if (blockResult) {
+      return blockResult;
+    }
+  }
   return undefined;
 }
 
@@ -1055,7 +1097,8 @@ async function scriptCommandPolicyRequest(
   | { readonly request: PolicyRequest; readonly commandClassification: ReturnType<typeof classifyShellCommand> }
   | { readonly error: string }
 > {
-  const commandClassification = classifyShellCommand(command.command);
+  const commandText = source.scriptDirectory ? resolveScriptDirnameZero(command.command, source.scriptDirectory) : command.command;
+  const commandClassification = classifyShellCommand(commandText);
   const targets = await shellCommandTargets(commandClassification, parentRequest.cwd, homeDir);
   if ("error" in targets) {
     return targets;
@@ -1065,7 +1108,7 @@ async function scriptCommandPolicyRequest(
       toolName: parentRequest.toolName,
       action: commandClassification.primaryAction,
       cwd: parentRequest.cwd,
-      command: command.command,
+      command: commandText,
       targets: [
         ...targets.targets,
         { kind: "tool", raw: `${source.sourceKind}:${source.sourcePath ?? source.snippetLabel}:${command.lineStart}:${command.preview}` },

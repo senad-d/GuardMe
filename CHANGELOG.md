@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.10 - Unreleased
+
+Fixes from Mission QA 2026-11-09 (F2/F16): two-line test scripts raised 18 "dangerous" `commandDefaultDeny` dialogs.
+
+- F2: These segments no longer need an allowCommands rule, including inside inspected scripts where every other segment still needs an exact rule: `set` with arguments (bare `set` stays guarded because it prints the environment), `echo`/`printf` without a file redirect (`>&2` and `2>&1` are fine), `test`/`[`/`[[` whose path operands are inside the project, `cd` into the project, and running a script inside the project (`./hello.sh`, `tests/x.sh`, `sh tests/x.sh`, `output=$(./hello.sh)`).
+- F2: A script run from an inspected script now has its own content inspected, so the new in-project script allowance does not skip inspection. Each script is inspected once per chain, and chains deeper than 16 scripts fail closed.
+- F16: `$(dirname "$0")` and `$(dirname -- "$0")` inside an inspected shell script resolve to that script's directory, so `cd "$(dirname "$0")/.."` is checked as an in-project `cd`. Top-level commands keep the unresolved form because Pi runs them with `shell -c`, where `$0` is the shell.
+- Approval dialogs for low-risk requests start on "Allow once". Medium and dangerous requests still start on "Deny once".
+- Unchanged: file redirects, outside-project paths, `cd ..`/`cd -`/bare `cd`, `.git`, `rm`/`mv`/`chmod`, `sudo`, `eval`, script runs with shell options (`sh -x tests/x.sh`), the dangerousCommands and denyCommands rules, and saved project rules, which stay exact-match.
+
 ## 0.3.9 - Unreleased
 
 Fixes from Mission QA_DOCKER_RUST_2026-11-09:

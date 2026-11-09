@@ -26,6 +26,7 @@ import {
   tokenizeShellCommand,
 } from "./commands.ts";
 import { type NormalizedPolicyPath, isAnchoredPolicyPathPattern, isPathInside, matchPolicyPathPattern, toPosixPath } from "./paths.ts";
+import { isHarmlessShellSegment } from "./harmless-segments.ts";
 import { protectedRuleUnderRoot } from "./recursive-search.ts";
 import { redactSensitiveText } from "./redact.ts";
 import { containsCredentialKeyword, isProtectedEnvFileSegment } from "./sensitive-paths.ts";
@@ -265,6 +266,11 @@ function evaluateCommandSegment(
   const dangerousRule = firstMatchingSegmentCommandRule(policy.dangerousCommands, segment);
   const segmentRequiresExact = commandSegmentRequiresExactAllow(segment, Boolean(request.requiresExactCommandAllow), projectScopedDelete);
 
+  if (!exactAllow && !dangerousRule && !commandWritesPaths(command) && isHarmlessShellSegment(segment, (rawPath) => projectRelativeTargetPath(request, rawPath))) {
+    const wildcardAllow = request.requiresExactCommandAllow ? undefined : wildcardOrExactAllow;
+    return { matchedAllow: wildcardAllow ? matchedRule(wildcardAllow) : HARMLESS_SHELL_SEGMENT_RULE, allowedSegment: segment.normalizedText };
+  }
+
   if (segmentRequiresApproval(segment, dangerousRule, segmentRequiresExact, exactAllow, projectScopedDelete)) {
     return { failure: dangerousSegmentFailure(request, segment, dangerousRule, command, segmentRequiresExact, failureIndex) };
   }
@@ -279,6 +285,27 @@ function evaluateCommandSegment(
   }
 
   return { failure: policyMissingSegmentFailure(request, segment, allowedSegments) };
+}
+
+const HARMLESS_SHELL_SEGMENT_RULE: MatchedRule = {
+  category: "defaultProjectPolicy",
+  source: { kind: "builtin", label: "harmless shell built-in or project script" },
+  actions: ["shell"],
+  reason: "set with arguments, echo/printf without a file redirect, test on project paths, cd into the project, and in-project script runs need no allow rule.",
+};
+
+// `printf x &> out` keeps its redirect only in the whole-command
+// classification, so any write there keeps every segment on the normal path.
+function commandWritesPaths(command: CommandClassification | undefined): boolean {
+  return command?.pathAccesses.some((access) => access.action !== "read" && access.action !== "list") ?? false;
+}
+
+// Resolves a segment operand through the request's normalized targets, which
+// carry symlink-resolved paths, and falls back to resolving it against cwd.
+function projectRelativeTargetPath(request: PolicyRequest, rawPath: string): string | undefined {
+  const target = request.targets.find((candidate): candidate is PathTarget => candidate.kind === "path" && candidate.raw === rawPath);
+  const path = normalizedPathFromTarget(target ?? { kind: "path", raw: rawPath }, request.cwd);
+  return path.isInsideProject ? path.projectRelativePath : undefined;
 }
 
 // Running a binary the agent built (./target/debug/app, $TMPDIR/target/...)
