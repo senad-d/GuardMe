@@ -115,3 +115,26 @@ test("quoted shell strings and comments are not mistaken for heredoc openers", (
     assert.equal(prepareShellHeredocs(command).error, undefined);
   }
 });
+
+test("prefix assignments before a heredoc consumer keep the body inspectable", () => {
+  for (const command of [
+    "PATH=\"$PWD/node_modules/.bin:$PATH\" node --input-type=module <<'JS'\nconsole.log(1)\nJS",
+    "FOO=1 BAR=\"a b\" python3 - <<'PY'\nprint(1)\nPY",
+    "env FOO=1 node <<'JS'\nconsole.log(1)\nJS",
+    "env A= B=two C=\"three four\" D='five six' node <<'JS'\nconsole.log(1)\nJS",
+  ]) {
+    assert.equal(evaluate(command).outcome, "allow", command);
+  }
+  assert.equal(evaluate("FOO=1 node <<'JS'\nconsole.log(process.env.HOME)\nJS").outcome, "deny");
+  assert.equal(evaluate("FOO=1 bash <<'SH'\naws s3 ls\nSH").outcome, "deny");
+  assert.match(prepareShellHeredocs("FOO=1 evil <<'X'\ndata\nX").error ?? "", /consumer/);
+  assert.match(prepareShellHeredocs("env node <<'X'\ndata\nX").error ?? "", /consumer/);
+});
+
+test("prefix assignments inside command substitutions and before deny-ruled commands are matched", () => {
+  assert.equal(evaluate("out=$(FOO=1 npm test)").outcome, "allow");
+  assert.equal(evaluate("out=$(PATH=\"$PWD/node_modules/.bin:$PATH\" npm test 2>&1)").outcome, "allow");
+  for (const command of ["FOO=1 sudo ls", "( FOO=1 sudo ls )", "A=1 B=2 git credential fill", "out=$(FOO=1 aws s3 ls)"]) {
+    assert.equal(evaluate(command).outcome, "deny", command);
+  }
+});

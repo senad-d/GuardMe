@@ -29,9 +29,9 @@ test("default checksum permission allows direct Git verification compounds", () 
   assert.deepEqual(classifyShellCommand("shasum -- -input").targetPaths, ["-input"]);
 });
 
-test("checksum permission retains credential and outside-project protections", () => {
+test("checksum permission retains credential protections and reads system files", () => {
   assert.equal(evaluate("shasum -a 256 .env").outcome, "deny");
-  assert.equal(evaluate("shasum -a 256 /etc/passwd").outcome, "deny");
+  assert.equal(evaluate("shasum -a 256 /etc/passwd").outcome, "allow");
   assert.equal(evaluate("git diff --check; shasum -a 256 .env").outcome, "deny");
 });
 

@@ -267,8 +267,9 @@ test("read-only path grants outside the project require anchored patterns", asyn
 
   assert.equal(piAuth.outcome, "deny");
   assert.equal(piAuth.hard, true);
-  assert.equal(otherProjectPi.outcome, "deny");
-  assert.equal(otherProjectGit.outcome, "deny");
+  // Reads are open across the system once credential rules pass.
+  assert.equal(otherProjectPi.outcome, "allow");
+  assert.equal(otherProjectGit.outcome, "allow");
   assert.equal(globalPolicyRead.outcome, "allow");
 });
 
@@ -370,7 +371,7 @@ test("inside-project reads and writes are allowed by default when no deny or pro
   assert.equal(readDecision.matchedRules[0]?.category, "defaultProjectPolicy");
 });
 
-test("outside-project reads require explicit allowPaths or readOnlyPaths", async () => {
+test("outside-project reads are allowed by default and readOnlyPaths still match first", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-eval-outside-read-"));
   const cwd = join(root, "project");
   const outside = join(root, "outside.txt");
@@ -381,7 +382,7 @@ test("outside-project reads require explicit allowPaths or readOnlyPaths", async
   const allowPolicy = policyFrom({ ...createEmptyPolicyConfig(), readOnlyPaths: [{ pattern: outside, actions: ["read", "list"] }] });
   const allowed = evaluatePolicyRequest({ policy: allowPolicy, request: await pathRequest(cwd, "read", outside) });
 
-  assert.equal(noAllow.outcome, "deny");
+  assert.equal(noAllow.outcome, "allow");
   assert.equal(allowed.outcome, "allow");
   assert.equal(allowed.matchedRules[0]?.category, "readOnlyPaths");
 });
@@ -410,10 +411,10 @@ test("built-in defaults allow the OS temp directory, keep protections inside it,
   }
   const outsideRead = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", "/etc/hosts") });
   const outsideWrite = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "write", "/etc/guardme-probe") });
-  assert.equal(outsideRead.outcome, "deny");
-  assert.match(outsideRead.reason, /Outside-project read requires/);
+  assert.equal(outsideRead.outcome, "allow");
   assert.equal(outsideWrite.outcome, "deny");
   assert.match(outsideWrite.reason, /Outside-project write requires/);
+  assert.match(outsideWrite.reason, /Blocked path: '\/etc\/guardme-probe'/);
   assert.equal(decide("mv old.txt /etc/old.txt").outcome, "deny");
 });
 
@@ -428,14 +429,15 @@ test("all built-in temp roots allow ordinary paths without widening credentials 
         const allowed = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, action, target) });
         assert.equal(allowed.outcome, "allow", `${action}: ${target}`);
       }
-      for (const target of [`${root}/.env`, `${root}/guardme-scratch/credentials.json`, `${root}-neighbor/probe.log`]) {
+      const neighbor = action === "read" || action === "list" ? [] : [`${root}-neighbor/probe.log`];
+      for (const target of [`${root}/.env`, `${root}/guardme-scratch/credentials.json`, ...neighbor]) {
         const denied = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, action, target) });
         assert.equal(denied.outcome, "deny", `${action}: ${target}`);
       }
     }
   }
   for (const target of ["/var/folders/ab/example/C/probe.log", "/var/folders/ab/T/probe.log", "/var/folders/ab/example/extra/T/probe.log"]) {
-    const denied = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", target) });
+    const denied = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "write", target) });
     assert.equal(denied.outcome, "deny", target);
   }
 });
@@ -496,7 +498,7 @@ test("@earendil-works defaults allow all scoped packages across installations wi
       const listed = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "list", join(packageRoot, directory)) });
       assert.equal(listed.outcome, "allow");
     }
-    for (const relativePath of ["../../other-package/README.md", "../../@earendil-works-other/package/README.md", "docs/.env", "examples/credentials.json"]) {
+    for (const relativePath of ["docs/.env", "examples/credentials.json"]) {
       const denied = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", join(packageRoot, relativePath)) });
       assert.equal(denied.outcome, "deny", relativePath);
     }
@@ -540,7 +542,7 @@ test("user tool location defaults allow inspection without allowing mutations or
       assert.equal(decision.hard, true, `${directory}/${filename}`);
     }
   }
-  const unrelated = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "read", join(home, "Documents", "note.txt")) });
+  const unrelated = evaluatePolicyRequest({ policy, request: await pathRequest(cwd, "write", join(home, "Documents", "note.txt")) });
   assert.equal(unrelated.outcome, "deny");
 });
 
@@ -565,7 +567,7 @@ test("security scanner defaults allow bare, version and scan commands without we
       const decision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
       assert.equal(decision.outcome, "allow", command);
     }
-    for (const suffix of ["&& aws sts get-caller-identity", "&& cat .env", "&& cat /etc/passwd", "> .env"]) {
+    for (const suffix of ["&& aws sts get-caller-identity", "&& cat .env", "&& cat ~/.aws/credentials", "> .env"]) {
       const { request, classified } = shellRequest(cwd, `${scanner} --version ${suffix}`);
       assert.equal(evaluatePolicyRequest({ policy, request, commandClassification: classified }).outcome, "deny", `${scanner}: ${suffix}`);
     }
@@ -744,7 +746,7 @@ test("wildcard command allows do not bypass protected paths or dangerous command
   });
 
   const envRead = shellRequest(cwd, "cat .env");
-  const passwdRead = shellRequest(cwd, "cat /etc/passwd");
+  const passwdRead = shellRequest(cwd, "cat ~/.aws/credentials");
   const findDelete = shellRequest(cwd, "find . -delete");
   const redirectedFindDelete = shellRequest(cwd, "find . -delete 2>/dev/null");
   const cloud = shellRequest(cwd, "aws sts get-caller-identity");
@@ -764,7 +766,7 @@ test("wildcard command allows do not bypass protected paths or dangerous command
   assert.equal(envDecision.outcome, "deny");
   assert.equal(envDecision.hard, true);
   assert.equal(passwdDecision.outcome, "deny");
-  assert.match(passwdDecision.reason, /Outside-project read requires/);
+  assert.match(passwdDecision.reason, /Credential-like/);
   assert.equal(findDecision.outcome, "coach");
   assert.match(findDecision.reason, /find -delete|exact allowCommands/);
   assert.equal(redirectedFindDecision.outcome, "coach");
@@ -798,10 +800,10 @@ test("command allows do not approve outside-project shell path access", async ()
   const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-command-allow-outside-"));
   const policy = policyFrom({
     ...createEmptyPolicyConfig(),
-    allowCommands: [{ pattern: "rm -rf build && cat /etc/passwd", reason: "too broad" }],
+    allowCommands: [{ pattern: "rm -rf build && cp a /etc/passwd", reason: "too broad" }],
     dangerousCommands: [{ pattern: "rm -rf *" }],
   });
-  const { request, classified } = shellRequest(cwd, "rm -rf build && cat /etc/passwd");
+  const { request, classified } = shellRequest(cwd, "rm -rf build && cp a /etc/passwd");
 
   const decision = evaluatePolicyRequest({ policy, request, commandClassification: classified });
 
@@ -813,8 +815,8 @@ test("wildcard command allows still guard compound command segments", async () =
   const cwd = await mkdtemp(join(tmpdir(), "guardme-eval-compound-allow-"));
   const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
   const dangerous = shellRequest(cwd, "npm test && find build -delete");
-  const outsideRead = shellRequest(cwd, "npm test && cat /etc/passwd");
-  const dangerousWithOutsideRead = shellRequest(cwd, "find build -delete && cat /etc/passwd");
+  const outsideRead = shellRequest(cwd, "npm test && echo x > /etc/passwd");
+  const dangerousWithOutsideRead = shellRequest(cwd, "find build -delete && echo x > /etc/passwd");
   const genericCompound = shellRequest(cwd, "npm test && echo ok");
 
   const dangerousDecision = evaluatePolicyRequest({
@@ -841,7 +843,7 @@ test("wildcard command allows still guard compound command segments", async () =
   assert.equal(dangerousDecision.outcome, "coach");
   assert.equal(dangerousDecision.matchedRules[0]?.category, "dangerousCommands");
   assert.equal(outsideReadDecision.outcome, "deny");
-  assert.match(outsideReadDecision.reason, /Outside-project read requires/);
+  assert.match(outsideReadDecision.reason, /Outside-project write requires/);
   assert.equal(dangerousWithOutsideReadDecision.outcome, "deny");
   assert.match(dangerousWithOutsideReadDecision.reason, /Outside-project .* requires/);
   assert.equal(genericCompoundDecision.outcome, "allow");
@@ -1078,7 +1080,7 @@ test("shell control-word headers and builtins do not block compound commands, hi
   ]) {
     assert.equal(decide(command).outcome, "allow", command);
   }
-  for (const command of ["cd /etc && ls", "cd ../.. && ls", "export PATH=/evil:$PATH", 'export "PATH=/evil"', "export LD_PRELOAD=/evil.so", "exec aws s3 ls", "for f in $(aws s3 ls); do echo; done", "cat /usr/local/etc/redis.conf", "cat /opt/homebrew/etc/secrets.yaml", "echo x > /opt/homebrew/bin/pnpm"]) {
+  for (const command of ["cd /etc && ls", "cd ../.. && ls", "export PATH=/evil:$PATH", 'export "PATH=/evil"', "export LD_PRELOAD=/evil.so", "exec aws s3 ls", "for f in $(aws s3 ls); do echo; done", "cat /opt/homebrew/etc/secrets.yaml", "echo x > /opt/homebrew/bin/pnpm"]) {
     assert.equal(decide(command).outcome, "deny", command);
   }
 });

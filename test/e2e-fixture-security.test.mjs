@@ -25,7 +25,7 @@ test("e2e fixture isolates outside paths without inheriting OS-temp policy allow
     assert.equal(await pathExists(fixture.outsideReadPath), true);
     assert.equal(await pathExists(fixture.outsideWritePath), true);
     assert.equal(await pathExists(fixture.outsideDeletePath), true);
-    await assertOutsidePathRequiresAllow(fixture, "read", fixture.outsideReadPath);
+    await assertOutsideReadAllowed(fixture, fixture.outsideReadPath);
     await assertOutsidePathRequiresAllow(fixture, "write", fixture.outsideWritePath);
     await assertOutsidePathRequiresAllow(fixture, "delete", fixture.outsideDeletePath);
   } finally {
@@ -60,6 +60,16 @@ test("rpc e2e helper uses node plus a checked CLI path and a fixed safe PATH", (
   assert.match(spawnCommand.args[0], new RegExp(`${escapeRegExp(`${sep}pi-coding-agent${sep}`)}.*cli\\.js$`));
   assert.equal(spawnCommand.args.at(-1), "--help");
 });
+
+async function assertOutsideReadAllowed(fixture, rawPath) {
+  const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;
+  const normalized = await normalizePolicyPath(rawPath, { cwd: fixture.projectDir, homeDir: fixture.homeDir });
+  const decision = evaluatePolicyRequest({
+    policy,
+    request: { toolName: "read", action: "read", cwd: fixture.projectDir, targets: [pathTargetFromNormalizedPath(normalized)] },
+  });
+  assert.equal(decision.outcome, "allow", "outside reads are allowed by the built-in policy");
+}
 
 async function assertOutsidePathRequiresAllow(fixture, action, rawPath) {
   const policy = mergePolicyConfigs([sourcePolicyConfig("builtin", createBuiltInDefaultPolicy())]).config;

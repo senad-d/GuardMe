@@ -3,6 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 
 import type { PathTarget, PolicyAction } from "./action.ts";
+import { prepareShellHeredocs } from "./heredocs.ts";
 
 export interface NormalizePolicyPathOptions {
   readonly cwd: string;
@@ -29,6 +30,13 @@ export interface NormalizedPolicyPath {
   readonly nearestExistingParent?: string;
   /** Mirrors PathTarget.discovery for targets synthesized by discovery scans. */
   readonly discovery?: boolean;
+  /** Mirrors PathTarget.existenceCheck. */
+  readonly existenceCheck?: boolean;
+  /** Mirrors PathTarget.directoryChange. */
+  readonly directoryChange?: boolean;
+  /** Mirrors PathTarget.recursiveSearch and PathTarget.searchIncludesHidden. */
+  readonly recursiveSearch?: boolean;
+  readonly searchIncludesHidden?: boolean;
   /** Mirrors PathTarget.action: the access action this path is checked under. */
   readonly action?: PolicyAction;
 }
@@ -267,11 +275,16 @@ const SAFE_VARIABLE_VALUE = /^\/[\w@%+=:,./-]*$/;
  * quotes) with their values, so a path the shell would expand is checked as
  * the literal path it becomes. Left alone: a variable the command itself
  * names without `$` (assignment, export, unset, read, for), `$PWD` after a
- * directory change, any command with a heredoc (its body may be literal),
- * and unsafe or relative values.
+ * directory change, heredoc bodies (they may be literal), and unsafe or
+ * relative values.
  */
 export function expandStableShellVariables(command: string, variables: StableShellVariables, cwd = variables.PWD): string {
-  if (!command.includes("$") || command.includes("<<")) {
+  if (!command.includes("$")) {
+    return command;
+  }
+  // Heredoc bodies stay literal; `cat > $TMPDIR/x <<'EOF'` still resolves its target.
+  const heredocs = command.includes("<<") ? prepareShellHeredocs(command) : undefined;
+  if (heredocs?.error) {
     return command;
   }
   const values = new Map<string, string>();
@@ -284,7 +297,17 @@ export function expandStableShellVariables(command: string, variables: StableShe
     if (name === "PWD" && /(^|[\s;&|(])(cd|pushd|popd)\b/.test(command)) continue;
     values.set(name, value);
   }
-  return values.size === 0 ? command : replaceShellVariables(command, values);
+  return values.size === 0 ? command : replaceOutsideSpans(command, heredocs?.bodies ?? [], values);
+}
+
+function replaceOutsideSpans(command: string, spans: readonly { readonly start: number; readonly end: number }[], values: ReadonlyMap<string, string>): string {
+  let output = "";
+  let offset = 0;
+  for (const span of [...spans].sort((left, right) => left.start - right.start)) {
+    output += replaceShellVariables(command.slice(offset, span.start), values) + command.slice(span.start, span.end);
+    offset = span.end;
+  }
+  return output + replaceShellVariables(command.slice(offset), values);
 }
 
 function replaceShellVariables(command: string, values: ReadonlyMap<string, string>): string {

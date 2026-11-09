@@ -329,13 +329,14 @@ function buildFullApprovalLines(options: FullApprovalLineOptions): string[] {
     framedLine(`Reason: ${summaryValue(summary, "Reason", decision.reason)}`, innerWidth, theme, "warning"),
     ...ruleRows.map((row) => framedLine(row, innerWidth, theme, "dim")),
     buildApprovalFullBorder(width, theme),
-    framedLine("DECISION", innerWidth, theme, "accent"),
+    framedLine(`DECISION ${counter}`, innerWidth, theme, "accent"),
     ...APPROVAL_CHOICES.map((choice, index) => compactChoiceLine(choice, index === selectedIndex, innerWidth, theme)),
     framedLine(`Selected: ${selectedChoice.label} — ${selectedChoice.description}`, innerWidth, theme, "accent"),
     framedLine("Esc = Deny once • ↑↓/j/k choose • Enter select", innerWidth, theme, "dim"),
     buildApprovalBottomBorder(width, theme),
   ];
-  const topTitle = width >= 60 ? `GuardMe approval required ${counter}` : `GuardMe ${counter}`;
+  // The cursor position stays out of the title: orchestrators read the title as the question.
+  const topTitle = width >= 60 ? "GuardMe approval required" : "GuardMe";
   return [buildApprovalTopBorder(width, topTitle, "Decision", theme), ...rows].slice(0, budget);
 }
 
@@ -355,7 +356,7 @@ function buildShortApprovalLines(
   const omittedRuleSummary = formatOmittedRuleCount(omittedRules, " • ");
   const decisionHeading = `DECISION ${selectedIndex + 1}/${APPROVAL_CHOICES.length}${omittedRuleSummary}`;
   const lines = [
-    buildApprovalTopBorder(width, `GuardMe ${selectedIndex + 1}/${APPROVAL_CHOICES.length}`, "Decision", theme),
+    buildApprovalTopBorder(width, "GuardMe", "Decision", theme),
     framedLine(`Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", decision.action)} • Target: ${summaryValue(summary, "Target", "<unknown>")}`, innerWidth, theme),
     framedLine(decisionHeading, innerWidth, theme, "accent"),
     ...visibleIndexes.map((index) => compactChoiceLine(APPROVAL_CHOICES[index]!, index === selectedIndex, innerWidth, theme)),
@@ -377,8 +378,8 @@ function buildUltraShortApprovalLines(
   const omittedRuleSummary = decision.matchedRules.length > 0 ? `Rules omitted: ${decision.matchedRules.length} • ` : "";
   const target = summaryValue(summary, "Target", "<unknown>");
   const lines = [
-    `GuardMe ${selectedIndex + 1}/${APPROVAL_CHOICES.length} • ${selectedChoice.label} • Esc=Deny once`,
-    `Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", decision.action)}`,
+    `GuardMe • ${selectedChoice.label} • Esc=Deny once`,
+    `${selectedIndex + 1}/${APPROVAL_CHOICES.length} • Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", decision.action)}`,
     `${omittedRuleSummary}Target: ${target}`,
     selectedChoice.description,
     "↑↓/j/k choose • Enter select • Esc=Deny once",
@@ -398,12 +399,12 @@ function buildTinyApprovalLines(
   const choiceCount = Math.max(1, budget - 5 - ruleRows.length);
   const visibleIndexes = approvalChoiceWindow(selectedIndex, choiceCount);
   const lines = [
-    `GuardMe ${selectedIndex + 1}/${APPROVAL_CHOICES.length}`,
+    "GuardMe",
     `Risk: ${summaryValue(summary, "Risk", decision.risk)} Action: ${summaryValue(summary, "Action", decision.action)}`,
     `Target: ${summaryValue(summary, "Target", "<unknown>")}`,
     ...ruleRows,
     ...visibleIndexes.map((index) => `${index === selectedIndex ? ">" : " "} ${APPROVAL_CHOICES[index]!.label}`),
-    `${selectedChoice.label}: ${selectedChoice.description}`,
+    `${selectedIndex + 1}/${APPROVAL_CHOICES.length} ${selectedChoice.label}: ${selectedChoice.description}`,
     "Esc = Deny once",
   ];
   return lines.slice(0, budget).map((line) => boundedApprovalValue(line, width));

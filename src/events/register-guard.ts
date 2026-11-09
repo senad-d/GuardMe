@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Dirent } from "node:fs";
-import { readFile, readdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { glob, readFile, readdir, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join, resolve as resolvePath } from "node:path";
 
 import { BUILT_IN_GUARDED_TOOLS, EXTENSION_STATUS_KEY, type GuardedToolContract } from "../constants.ts";
 import type { PathTarget, PolicyAction, PolicyDecision, PolicyDiagnostic, PolicyRequest, PolicyTarget, UserDecision } from "../policy/action.ts";
@@ -15,8 +16,18 @@ import {
   type LocalScriptExecution,
   type PackageScriptExecution,
 } from "../policy/commands.ts";
-import { createPolicyFingerprint, evaluatePolicyRequest, isAgentAutomaticApprovalEligible } from "../policy/evaluate.ts";
+import { createPolicyFingerprint, evaluatePolicyRequest, isAgentAutomaticApprovalEligible, scriptFindingDecision } from "../policy/evaluate.ts";
+import {
+  analyzeInterpreterScript,
+  detectInterpreterScriptExecutions,
+  interpreterScriptLanguage,
+  type InterpreterScriptAnalysis,
+  type InterpreterScriptExecution,
+} from "../policy/interpreter-scripts.ts";
 import { expandStableShellVariables, normalizePolicyPath, pathTargetFromNormalizedPath } from "../policy/paths.ts";
+import { nativeExecutableTokens, trackedRemovalTargets } from "../policy/shell-target-facts.ts";
+import { expandMktempVariables } from "../policy/temp-variables.ts";
+import { isHiddenBelow, recursiveSearchRoots, type RecursiveSearchRoot } from "../policy/recursive-search.ts";
 import { containsCredentialKeyword, isProtectedEnvFileSegment } from "../policy/sensitive-paths.ts";
 import { redactSensitiveText } from "../policy/redact.ts";
 import {
@@ -106,6 +117,8 @@ interface ScriptInspectionSource {
   readonly sourceKind: ScriptInspectionSourceKind;
   readonly sourcePath: string | undefined;
   readonly snippetLabel: string;
+  /** False for commands spawned by interpreter scripts: they follow the same rules as typed commands. */
+  readonly exactCommandAllow?: boolean;
 }
 
 interface ScriptContentInspectionOptions extends ScriptInspectionSource {
@@ -196,12 +209,17 @@ export async function mapToolCallToPolicyRequest(
     }
     // The shell expands these from the agent's own environment; the literal
     // path is what gets checked, so scratch under $TMPDIR passes like its path.
-    const command = expandStableShellVariables(rawCommand, process.env, cwd);
+    // Names assigned from mktemp resolve to their template path for the same reason.
+    const command = expandMktempVariables(expandStableShellVariables(rawCommand, process.env, cwd), process.env, cwd);
     const commandClassification = classifyShellCommand(command);
     const targets = await shellCommandTargets(commandClassification, cwd, homeDir);
     if ("error" in targets) {
       return targets;
     }
+    const trackedPaths = await trackedRemovalTargets(commandClassification, cwd);
+    // Use the same stable-path resolver for the executable and its scratch root.
+    const tmpDir = expandStableShellVariables("$TMPDIR", process.env, cwd);
+    const nativeExecutables = await nativeExecutableTokens(command, cwd, tmpDir);
     return {
       request: {
         toolName: event.toolName,
@@ -210,6 +228,8 @@ export async function mapToolCallToPolicyRequest(
         command,
         targets: targets.targets,
         riskHint: commandClassification.risk,
+        ...(trackedPaths.length > 0 ? { trackedPaths } : {}),
+        ...(nativeExecutables.length > 0 ? { nativeExecutables } : {}),
       },
       commandClassification,
     };
@@ -226,12 +246,16 @@ export async function mapToolCallToPolicyRequest(
     return { error: normalized.error };
   }
   const discoveryTargets = protectedDiscoveryTargets(contract, event.input);
+  // The grep tool searches content recursively, including dot-files, so an
+  // outside root gets the same protected-descendant gate as `grep -r`.
+  const searchRoots = contract === "grep" ? normalized.targets.map((target) => ({ raw: target.raw, includesHidden: true })) : [];
+  const searchTargets = await outsideSearchTargets(normalized.targets, searchRoots);
   return {
     request: {
       toolName: event.toolName,
       action,
       cwd,
-      targets: [...normalized.targets, ...discoveryTargets],
+      targets: [...searchTargets.targets, ...discoveryTargets, ...searchTargets.descendants],
     },
   };
 }
@@ -392,63 +416,14 @@ async function inspectLocalScriptsBeforeExecution(
   }
 
   for (const script of detectLocalScriptExecutions(request.command)) {
-    const normalized = await normalizeTargets([script.rawPath], request.cwd, state.homeDir, true);
-    if ("error" in normalized) {
-      const synthetic = localScriptUninspectableRequest(request, script, script.rawPath, normalized.error);
-      const decision = evaluatePolicyRequest({
-        policy: state.config.config,
-        request: synthetic,
-        warnedFingerprints: currentWarnedFingerprints(state),
-      });
-      return (await handlePolicyDecision(state, ctx, synthetic, decision)) ?? block(normalized.error);
+    const blockResult = await inspectLocalScriptBeforeExecution(state, ctx, request, script);
+    if (blockResult) {
+      return blockResult;
     }
+  }
 
-    const scriptTarget = normalized.targets[0];
-    if (!scriptTarget) {
-      continue;
-    }
-
-    const readRequest: PolicyRequest = {
-      toolName: request.toolName,
-      action: "read",
-      cwd: request.cwd,
-      targets: [scriptTarget],
-      fingerprintSeed: `local-script-read:${script.rawPath}`,
-    };
-    const readDecision = evaluatePolicyRequest({
-      policy: state.config.config,
-      request: readRequest,
-      warnedFingerprints: currentWarnedFingerprints(state),
-    });
-    const readBlock = await handlePolicyDecision(state, ctx, readRequest, readDecision);
-    if (readBlock) {
-      return block(`GuardMe blocked local script inspection for ${script.rawPath}: ${readBlock.reason}`);
-    }
-
-    const content = await readInspectableScriptContent(scriptTarget, script);
-    if ("error" in content) {
-      const synthetic = localScriptUninspectableRequest(request, script, scriptTarget.raw, content.error);
-      const decision = evaluatePolicyRequest({
-        policy: state.config.config,
-        request: synthetic,
-        warnedFingerprints: currentWarnedFingerprints(state),
-      });
-      const handled = await handlePolicyDecision(state, ctx, synthetic, decision);
-      return handled ?? block(content.error);
-    }
-
-    const inspection = extractScriptCommandsFromContent({
-      path: scriptTarget.canonicalPath ?? scriptTarget.absolutePath ?? script.rawPath,
-      content: content.content,
-      forceCommandBearing: true,
-      shellHint: script.shellHint,
-    });
-    const blockResult = await evaluateScriptContentInspection(state, ctx, request, inspection, {
-      sourceKind: "local-script",
-      sourcePath: script.rawPath,
-      snippetLabel: script.invocation,
-      shellHint: script.shellHint,
-    });
+  for (const execution of detectInterpreterScriptExecutions(request.command)) {
+    const blockResult = await inspectInterpreterScriptBeforeExecution(state, ctx, request, execution);
     if (blockResult) {
       return blockResult;
     }
@@ -462,6 +437,273 @@ async function inspectLocalScriptsBeforeExecution(
   }
 
   return undefined;
+}
+
+async function inspectLocalScriptBeforeExecution(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  request: PolicyRequest,
+  script: LocalScriptExecution,
+): Promise<ToolCallBlockResult | undefined> {
+  // Native binaries have no script text; policy evaluation already checked them.
+  if (script.via === "direct" && request.nativeExecutables?.includes(script.rawPath)) {
+    return undefined;
+  }
+  const read = await readScriptForInspection(state, ctx, request, script);
+  if ("block" in read) {
+    return read.block;
+  }
+  if ("skip" in read) {
+    return undefined;
+  }
+  // `./tool.py` runs its interpreter, not the shell: inspect it as code.
+  const language = script.via === "direct" ? interpreterScriptLanguage(read.path, read.content) : undefined;
+  if (language) {
+    return evaluateInterpreterAnalysis(state, ctx, request, script, analyzeInterpreterScript(read.content, language, script.rawPath));
+  }
+  return evaluateScriptContentInspection(state, ctx, request, extractScriptCommandsFromContent({
+    path: read.path,
+    content: read.content,
+    forceCommandBearing: true,
+    shellHint: script.shellHint,
+  }), {
+    sourceKind: "local-script",
+    sourcePath: script.rawPath,
+    snippetLabel: script.invocation,
+    shellHint: script.shellHint,
+  });
+}
+
+type ScriptReadResult =
+  | { readonly content: string; readonly path: string }
+  | { readonly block: ToolCallBlockResult }
+  | { readonly skip: true };
+
+// Resolves, permission-checks and reads a script before it runs. A script
+// that cannot be resolved or read fails closed through the uninspectable path.
+async function readScriptForInspection(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  request: PolicyRequest,
+  script: LocalScriptExecution,
+): Promise<ScriptReadResult> {
+  const normalized = await normalizeTargets([script.rawPath], request.cwd, state.homeDir, true);
+  if ("error" in normalized) {
+    return { block: await uninspectableScriptBlock(state, ctx, request, script, script.rawPath, normalized.error) };
+  }
+  const scriptTarget = normalized.targets[0];
+  if (!scriptTarget) {
+    return { skip: true };
+  }
+
+  const readRequest: PolicyRequest = {
+    toolName: request.toolName,
+    action: "read",
+    cwd: request.cwd,
+    targets: [scriptTarget],
+    fingerprintSeed: `local-script-read:${script.rawPath}`,
+  };
+  const readDecision = evaluatePolicyRequest({
+    policy: state.config.config,
+    request: readRequest,
+    warnedFingerprints: currentWarnedFingerprints(state),
+  });
+  const readBlock = await handlePolicyDecision(state, ctx, readRequest, readDecision);
+  if (readBlock) {
+    return { block: block(`GuardMe blocked local script inspection for ${script.rawPath}: ${readBlock.reason}`) };
+  }
+
+  const content = await readInspectableScriptContent(scriptTarget, script);
+  if ("error" in content) {
+    return { block: await uninspectableScriptBlock(state, ctx, request, script, scriptTarget.raw, content.error) };
+  }
+  return { content: content.content, path: scriptTarget.canonicalPath ?? scriptTarget.absolutePath ?? script.rawPath };
+}
+
+async function uninspectableScriptBlock(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  request: PolicyRequest,
+  script: LocalScriptExecution,
+  path: string,
+  reason: string,
+): Promise<ToolCallBlockResult> {
+  const synthetic = localScriptUninspectableRequest(request, script, path, reason);
+  const decision = evaluatePolicyRequest({
+    policy: state.config.config,
+    request: synthetic,
+    warnedFingerprints: currentWarnedFingerprints(state),
+  });
+  return (await handlePolicyDecision(state, ctx, synthetic, decision)) ?? block(reason);
+}
+
+const MAX_GLOB_SCRIPT_FILES = 500;
+const SCRIPT_GLOB_CHARACTERS = /[*?[{]/u;
+
+async function inspectInterpreterScriptBeforeExecution(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  request: PolicyRequest,
+  execution: InterpreterScriptExecution,
+): Promise<ToolCallBlockResult | undefined> {
+  if (!SCRIPT_GLOB_CHARACTERS.test(execution.rawPath)) {
+    return inspectInterpreterScriptFile(state, ctx, request, execution);
+  }
+  // `node --test test/*.test.mjs`: the shell expands the glob, so every match runs.
+  const matches = await expandScriptGlob(execution.rawPath, request.cwd);
+  if (matches.length > MAX_GLOB_SCRIPT_FILES) {
+    const script: LocalScriptExecution = { rawPath: execution.rawPath, invocation: execution.invocation, shellHint: false, via: "direct" };
+    return uninspectableScriptBlock(state, ctx, request, script, execution.rawPath, `Script glob '${execution.rawPath}' matches more than ${MAX_GLOB_SCRIPT_FILES} files to inspect.`);
+  }
+  for (const rawPath of matches) {
+    const blockResult = await inspectInterpreterScriptFile(state, ctx, request, { ...execution, rawPath });
+    if (blockResult) {
+      return blockResult;
+    }
+  }
+  return undefined;
+}
+
+async function expandScriptGlob(pattern: string, cwd: string): Promise<readonly string[]> {
+  const matches: string[] = [];
+  try {
+    for await (const match of glob(pattern, { cwd })) {
+      matches.push(match);
+      if (matches.length > MAX_GLOB_SCRIPT_FILES) {
+        break;
+      }
+    }
+  } catch {
+    return [];
+  }
+  return matches;
+}
+
+async function inspectInterpreterScriptFile(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  request: PolicyRequest,
+  execution: InterpreterScriptExecution,
+): Promise<ToolCallBlockResult | undefined> {
+  const rawPath = await resolveInterpreterScriptPath(execution, request.cwd);
+  const script: LocalScriptExecution = { rawPath, invocation: execution.invocation, shellHint: false, via: "direct" };
+  const read = await readScriptForInspection(state, ctx, request, script);
+  if ("block" in read) {
+    return read.block;
+  }
+  if ("skip" in read) {
+    return undefined;
+  }
+  return evaluateInterpreterAnalysis(state, ctx, request, script, analyzeInterpreterScript(read.content, execution.language, rawPath));
+}
+
+const NODE_RESOLUTION_SUFFIXES = ["", ".js", ".mjs", ".cjs", ".ts", "/index.js", "/index.mjs", "/index.ts"];
+
+// `node server` and `node .` resolve like require(); try the same suffixes so
+// the file that will run is the one inspected.
+async function resolveInterpreterScriptPath(execution: InterpreterScriptExecution, cwd: string): Promise<string> {
+  if (execution.language !== "javascript") {
+    return execution.rawPath;
+  }
+  for (const suffix of NODE_RESOLUTION_SUFFIXES) {
+    if (await isRegularFile(resolvePath(cwd, expandHomePrefix(execution.rawPath) + suffix))) {
+      return execution.rawPath + suffix;
+    }
+  }
+  return execution.rawPath;
+}
+
+async function isRegularFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function expandHomePrefix(path: string): string {
+  return path === "~" || path.startsWith("~/") ? `${homedir()}${path.slice(1)}` : path;
+}
+
+const FINDING_SEVERITY_ORDER: Readonly<Record<string, number>> = { hard: 0, dangerous: 1 };
+
+async function evaluateInterpreterAnalysis(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  request: PolicyRequest,
+  script: LocalScriptExecution,
+  analysis: InterpreterScriptAnalysis,
+): Promise<ToolCallBlockResult | undefined> {
+  const findings = [...analysis.findings].sort((a, b) => (FINDING_SEVERITY_ORDER[a.severity] ?? 1) - (FINDING_SEVERITY_ORDER[b.severity] ?? 1));
+  for (const found of findings) {
+    const synthetic = interpreterFindingRequest(request, script, found.line, found.marker, found.preview);
+    const decision = scriptFindingDecision(state.config.config, synthetic, found.severity, found.reason, found.marker, currentWarnedFingerprints(state));
+    const handled = await handlePolicyDecision(state, ctx, synthetic, decision);
+    if (handled) {
+      return block(`GuardMe blocked script ${script.rawPath} at line ${found.line} before execution: ${found.reason}. Code: ${redactSensitiveText(found.preview)}\n\n${handled.reason}`);
+    }
+  }
+
+  const commandBlock = await evaluateScriptContentInspection(state, ctx, request, { commandBearing: analysis.commands.length > 0, commands: analysis.commands }, {
+    sourceKind: "local-script",
+    sourcePath: script.rawPath,
+    snippetLabel: script.invocation,
+    exactCommandAllow: false,
+  });
+  if (commandBlock) {
+    return commandBlock;
+  }
+
+  for (const access of analysis.pathAccesses) {
+    const accessBlock = await evaluateInterpreterPathAccess(state, ctx, request, script, access);
+    if (accessBlock) {
+      return accessBlock;
+    }
+  }
+  return undefined;
+}
+
+async function evaluateInterpreterPathAccess(
+  state: GuardMeSessionState,
+  ctx: GuardedToolCallContext,
+  request: PolicyRequest,
+  script: LocalScriptExecution,
+  access: InterpreterScriptAnalysis["pathAccesses"][number],
+): Promise<ToolCallBlockResult | undefined> {
+  const normalized = await normalizeTargets([access.path], request.cwd, state.homeDir, true);
+  if ("error" in normalized) {
+    return uninspectableScriptBlock(state, ctx, request, script, access.path, normalized.error);
+  }
+  const target = normalized.targets[0];
+  if (!target) {
+    return undefined;
+  }
+  const pathRequest: PolicyRequest = {
+    toolName: request.toolName,
+    action: access.action,
+    cwd: request.cwd,
+    targets: [{ ...target, action: access.action }],
+    fingerprintSeed: `interpreter-script-path:${script.rawPath}:${access.line}:${access.path}`,
+    reasonCode: "script-content-denied",
+  };
+  const decision = evaluatePolicyRequest({ policy: state.config.config, request: pathRequest, warnedFingerprints: currentWarnedFingerprints(state) });
+  const handled = await handlePolicyDecision(state, ctx, pathRequest, decision);
+  return handled
+    ? block(`GuardMe blocked script ${script.rawPath} at line ${access.line} before execution: it would ${access.action} '${redactSensitiveText(access.path)}'. Code: ${redactSensitiveText(access.preview)}\n\n${handled.reason}`)
+    : undefined;
+}
+
+function interpreterFindingRequest(parentRequest: PolicyRequest, script: LocalScriptExecution, line: number, marker: string, preview: string): PolicyRequest {
+  return {
+    toolName: parentRequest.toolName,
+    action: "shell",
+    cwd: parentRequest.cwd,
+    command: script.invocation,
+    targets: [{ kind: "tool", raw: `interpreter-script:${script.rawPath}:${line}:${marker}` }],
+    riskHint: "dangerous",
+    fingerprintSeed: `interpreter-script:${script.rawPath}:${marker}:${line}:${preview}`,
+    reasonCode: "script-content-denied",
+  };
 }
 
 async function evaluateScriptContentInspection(
@@ -680,11 +922,13 @@ async function inspectPackageScriptBeforeExecution(
     return undefined;
   }
 
+  // Package scripts run in their package directory while GuardMe resolves their
+  // paths against this project, so a package outside it keeps the boundary like cd.
   const readRequest: PolicyRequest = {
     toolName: request.toolName,
     action: "read",
     cwd: request.cwd,
-    targets: [packageJsonTarget],
+    targets: [{ ...packageJsonTarget, directoryChange: true }],
     fingerprintSeed: `package-script-read:${script.invocation}:${script.scriptName}`,
   };
   const readDecision = evaluatePolicyRequest({
@@ -832,7 +1076,7 @@ async function scriptCommandPolicyRequest(
       policyMissingReason: `${source.sourceKind === "local-script" ? "Local script" : "Proposed file content"} contains an unapproved command at line ${command.lineStart}: ${command.preview}.`,
       policyMissingGuidance: "Do not write or run generated scripts with unapproved commands. Use safe built-in tools, ask the user for approval, or propose a narrow allowCommands rule.",
       policyMissingRecommendation: "Request user approval for the exact extracted command before retrying.",
-      requiresExactCommandAllow: true,
+      requiresExactCommandAllow: source.exactCommandAllow ?? true,
     },
     commandClassification,
   };
@@ -1227,13 +1471,68 @@ async function shellCommandTargets(
   const segments = extractExecutableCommandSegments(commandClassification.rawCommand);
   const targets: PathTarget[] = [];
   for (const target of normalized.targets) {
-    const actions = new Set(commandClassification.pathAccesses
-      .filter((access) => access.rawPath === target.raw)
-      .map((access) => access.action));
-    targets.push(...(actions.size > 0 ? [...actions].map((action) => ({ ...target, action })) : [target]));
+    const accesses = commandClassification.pathAccesses.filter((access) => access.rawPath === target.raw);
+    const actions = new Set(accesses.map((access) => access.action));
+    // Only a path every access merely tests may skip the outside-project gate.
+    const existenceCheck = accesses.length > 0 && accesses.every((access) => access.existenceOnly);
+    const directoryChange = accesses.some((access) => access.directoryChange);
+    const marked = { ...target, ...(existenceCheck ? { existenceCheck: true } : {}), ...(directoryChange ? { directoryChange: true } : {}) };
+    targets.push(...(actions.size > 0 ? [...actions].map((action) => ({ ...marked, action })) : [marked]));
   }
   const mutationTargets = await protectedMutationDescendantTargets(commandClassification.primaryAction, targets);
-  return { targets: [...targets, ...protectedShellDiscoveryTargets(segments), ...mutationTargets] };
+  const searchTargets = await outsideSearchTargets(targets, recursiveSearchRoots(segments));
+  return { targets: [...searchTargets.targets, ...protectedShellDiscoveryTargets(segments), ...mutationTargets, ...searchTargets.descendants] };
+}
+
+/**
+ * Marks recursive search roots outside the project and adds the protected
+ * files a bounded scan finds beneath them as discovery targets, so the search
+ * is approval-gated instead of silently reading them.
+ */
+async function outsideSearchTargets(
+  targets: readonly PathTarget[],
+  roots: readonly RecursiveSearchRoot[],
+): Promise<{ readonly targets: readonly PathTarget[]; readonly descendants: readonly PathTarget[] }> {
+  if (roots.length === 0) {
+    return { targets, descendants: [] };
+  }
+  const groups = await Promise.all(targets.map((target) => outsideSearchTarget(target, roots)));
+  return { targets: groups.map((group) => group.target), descendants: groups.flatMap((group) => group.descendants) };
+}
+
+async function outsideSearchTarget(
+  target: PathTarget,
+  roots: readonly RecursiveSearchRoot[],
+): Promise<{ readonly target: PathTarget; readonly descendants: readonly PathTarget[] }> {
+  const root = roots.find((entry) => entry.raw === target.raw);
+  if (!root || target.isInsideProject || (target.action !== undefined && target.action !== "read")) {
+    return { target, descendants: [] };
+  }
+  return {
+    target: { ...target, recursiveSearch: true, searchIncludesHidden: root.includesHidden },
+    descendants: await protectedSearchDescendantTargets(target, root.includesHidden),
+  };
+}
+
+async function protectedSearchDescendantTargets(target: PathTarget, includesHidden: boolean): Promise<readonly PathTarget[]> {
+  if (!target.exists || !target.canonicalPath) {
+    return [];
+  }
+  const rootPath = target.canonicalPath;
+  const found = await protectedMutationDescendantPaths(rootPath);
+  return found
+    .filter((childPath) => isProtectedDiscoveryEntry(basename(childPath)) && (includesHidden || !isHiddenBelow(rootPath, childPath)))
+    .map((childPath) => ({
+      kind: "path" as const,
+      raw: childPath,
+      absolutePath: childPath,
+      canonicalPath: childPath,
+      exists: true,
+      ...(target.projectRoot ? { projectRoot: target.projectRoot } : {}),
+      isInsideProject: false,
+      discovery: true,
+      action: "read" as const,
+    }));
 }
 
 async function protectedMutationDescendantTargets(

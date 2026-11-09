@@ -2,6 +2,7 @@ import { basename, dirname, join } from "node:path";
 
 import type { PolicyAction, RiskLevel } from "./action.ts";
 import { curlFileAccess } from "./curl.ts";
+import { credentialScanArgs, splitGrepArgs } from "./grep-args.ts";
 import { prepareShellHeredocs } from "./heredocs.ts";
 import { containsCredentialKeyword, isProtectedEnvFileSegment } from "./sensitive-paths.ts";
 import { isAsciiDigit, isAsciiLetter, isShellIdentifier } from "./shell-identifiers.ts";
@@ -23,6 +24,10 @@ export type CommandClassificationKind =
 export interface CommandPathAccess {
   readonly rawPath: string;
   readonly action: PolicyAction;
+  /** Shell test operand (`test -d x`, `[ -e x ]`): only existence or metadata is observed. */
+  readonly existenceOnly?: boolean;
+  /** `cd` operand: later relative paths resolve there, so it keeps the project boundary. */
+  readonly directoryChange?: boolean;
 }
 
 export interface CommandClassification {
@@ -256,6 +261,12 @@ const CREDENTIAL_LITERAL_MARKERS = [
   ".azure",
   ".config/gcloud",
   ".docker/config.json",
+  ".config/gh/",
+  ".git-credentials",
+  ".kube/config",
+  "library/keychains",
+  ".password-store",
+  ".vault-token",
 ] as const;
 
 export function classifyShellCommand(command: string): CommandClassification {
@@ -273,6 +284,10 @@ export function commandSegmentRuleMatchCandidates(command: string): readonly str
     const leadingWrapperCommand = leadingWrapperInvokedCommandText(segment);
     if (leadingWrapperCommand) {
       addCommandRuleCandidate(candidates, leadingWrapperCommand);
+    }
+    const strippedCommand = leadingWordsStrippedText(segment);
+    if (strippedCommand) {
+      addCommandRuleCandidate(candidates, strippedCommand);
     }
   }
   return [...candidates];
@@ -904,7 +919,7 @@ function createSegmentClassificationContext(
     inputRedirectionTargets,
     targetPaths,
     credentialAccess,
-    credentialLiteralAccess: !credentialAccess && args.some(containsCredentialLikeLiteral),
+    credentialLiteralAccess: !credentialAccess && credentialScanArgs(commandName, args, isGrepCommand(commandName)).some(containsCredentialLikeLiteral),
     cloudCliLiteralAccess: inlineCode.some(containsCloudCliLiteral),
     envDumpLiteralAccess: inlineCode.some(containsEnvDumpLiteral),
   };
@@ -1005,6 +1020,10 @@ function shellTestClassification(context: ExecutableSegmentClassificationContext
     risk: context.credentialAccess ? "dangerous" : "low",
     reason: "Shell test inspects path existence or metadata.",
     matchedPatterns: [context.commandName],
+    pathAccesses: [
+      ...context.operandPaths.map((rawPath) => ({ rawPath, action: "list" as const, existenceOnly: true })),
+      ...pathAccessesForAction(context.inputRedirectionTargets, "read"),
+    ],
     hardDenied: false,
     dangerous: context.credentialAccess,
     requiresUserDecision: context.credentialAccess,
@@ -1058,7 +1077,7 @@ function classifyGuardedSegment(context: ExecutableSegmentClassificationContext)
       kind: "hard-denied",
       primaryAction: "read",
       risk: "hard-denied",
-      reason: "Credential-like file read detected.",
+      reason: `Credential-like file read detected${credentialOperandLabel(context.targetPaths.find(isCredentialLikePath))}.`,
       matchedPatterns: ["credential-read"],
       hardDenied: true,
       dangerous: true,
@@ -1071,7 +1090,7 @@ function classifyGuardedSegment(context: ExecutableSegmentClassificationContext)
       kind: "hard-denied",
       primaryAction: "read",
       risk: "hard-denied",
-      reason: "Credential-like file reference detected in shell command.",
+      reason: `Credential-like file reference detected in shell command${credentialOperandLabel(credentialScanArgs(context.commandName, context.args, isGrepCommand(context.commandName)).find(containsCredentialLikeLiteral))}.`,
       matchedPatterns: ["credential-literal"],
       hardDenied: true,
       dangerous: true,
@@ -1204,7 +1223,7 @@ function classifyMutationSegment(context: ExecutableSegmentClassificationContext
 
 function classifyFilesystemMutationCommand(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
   if (COPY_COMMANDS.has(context.commandName)) {
-    return filesystemMutationClassification(context, "write", `${context.commandName} copies file operands.`, [context.commandName]);
+    return copyClassification(context);
   }
   if (ARCHIVE_COMMANDS.has(context.commandName)) {
     return filesystemMutationClassification(context, "write", `${context.commandName} archives or extracts file operands.`, [context.commandName]);
@@ -1273,6 +1292,36 @@ function moveOrRenameClassification(context: ExecutableSegmentClassificationCont
     hardDenied: false,
     dangerous: isOutsideishMutation(context.targetPaths),
     requiresUserDecision: isOutsideishMutation(context.targetPaths),
+  });
+}
+
+// `cp a b dest` reads a and b and writes only dest, so a source outside the
+// project is a system read, not an outside write. `-t DIR` moves the
+// destination to the front; that form keeps the conservative all-write view.
+function copyClassification(context: ExecutableSegmentClassificationContext): CommandClassification {
+  const reason = `${context.commandName} copies file operands.`;
+  const operands = context.operandPaths;
+  const destination = operands.at(-1);
+  const targetDirectoryOption = context.args.some((arg) => arg === "-t" || arg.startsWith("--target-directory") || /^-[A-Za-z]*t/u.test(arg));
+  if (targetDirectoryOption || destination === undefined || operands.length < 2) {
+    return filesystemMutationClassification(context, "write", reason, [context.commandName]);
+  }
+  const dangerous = context.credentialAccess || isOutsideishMutation([destination]);
+  return segmentClassification(context, {
+    kind: "write",
+    primaryAction: "write",
+    risk: context.credentialAccess ? "dangerous" : mutationRisk([destination]),
+    reason,
+    matchedPatterns: [context.commandName],
+    hardDenied: false,
+    dangerous,
+    requiresUserDecision: dangerous,
+    credentialAccess: context.credentialAccess,
+    pathAccesses: [
+      ...pathAccessesForAction(operands.slice(0, -1), "read"),
+      ...pathAccessesForAction([destination], "write"),
+      ...pathAccessesForAction(context.inputRedirectionTargets, "read"),
+    ],
   });
 }
 
@@ -1354,6 +1403,7 @@ function classifyReadListSegment(context: ExecutableSegmentClassificationContext
       risk: context.credentialAccess ? "dangerous" : "low",
       reason: `${context.commandName} lists or discovers files.`,
       matchedPatterns: [context.commandName],
+      ...(context.commandName === "cd" ? { pathAccesses: directoryChangePathAccesses(context) } : {}),
       hardDenied: false,
       dangerous: context.credentialAccess,
       requiresUserDecision: context.credentialAccess,
@@ -1452,6 +1502,13 @@ function classification(options: ClassificationOptions): CommandClassification {
   };
 }
 
+function directoryChangePathAccesses(context: ExecutableSegmentClassificationContext): readonly CommandPathAccess[] {
+  return [
+    ...context.operandPaths.map((rawPath) => ({ rawPath, action: "list" as const, directoryChange: true })),
+    ...pathAccessesForAction(context.inputRedirectionTargets, "read"),
+  ];
+}
+
 function pathAccessesForAction(paths: readonly string[], action: PolicyAction): readonly CommandPathAccess[] {
   return paths.map((rawPath) => ({ rawPath, action }));
 }
@@ -1463,7 +1520,8 @@ function redirectionPathAccesses(inputPaths: readonly string[], outputPaths: rea
 function uniquePathAccesses(accesses: readonly CommandPathAccess[]): readonly CommandPathAccess[] {
   const seen = new Set<string>();
   return accesses.filter((access) => {
-    const key = `${access.action}\u0000${access.rawPath}`;
+    // An existence-only test and a real access of the same path stay distinct.
+    const key = `${access.action}\u0000${access.rawPath}\u0000${access.existenceOnly === true}\u0000${access.directoryChange === true}`;
     if (seen.has(key)) {
       return false;
     }
@@ -1502,6 +1560,10 @@ function addSegmentCommandRuleCandidates(candidates: Set<string>, segment: reado
   if (leadingWrapperCommand) {
     addCommandRuleCandidatesFromNestedCommand(candidates, leadingWrapperCommand, depth);
   }
+  const strippedCommand = leadingWordsStrippedText(segment);
+  if (strippedCommand) {
+    addCommandRuleCandidate(candidates, strippedCommand);
+  }
 
   const unwrapped = unwrapExecutable(segment);
   if (unwrapped.innerCommand) {
@@ -1526,6 +1588,13 @@ function addCommandRuleCandidatesFromNestedCommand(candidates: Set<string>, comm
   }
 }
 
+// The command with leading assignments and control words removed, so
+// `FOO=1 sudo ls` still meets a `sudo *` deny rule.
+function leadingWordsStrippedText(tokens: readonly string[]): string | undefined {
+  const index = skipLeadingWords(tokens);
+  return typeof index === "number" && index > 0 ? joinTokensAsCommand(tokens.slice(index)) : undefined;
+}
+
 function leadingWrapperInvokedCommandText(tokens: readonly string[]): string | undefined {
   const index = skipLeadingWords(tokens);
   if (index === "loop") {
@@ -1544,12 +1613,18 @@ function leadingWrapperInvokedCommandText(tokens: readonly string[]): string | u
   return index > 0 ? joinTokensAsCommand(tokens.slice(index)) : undefined;
 }
 
+// Assignments and control words can interleave: `out=$(FOO=1 cmd)` tokenizes
+// as `out=$ ( FOO=1 cmd`, and every leading word belongs before `cmd`.
 function skipLeadingWords(tokens: readonly string[]): number | "loop" | undefined {
   let index = 0;
-  while (index < tokens.length && isEnvAssignment(tokens[index] ?? "")) index += 1;
   let lastControlWord: string | undefined;
-  while (index < tokens.length && SHELL_LEADING_CONTROL_WORDS.has(basename(tokens[index] ?? "").toLowerCase())) {
-    lastControlWord = basename(tokens[index] ?? "").toLowerCase();
+  while (index < tokens.length) {
+    const word = basename(tokens[index] ?? "").toLowerCase();
+    if (SHELL_LEADING_CONTROL_WORDS.has(word)) {
+      lastControlWord = word;
+    } else if (!isEnvAssignment(tokens[index] ?? "")) {
+      break;
+    }
     index += 1;
   }
   if (lastControlWord !== undefined && LOOP_HEADER_CONTROL_WORDS.has(lastControlWord)) return "loop";
@@ -1918,7 +1993,9 @@ function unwrapExecutableStep(tokens: readonly string[], index: number): { reado
   const commandName = basename(tokens[index] ?? "").toLowerCase();
   const args = tokens.slice(index + 1);
   if (SHELL_LEADING_CONTROL_WORDS.has(commandName)) {
-    return { nextIndex: index + 1 };
+    // `$(FOO=1 cmd)`, `( FOO=1 cmd )`, `then FOO=1 cmd`: prefix assignments
+    // after a control word still belong to the command that follows.
+    return { nextIndex: skipLeadingEnvAssignments(tokens, index + 1) };
   }
   if (isPrefixWrapper(tokens, index)) {
     return { nextIndex: skipPrefixWrapper(commandName, tokens, index + 1) };
@@ -2669,11 +2746,12 @@ function isFileRedirectionTarget(token: string): boolean {
 }
 
 function grepPathOperands(args: readonly string[], recursiveByDefault = false): readonly string[] {
-  const operands = args.filter((arg) => !arg.startsWith("-"));
-  if (operands.length > 1) {
-    return operands.slice(1);
+  const split = splitGrepArgs(args, recursiveByDefault);
+  if (split.operands.length > 0) {
+    return uniqueStrings([...split.operands, ...split.optionFiles]);
   }
-  return (recursiveByDefault || grepArgsAreRecursive(args)) && operands.length === 1 ? ["."] : [];
+  const searchesTree = recursiveByDefault || grepArgsAreRecursive(args);
+  return uniqueStrings([...(searchesTree ? ["."] : []), ...split.optionFiles]);
 }
 
 function grepArgsAreRecursive(args: readonly string[]): boolean {
@@ -2812,6 +2890,20 @@ function hasRsyncDeleteOption(args: readonly string[]): boolean {
   return args.some((arg) => arg === "--delete" || arg.startsWith("--delete-") || arg.startsWith("--delete="));
 }
 
+// Names the argument that tripped the credential check so a blocked compound
+// command shows which word failed; long values are cut to keep reasons short.
+function credentialOperandLabel(operand: string | undefined): string {
+  if (operand === undefined) {
+    return "";
+  }
+  const shown = operand.length > 80 ? `${operand.slice(0, 77)}...` : operand;
+  return `: '${shown}'`;
+}
+
+function isGrepCommand(commandName: string | undefined): boolean {
+  return commandName !== undefined && GREP_COMMANDS.has(commandName);
+}
+
 function isReadLikeCommand(commandName: string): boolean {
   return READ_COMMANDS.has(commandName) || ADDITIONAL_READ_COMMANDS.has(commandName) || GREP_COMMANDS.has(commandName);
 }
@@ -2837,7 +2929,18 @@ function containsCloudCliLiteral(value: string): boolean {
 
 function containsCredentialLikeLiteral(value: string): boolean {
   const lower = value.toLowerCase();
-  return containsProtectedEnvPathReference(lower) || CREDENTIAL_LITERAL_MARKERS.some((marker) => lower.includes(marker));
+  return containsProtectedEnvPathReference(lower) || containsCredentialStoreLiteral(lower);
+}
+
+/** Credential-store markers (`.ssh`, `.aws`, `id_rsa`, `.npmrc`, …) without the `.env` family. */
+export function containsCredentialStoreLiteral(value: string): boolean {
+  const lower = value.toLowerCase();
+  return CREDENTIAL_LITERAL_MARKERS.some((marker) => lower.includes(marker));
+}
+
+/** True when the text names a protected (non-template) `.env` file. */
+export function containsProtectedEnvReference(value: string): boolean {
+  return containsProtectedEnvPathReference(value.toLowerCase());
 }
 
 function containsEnvDumpLiteral(value: string): boolean {
@@ -3098,7 +3201,7 @@ function pushPathOperand(operands: string[], operand: string | undefined): void 
   }
 }
 
-function isEnvAssignment(value: string): boolean {
+export function isEnvAssignment(value: string): boolean {
   const equalsIndex = value.indexOf("=");
   return equalsIndex > 0 && isShellIdentifier(value.slice(0, equalsIndex));
 }

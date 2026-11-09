@@ -98,6 +98,18 @@ export interface PathTarget {
    */
   readonly discovery?: boolean;
   /**
+   * Set when every access to this path is a shell existence/metadata test
+   * (`test -d`, `[ -e ]`). Such paths skip the outside-project gate; credential
+   * and protected-path rules still apply.
+   */
+  readonly existenceCheck?: boolean;
+  /** Set when a shell `cd` targets this path; it keeps the project boundary for reads. */
+  readonly directoryChange?: boolean;
+  /** Root of a recursive content search (grep -r, rg) outside the project. */
+  readonly recursiveSearch?: boolean;
+  /** False when that search skips dot-entries below its root (rg without --hidden). */
+  readonly searchIncludesHidden?: boolean;
+  /**
    * Action of this shell path access, including redirections. A command can
    * access the same path in several ways; separate targets retain each action
    * instead of replacing it with the command's primary action.
@@ -132,6 +144,15 @@ export interface PolicyRequest {
   readonly policyMissingGuidance?: string;
   readonly policyMissingRecommendation?: string;
   readonly requiresExactCommandAllow?: boolean;
+  /** Shell delete/move targets inside the project that git tracks (`tree`: a directory holding tracked files). */
+  readonly trackedPaths?: readonly TrackedPath[];
+  /** Executable tokens that resolve to a native binary inside the project or the session TMPDIR. */
+  readonly nativeExecutables?: readonly string[];
+}
+
+export interface TrackedPath {
+  readonly raw: string;
+  readonly tree: boolean;
 }
 
 interface PolicyDecisionBase {

@@ -323,10 +323,10 @@ async function assertProtectedMetadataDelete(client, fixture) {
 async function assertOutsideRepositoryProtections(client, fixture) {
   await fixture.recreateOutsideFiles();
 
+  // Reads are open across the system; only mutations keep the project boundary.
   let run = await runScenario(client, "outside-read-block");
-  let end = expectToolEnd(run.events, "read", { error: true });
-  assert.match(resultText(end), /Outside-project read requires/i);
-  assert.doesNotMatch(eventsText(run.events), /outside fixture content should not leak/);
+  let end = expectToolEnd(run.events, "read", { error: false });
+  assert.match(resultText(end), /outside fixture content/);
 
   run = await runScenario(client, "outside-write-block");
   end = expectToolEnd(run.events, "write", { error: true });

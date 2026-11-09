@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.9 - Unreleased
+
+Fixes from Mission QA_DOCKER_RUST_2026-11-09:
+
+- G1: A recursive removal of git-tracked project paths (`rm -r`/`rm -rf` of a tracked file or directory, `rmdir`, `mv` of a directory holding tracked files) now needs approval. Untracked output such as `target/` and `node_modules/` is still removed unattended, and `.git` stays hard-denied.
+- G2: `rustup-init` is allowed by default. `export` segments that set PATH, LD_*, DYLD_*, BASH_ENV, ENV, NODE_OPTIONS, GIT_SSH_COMMAND or similar loader variables in any position (`export CARGO_HOME=x PATH=y`) now need approval; other exports and leading `NAME=value` assignments stay harmless.
+- G3: `rustfmt`, `cargo-clippy` and `clippy-driver` are allowed like `cargo`, by basename or full toolchain path, and `~/.rustup/toolchains` is a read-only tool location.
+- G4: A native binary (ELF, Mach-O, PE) inside the project or the session TMPDIR, such as `./target/debug/app`, runs without an allow rule and skips script inspection. Binaries elsewhere still need an allowCommands rule.
+- G5: `$TMPDIR`, `$HOME` and `$PWD` now resolve in commands that carry a heredoc (`cat > $TMPDIR/x <<'EOF'`); heredoc bodies stay literal.
+- G6: Outside-project read, list and write refusals name the blocked path.
+- G7: The approval dialog title no longer carries the menu cursor position (`2/6`); the counter moved into the decision heading.
+
+Additional release validation fixes:
+
+- Pinned Git tracking probes to a fixed executable path instead of resolving agent-controlled `PATH`, and reused stable shell-path resolution for native-binary scratch roots.
+- Simplified script-inspection patterns and replaced backtracking-prone interpolation/suffix scans, preserving source order and recognizing semicolon-terminated interpreter calls.
+- Parallelized independent filesystem probes and added regressions for PATH hijacking, native-binary boundaries, interpreter languages, heredoc assignments, and malformed input.
+
 ## 0.3.8 - Unreleased
 
 - Stopped treating shell `test`, `[`, and `[[` string and numeric comparison values as file paths, so exit-status checks no longer cause false outside-project denials. Unary file checks and file comparisons still receive path and credential protections.

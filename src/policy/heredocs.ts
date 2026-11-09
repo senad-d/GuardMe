@@ -4,6 +4,8 @@ export interface PreparedHeredocs {
   readonly command: string;
   readonly error?: string;
   readonly ranges?: readonly { readonly start: number; readonly end: number }[];
+  /** Body text spans (after the header line, through the closing delimiter) in the original command. */
+  readonly bodies?: readonly { readonly start: number; readonly end: number }[];
 }
 
 interface Heredoc {
@@ -25,6 +27,7 @@ interface HeredocScan {
   commandStart: number;
   lineStart: number;
   ranges: { start: number; end: number }[];
+  bodies: { start: number; end: number }[];
   quote?: "'" | '"';
   escaped: boolean;
   complexLine: boolean;
@@ -58,7 +61,7 @@ export function prepareShellHeredocs(command: string): PreparedHeredocs {
   if (!command.includes("<<")) {
     return { command };
   }
-  const state: HeredocScan = { index: 0, commandStart: 0, lineStart: 0, ranges: [], escaped: false, complexLine: false, pending: [], replacements: [] };
+  const state: HeredocScan = { index: 0, commandStart: 0, lineStart: 0, ranges: [], bodies: [], escaped: false, complexLine: false, pending: [], replacements: [] };
   while (state.index < command.length && !state.error) {
     advanceHeredocScan(command, state);
   }
@@ -72,7 +75,7 @@ export function prepareShellHeredocs(command: string): PreparedHeredocs {
   for (const replacement of [...state.replacements].sort((a, b) => b.start - a.start)) {
     prepared = prepared.slice(0, replacement.start) + replacement.text + prepared.slice(replacement.end);
   }
-  return { command: prepared, ranges: state.ranges };
+  return { command: prepared, ranges: state.ranges, bodies: state.bodies };
 }
 
 function advanceHeredocScan(command: string, state: HeredocScan): void {
@@ -149,13 +152,29 @@ function consumeHeredocHeader(command: string, state: HeredocScan): void {
     return;
   }
   const prefix = command.slice(state.commandStart, start).trim();
-  const consumer = basename(prefix.split(/\s/u)[0] ?? "").toLowerCase();
+  const consumer = basename(stripLeadingAssignments(prefix).split(/\s/u)[0] ?? "").toLowerCase();
   if ((!Object.hasOwn(STDIN_CODE_OPTIONS, consumer) && !DATA_CONSUMERS.has(consumer)) || /(?:^|\s)--(?:\s|$)/u.test(prefix)) {
     state.error = "Heredoc stdin consumer or argument routing cannot be inspected safely.";
     return;
   }
   state.pending.push({ marker: delimiter.marker, stripTabs, start, end: delimiter.end, consumer });
   state.index = delimiter.end;
+}
+
+// `PATH=… node <<'JS'` and `env FOO=1 python3 <<'PY'` still feed the body
+// to node/python3; the assignments stay in the analysed command text, where
+// the classifier checks them like any other prefix assignment.
+const LEADING_ASSIGNMENT = /^[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+/u;
+
+function stripLeadingAssignments(prefix: string): string {
+  let remaining = prefix.replace(/^env\s+/u, "");
+  let consumed = false;
+  let match: RegExpExecArray | null;
+  while ((match = LEADING_ASSIGNMENT.exec(remaining)) !== null) {
+    consumed = true;
+    remaining = remaining.slice(match[0].length);
+  }
+  return consumed ? remaining : prefix;
 }
 
 function readQuotedDelimiter(command: string, start: number): { readonly marker: string; readonly end: number } | undefined {
@@ -228,6 +247,7 @@ function consumeHeredocBodies(command: string, state: HeredocScan): void {
   }
   state.replacements.push({ start, end: state.index, text: "" });
   state.ranges.push({ start: state.lineStart, end: state.index });
+  state.bodies.push({ start, end: state.index });
   state.pending = [];
 }
 

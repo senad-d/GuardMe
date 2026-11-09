@@ -432,6 +432,7 @@ test("TUI approval stays width- and height-bounded in short and narrow panes", a
     assert.ok(rendered.lines.length <= approvalRowBudget(rendered.rows));
     assert.ok(rendered.lines.every((line) => visibleWidth(line) <= rendered.width));
     assert.ok(rendered.lines.some((line) => line.includes("2/6")));
+    assert.doesNotMatch(rendered.lines[0] ?? "", /\d\/6/, "the cursor position stays out of the title");
     assert.ok(rendered.lines.some((line) => line.includes("Deny once")));
     assert.ok(rendered.lines.some((line) => /Esc.*Deny once|Esc cancel = Deny once/.test(line)));
   }

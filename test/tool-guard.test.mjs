@@ -593,8 +593,8 @@ test("bash tool calls are classified and blocked or allowed by policy", async ()
   assert.match(copyCredential?.reason ?? "", /Environment files|Credential/i);
   assert.equal(globCredential?.block, true);
   assert.match(globCredential?.reason ?? "", /Credential|Environment files/i);
-  assert.equal(outsideRead?.block, true);
-  assert.match(outsideRead?.reason ?? "", /Outside-project read requires/);
+  // Reads are open across the system; only credential files stay unreadable.
+  assert.equal(outsideRead, undefined);
   assert.equal(broadShellGrep, undefined);
   assert.equal(absoluteBroadShellGrep, undefined);
   assert.equal(compoundBroadShellGrep, undefined);
@@ -604,7 +604,7 @@ test("bash tool calls are classified and blocked or allowed by policy", async ()
   assert.equal(wildcardAllowCompound?.block, true);
   assert.match(wildcardAllowCompound?.reason ?? "", /GuardMe coaching|Recursive force deletion/);
   assert.equal(dangerousWithOutsideRead?.block, true);
-  assert.match(dangerousWithOutsideRead?.reason ?? "", /Outside-project .* requires/);
+  assert.match(dangerousWithOutsideRead?.reason ?? "", /GuardMe coaching|find -delete/);
   assert.equal(dangerous?.block, true);
   assert.match(dangerous?.reason ?? "", /GuardMe coaching|Recursive force deletion/);
   stopGuardMeSession(ctx);
@@ -1014,7 +1014,7 @@ test("agent mode never auto-allows hard denials, explicit denies, protected path
     { toolName: "bash", input: { command: "aws sts get-caller-identity" } },
     { toolName: "bash", input: { command: "blocked-agent run" } },
     { toolName: "read", input: { path: ".env" } },
-    { toolName: "read", input: { path: outsidePath } },
+    { toolName: "write", input: { path: outsidePath, content: "x\n" } },
   ];
 
   for (const call of calls) {
@@ -1040,6 +1040,8 @@ test("scratch under $TMPDIR and the project's Gradle wrapper pass the full guard
   process.env.TMPDIR = scratch;
   await writeFile(join(cwd, "gradlew"), '#!/bin/sh\nwhile [ -h "$PRG" ] ; do ls -ld "$PRG"; done\nexec java -jar gradle/wrapper/gradle-wrapper.jar "$@"\n', "utf8");
   await writeFile(join(root, "gradlew"), "#!/bin/sh\nexit 0\n", "utf8");
+  // Interpreter scripts are inspected before they run, so the probe file must exist.
+  await writeFile(join(cwd, "x.test.js"), "import test from 'node:test';\ntest('probe', () => {});\n", "utf8");
   try {
     for (const command of [
       'mkdir -p "$TMPDIR/x" && rm -f "$TMPDIR/x/a.txt"',
@@ -1184,9 +1186,9 @@ test("grep find and ls are mapped as read/list discovery actions", async () => {
   assert.match(credentialGlobGrep?.reason ?? "", /traverse protected path.*Credential|Credential-like/i);
   assert.equal(broadFind, undefined);
   assert.equal(scopedFind, undefined);
-  assert.equal(find?.block, true);
-  assert.match(find?.reason ?? "", /Outside-project list requires/);
-  assert.equal(ls?.block, true);
+  // Listing outside the project is a system read.
+  assert.equal(find, undefined);
+  assert.equal(ls, undefined);
   stopGuardMeSession(ctx);
 });
 

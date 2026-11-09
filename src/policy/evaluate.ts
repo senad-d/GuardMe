@@ -12,6 +12,7 @@ import {
   type PolicyReasonCode,
   type PolicyRequest,
   type RiskLevel,
+  type TrackedPath,
   USER_DECISIONS,
 } from "./action.ts";
 import {
@@ -21,8 +22,11 @@ import {
   type CommandClassification,
   type ExecutableCommandSegment,
   classifyShellCommand,
+  isEnvAssignment,
+  tokenizeShellCommand,
 } from "./commands.ts";
 import { type NormalizedPolicyPath, isAnchoredPolicyPathPattern, isPathInside, matchPolicyPathPattern, toPosixPath } from "./paths.ts";
+import { protectedRuleUnderRoot } from "./recursive-search.ts";
 import { redactSensitiveText } from "./redact.ts";
 import { containsCredentialKeyword, isProtectedEnvFileSegment } from "./sensitive-paths.ts";
 
@@ -56,7 +60,7 @@ export function evaluatePolicyRequest(options: EvaluatePolicyRequestOptions): Po
   const { policy, request } = options;
   const command = options.commandClassification ?? (request.command ? classifyShellCommand(request.command) : undefined);
   const pathTargets = request.targets.filter((target): target is PathTarget => target.kind === "path");
-  const normalizedPaths = pathTargets.map((target) => normalizedPathFromTarget(target, request.cwd));
+  const normalizedPaths = pathTargets.map((target) => withCommandAccessFlags(normalizedPathFromTarget(target, request.cwd), command));
   const directPaths = normalizedPaths.filter((path) => !path.discovery);
   const discoveryPaths = normalizedPaths.filter((path) => path.discovery);
 
@@ -94,6 +98,11 @@ export function evaluatePolicyRequest(options: EvaluatePolicyRequestOptions): Po
     return discoveryDecision;
   }
 
+  const searchDecision = recursiveSearchDecision(policy, request, directPaths, options.warnedFingerprints);
+  if (searchDecision) {
+    return searchDecision;
+  }
+
   if (request.command) {
     return evaluateCommandSegments(policy, request, command, options.warnedFingerprints);
   }
@@ -103,6 +112,37 @@ export function evaluatePolicyRequest(options: EvaluatePolicyRequestOptions): Po
   }
 
   return allowDecision(request, "No GuardMe deny rule matched this request.", []);
+}
+
+/**
+ * Decision for a finding from interpreter script inspection: `hard` findings
+ * (environment dumps, credential-store paths) deny outright; `dangerous`
+ * ones (computed commands, decode-then-execute, .env references) take the
+ * usual coaching and approval path.
+ */
+export function scriptFindingDecision(
+  policy: MergedGuardMePolicyConfig,
+  request: PolicyRequest,
+  severity: "hard" | "dangerous",
+  reason: string,
+  marker: string,
+  warnedFingerprints?: ReadonlySet<string>,
+): PolicyDecision {
+  // A reviewed exact allow rule for the invocation is the user's sign-off on dangerous findings.
+  const signOff = severity === "dangerous" && request.command ? firstMatchingExactWholeCommandAllowRule(policy.allowCommands, request.command) : undefined;
+  if (signOff) {
+    return allowDecision(request, "Interpreter script approved by an exact allowCommands rule.", [matchedRule(signOff)]);
+  }
+  const rule: MatchedRule = {
+    category: "hardDeny",
+    source: { kind: "builtin", label: "interpreter script inspection" },
+    pattern: marker,
+    actions: [request.action],
+    reason,
+  };
+  return severity === "hard"
+    ? denyDecision(request, "hard-denied", reason, [rule], true, "script-content-denied")
+    : dangerousDecision(request, reason, [rule], warnedFingerprints, "script-content-denied");
 }
 
 export function isAgentAutomaticApprovalEligible(decision: PolicyDecision): boolean {
@@ -213,6 +253,14 @@ function evaluateCommandSegment(
 ): CommandSegmentEvaluation {
   const exactAllow = firstMatchingExactSegmentCommandRule(policy.allowCommands, segment);
   const wildcardOrExactAllow = firstMatchingSegmentCommandRule(policy.allowCommands, segment);
+  const trackedRemoval = trackedRemovalTarget(segment, request.trackedPaths);
+  const runnerVariable = runnerVariableAssignment(segment);
+  if (!exactAllow && (trackedRemoval || runnerVariable)) {
+    const reason = trackedRemoval
+      ? `Removing '${redactSensitiveText(trackedRemoval)}' would delete files git tracks in this project.`
+      : `Setting ${runnerVariable} can redirect which programs later segments run, or how they load.`;
+    return { failure: builtinApprovalFailure(request, segment, reason, failureIndex) };
+  }
   const projectScopedDelete = isUnattendedPathMutation(segment, request.cwd, policy);
   const dangerousRule = firstMatchingSegmentCommandRule(policy.dangerousCommands, segment);
   const segmentRequiresExact = commandSegmentRequiresExactAllow(segment, Boolean(request.requiresExactCommandAllow), projectScopedDelete);
@@ -226,7 +274,101 @@ function evaluateCommandSegment(
     return { matchedAllow: matchedRule(compatibleAllow), allowedSegment: segment.normalizedText };
   }
 
+  if (!request.requiresExactCommandAllow && isNativeExecutableSegment(segment, request.nativeExecutables)) {
+    return { matchedAllow: NATIVE_EXECUTABLE_RULE, allowedSegment: segment.normalizedText };
+  }
+
   return { failure: policyMissingSegmentFailure(request, segment, allowedSegments) };
+}
+
+// Running a binary the agent built (./target/debug/app, $TMPDIR/target/...)
+// grants nothing `cargo run`, `cargo test` or `go run` do not already grant
+// unattended, so a native executable (ELF, Mach-O, PE) under the project or the
+// session TMPDIR runs without an allow rule. Ceiling: any native binary placed
+// there runs, built or downloaded; it is never content-inspected, deny rules
+// and dangerous checks on the segment still apply, scripts keep script
+// inspection, and binaries elsewhere still need an allowCommands rule.
+const NATIVE_EXECUTABLE_RULE: MatchedRule = {
+  category: "defaultProjectPolicy",
+  source: { kind: "builtin", label: "native executable in project or TMPDIR" },
+  actions: ["shell"],
+  reason: "Native binaries built inside the project or the session TMPDIR run like `cargo run`.",
+};
+
+function isNativeExecutableSegment(segment: ExecutableCommandSegment, nativeExecutables: readonly string[] | undefined): boolean {
+  if (!nativeExecutables || nativeExecutables.length === 0 || segment.dangerous || segment.hardDenied) {
+    return false;
+  }
+  const token = tokenizeShellCommand(segment.normalizedText).find((word) => !isEnvAssignment(word));
+  return token !== undefined && nativeExecutables.includes(token);
+}
+
+// `export NAME=value` is harmless except for names that change which program
+// later segments run or what it loads. The denyCommands defaults catch these
+// names only as the first export argument; this catches any position and the
+// rest of the list. Prefix assignments (`PATH=$PWD/node_modules/.bin:$PATH npm
+// test`) stay allowed: they reach one command whose own rule still applies.
+const RUNNER_VARIABLES: ReadonlySet<string> = new Set([
+  "PATH", "BASH_ENV", "ENV", "SHELLOPTS", "PROMPT_COMMAND",
+  "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+  "NODE_OPTIONS", "PERL5OPT", "RUBYOPT", "PYTHONSTARTUP", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",
+  "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_ASKPASS", "SSH_ASKPASS",
+  "RUSTC_WRAPPER",
+]);
+
+function runnerVariableAssignment(segment: ExecutableCommandSegment): string | undefined {
+  const words = tokenizeShellCommand(segment.normalizedText);
+  const commandIndex = words.findIndex((token) => !isEnvAssignment(token));
+  if (commandIndex < 0 || words[commandIndex] !== "export") {
+    return undefined;
+  }
+  const names = words.slice(commandIndex + 1).filter(isEnvAssignment).map((token) => token.slice(0, token.indexOf("=")));
+  return names.find((name) => RUNNER_VARIABLES.has(name) || name.startsWith("DYLD_"));
+}
+
+const RECURSIVE_LONG_FLAG = "--recursive";
+
+/**
+ * The first git-tracked target a recursive removal would take out of the
+ * project: `rm -r`/`rm -rf` of a tracked file or directory, `rmdir`, or `mv`
+ * of a directory holding tracked files. Plain `rm file` and file renames stay
+ * unattended; git can restore them and they are routine edits.
+ */
+function trackedRemovalTarget(segment: ExecutableCommandSegment, trackedPaths: readonly TrackedPath[] | undefined): string | undefined {
+  if (!trackedPaths || trackedPaths.length === 0 || !UNATTENDED_REMOVAL_ACTIONS.has(segment.action)) {
+    return undefined;
+  }
+  const tokens = tokenizeShellCommand(segment.normalizedText).filter((token) => !isEnvAssignment(token));
+  const executable = basename(tokens[0] ?? "");
+  const tracked = trackedPaths.filter((path) => segment.targetPaths.includes(path.raw));
+  if (executable === "rm") {
+    return hasRecursiveFlag(tokens.slice(1)) ? tracked[0]?.raw : undefined;
+  }
+  if (executable === "rmdir") {
+    return tracked[0]?.raw;
+  }
+  if (executable === "mv") {
+    const sources = new Set(segment.targetPaths.slice(0, -1));
+    return tracked.find((path) => path.tree && sources.has(path.raw))?.raw;
+  }
+  return undefined;
+}
+
+function hasRecursiveFlag(args: readonly string[]): boolean {
+  const options = args.slice(0, args.includes("--") ? args.indexOf("--") : args.length);
+  return options.some((arg) => arg === RECURSIVE_LONG_FLAG || (/^-[^-]/u.test(arg) && /[rR]/u.test(arg)));
+}
+
+function builtinApprovalFailure(request: PolicyRequest, segment: ExecutableCommandSegment, reason: string, failureIndex: number): CommandSegmentFailure {
+  const prefix = failureIndex === 0 ? "" : "Another ";
+  return {
+    kind: "dangerous",
+    segment,
+    request: commandSegmentPolicyRequest(request, segment),
+    reason: `${prefix}Shell segment '${redactSensitiveText(segment.normalizedText)}' requires an exact allowCommands rule or user approval. ${reason}`,
+    matchedRules: [{ category: "dangerousCommands", source: { kind: "builtin", label: "command classifier" }, pattern: segment.normalizedText, actions: [segment.action], reason }],
+    risk: "dangerous",
+  };
 }
 
 function segmentRequiresApproval(
@@ -256,8 +398,8 @@ const COMMAND_GLOB_CHARACTERS = /[*?[\]{}]/u;
 // and every other delete-capable command (find -delete, rsync --delete, git
 // clean) keep the approval path, and so does any dangerousCommands rule a
 // policy declares (the built-in defaults no longer carry one for rm -rf).
-// Recursive force deletes inside the project are covered too; add `rm -rf *`
-// to dangerousCommands locally if that is too broad.
+// Recursive deletes of untracked output (target/, node_modules/) are covered;
+// a recursive removal of git-tracked paths asks first (trackedRemovalTarget).
 function isUnattendedPathMutation(segment: ExecutableCommandSegment, cwd: string, policy: MergedGuardMePolicyConfig): boolean {
   if (segment.hardDenied || segment.targetPaths.length === 0) {
     return false;
@@ -270,16 +412,25 @@ function isUnattendedPathMutation(segment: ExecutableCommandSegment, cwd: string
   } else if (!UNATTENDED_WRITE_ACTIONS.has(segment.action)) {
     return false;
   }
-  return segment.targetPaths.every((raw) => {
-    if (raw === "" || raw.startsWith("~") || raw.includes("$") || COMMAND_GLOB_CHARACTERS.test(raw)) {
-      return false;
-    }
-    const path = normalizedPathFromTarget({ kind: "path", raw }, cwd);
-    if (path.isInsideProject) {
-      return path.projectRelativePath !== undefined && path.projectRelativePath !== ".";
-    }
-    return firstPathAllow(policy, path, segment.action) !== undefined;
-  });
+  return segment.targetPaths.every((raw) => isUnattendedTarget(segment, raw, cwd, policy));
+}
+
+// Each path is judged by its own access: the read source of `cat /etc/hosts >
+// /tmp/out` is a system read, only the redirect target is a write.
+function isUnattendedTarget(segment: ExecutableCommandSegment, raw: string, cwd: string, policy: MergedGuardMePolicyConfig): boolean {
+  const accessActions = segment.classification.pathAccesses.filter((access) => access.rawPath === raw).map((access) => access.action);
+  const actions = accessActions.length > 0 ? accessActions : [segment.action];
+  if (actions.every((action) => action === "read" || action === "list")) {
+    return true;
+  }
+  if (raw === "" || raw.startsWith("~") || raw.includes("$") || COMMAND_GLOB_CHARACTERS.test(raw)) {
+    return false;
+  }
+  const path = normalizedPathFromTarget({ kind: "path", raw }, cwd);
+  if (path.isInsideProject) {
+    return path.projectRelativePath !== undefined && path.projectRelativePath !== ".";
+  }
+  return actions.every((action) => action === "read" || action === "list" || firstPathAllow(policy, path, action) !== undefined);
 }
 
 function dangerousSegmentFailure(
@@ -400,12 +551,24 @@ function evaluatePathDefaultsAndAllows(
     );
   }
 
+  if ((request.action === "read" || request.action === "list") && !normalizedPaths.some((path) => isGatedOutsidePath(policy, path, request.action))) {
+    return allowDecision(request, `System-wide ${request.action} is allowed by default policy after protections pass.`, [
+      {
+        category: "defaultProjectPolicy",
+        source: { kind: "default", label: "built-in system read default" },
+        actions: [request.action],
+        reason: "Reads and listings outside the project are allowed unless a credential or protected-path rule matches.",
+      },
+    ]);
+  }
+
+  const blockedPath = outsidePathLabel(normalizedPaths.filter((path) => !path.isInsideProject));
   if (request.action === "read" || request.action === "list") {
-    return denyDecision(request, "medium", `Outside-project ${request.action} requires an explicit allowPaths or readOnlyPaths rule.`, [], false);
+    return denyDecision(request, "medium", `Outside-project ${request.action} requires an explicit allowPaths or readOnlyPaths rule.${blockedPath}`, [], false);
   }
 
   if (PATH_MUTATION_ACTIONS.has(request.action)) {
-    return denyDecision(request, "dangerous", `Outside-project ${request.action} requires an explicit allowPaths rule and no matching protection.`, [], false);
+    return denyDecision(request, "dangerous", `Outside-project ${request.action} requires an explicit allowPaths rule and no matching protection.${blockedPath}`, [], false);
   }
 
   return denyDecision(request, "medium", "No GuardMe path allow rule matched this request.", [], false);
@@ -459,6 +622,39 @@ function discoveryTraversalDecision(
   );
 }
 
+/**
+ * A recursive content search rooted outside the project that would pass a
+ * protected location (`rg token ~/.config` reaching `~/.config/gh/**`) needs
+ * approval; a reviewed exact whole-command allow counts as sign-off.
+ */
+function recursiveSearchDecision(
+  policy: MergedGuardMePolicyConfig,
+  request: PolicyRequest,
+  directPaths: readonly NormalizedPolicyPath[],
+  warnedFingerprints: ReadonlySet<string> | undefined,
+): PolicyDecision | undefined {
+  if (request.command && firstMatchingExactWholeCommandAllowRule(policy.allowCommands, request.command)) {
+    return undefined;
+  }
+  for (const path of directPaths) {
+    if (!path.recursiveSearch) {
+      continue;
+    }
+    const found = protectedRuleUnderRoot(policy, path.canonicalPath, path.searchIncludesHidden ?? true);
+    if (found) {
+      const rootLabel = redactSensitiveText(path.rawPath);
+      return dangerousDecision(
+        request,
+        `Recursive search of '${rootLabel}' would read protected '${found.rule.pattern}'. Search a narrower directory or specific files, or ask the user for approval.`,
+        [matchedRule(found.rule)],
+        warnedFingerprints,
+        "path-protected",
+      );
+    }
+  }
+  return undefined;
+}
+
 function firstDiscoveryPathProtection(
   policy: MergedGuardMePolicyConfig,
   paths: readonly NormalizedPolicyPath[],
@@ -490,20 +686,73 @@ function firstOutsidePathDefaultDenial(
     return undefined;
   }
 
-  const outsideWithoutAllow = normalizedPaths.filter((path) => !path.isInsideProject && !firstPathAllow(policy, path, request.action));
+  const outsideWithoutAllow = normalizedPaths.filter((path) => isGatedOutsidePath(policy, path, request.action));
   if (outsideWithoutAllow.length === 0) {
     return undefined;
   }
 
+  const blockedPath = outsidePathLabel(outsideWithoutAllow);
   if (request.action === "read" || request.action === "list") {
-    return denyDecision(request, "medium", `Outside-project ${request.action} requires an explicit allowPaths or readOnlyPaths rule.`, [], false);
+    return denyDecision(request, "medium", `Outside-project ${request.action} requires an explicit allowPaths or readOnlyPaths rule.${blockedPath}`, [], false);
   }
 
   if (PATH_MUTATION_ACTIONS.has(request.action)) {
-    return denyDecision(request, "dangerous", `Outside-project ${request.action} requires an explicit allowPaths rule and no matching protection.`, [], false);
+    return denyDecision(request, "dangerous", `Outside-project ${request.action} requires an explicit allowPaths rule and no matching protection.${blockedPath}`, [], false);
   }
 
-  return denyDecision(request, "medium", "Outside-project shell path access requires an explicit path allow rule.", [], false);
+  return denyDecision(request, "medium", `Outside-project shell path access requires an explicit path allow rule.${blockedPath}`, [], false);
+}
+
+/**
+ * Outside the project, reads, listings and existence tests are open across the
+ * system once the credential and protected-path rules (checked earlier) pass;
+ * writes, edits, deletes, moves and renames need an allowPaths rule (the temp
+ * directories by default). `cd` keeps the boundary because GuardMe resolves
+ * later relative paths against the project, not the new directory.
+ */
+function isGatedOutsidePath(policy: MergedGuardMePolicyConfig, path: NormalizedPolicyPath, requestAction: PolicyAction): boolean {
+  if (path.isInsideProject || path.existenceCheck) {
+    return false;
+  }
+  const action = path.action ?? requestAction;
+  if ((action === "read" || action === "list") && !path.directoryChange && !hasUnresolvedShellReference(path.rawPath)) {
+    return false;
+  }
+  return !firstPathAllow(policy, path, action);
+}
+
+// `$VAR/x`, backticks and `~user/x` cannot be checked against credential
+// rules, so reading them keeps the project boundary.
+function hasUnresolvedShellReference(rawPath: string): boolean {
+  return rawPath.includes("$") || rawPath.includes("`") || /^~[^/]/u.test(rawPath);
+}
+
+// The command classification is the source of truth for how each path is
+// accessed, so `cd` and existence-test flags hold even when a caller builds
+// targets without them.
+function withCommandAccessFlags(path: NormalizedPolicyPath, command: CommandClassification | undefined): NormalizedPolicyPath {
+  const accesses = command?.pathAccesses.filter((access) => access.rawPath === path.rawPath) ?? [];
+  if (accesses.length === 0) {
+    return path;
+  }
+  const directoryChange = path.directoryChange || accesses.some((access) => access.directoryChange);
+  const existenceCheck = (path.existenceCheck ?? true) && accesses.every((access) => access.existenceOnly);
+  return { ...path, directoryChange, existenceCheck };
+}
+
+/**
+ * Names the first offending path so a blocked compound command shows which
+ * operand failed instead of leaving the user to guess from the full command.
+ */
+function outsidePathLabel(paths: readonly NormalizedPolicyPath[]): string {
+  const first = paths[0];
+  if (!first) {
+    return "";
+  }
+  const label = redactSensitiveText(first.rawPath);
+  const action = first.action ? ` (${first.action})` : "";
+  const more = paths.length > 1 ? ` (+${paths.length - 1} more)` : "";
+  return ` Blocked path: '${label}'${action}${more}.`;
 }
 
 function firstCredentialLikePathDenial(
@@ -1047,6 +1296,9 @@ function normalizedPathFromTarget(target: PathTarget, cwd: string): NormalizedPo
     isInsideProject,
     hadTraversal: target.hadTraversal ?? false,
     ...(target.discovery ? { discovery: true } : {}),
+    ...(target.existenceCheck ? { existenceCheck: true } : {}),
+    ...(target.directoryChange ? { directoryChange: true } : {}),
+    ...(target.recursiveSearch ? { recursiveSearch: true, searchIncludesHidden: target.searchIncludesHidden ?? true } : {}),
     ...(target.action ? { action: target.action } : {}),
   };
 }

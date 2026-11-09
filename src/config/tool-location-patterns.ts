@@ -24,6 +24,8 @@ export const TOOL_LOCATION_PATTERNS = [
   "~/go/bin/**",
   "~/.cargo/bin",
   "~/.cargo/bin/**",
+  "~/.rustup/toolchains",
+  "~/.rustup/toolchains/**",
   "~/.local/bin",
   "~/.local/bin/**",
   "~/.gem",
