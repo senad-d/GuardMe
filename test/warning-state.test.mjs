@@ -290,3 +290,26 @@ test("oversized state files are compacted on append instead of failing forever",
   assert.ok(read.records.some((record) => record.fingerprint === appended.fingerprint));
   assert.ok(read.records.length > 1);
 });
+
+test("state appends add the state file to the directory .gitignore once, keeping existing lines", async () => {
+  const root = await mkdtemp(join(tmpdir(), "guardme-state-gitignore-"));
+  const paths = resolveStatePaths(join(root, "project"), join(root, "home"));
+  const ignorePath = join(root, "project", ".pi", "agent", ".gitignore");
+  await mkdir(join(root, "project", ".pi", "agent"), { recursive: true });
+  await writeFile(ignorePath, "protectme_log.jsonl");
+  const input = {
+    fingerprint: "sha256:ignore",
+    scope: "project",
+    cwd: root,
+    toolName: "bash",
+    action: "delete",
+    risk: "dangerous",
+    target: "rm -rf build",
+    reasonCode: "dangerous-command",
+  };
+
+  await appendWarningRecord(paths.localStatePath, input);
+  await appendWarningRecord(paths.localStatePath, input);
+
+  assert.equal(await readFile(ignorePath, "utf8"), "protectme_log.jsonl\nguardme-state.jsonl\n");
+});

@@ -216,7 +216,23 @@ export async function appendStateRecord(path: string, record: GuardMeStateRecord
   await mkdir(directory, { recursive: true });
   await assertNoSymlinkInExistingPath(directory);
   await compactOversizedStateFile(path);
+  await ensureStateFileGitIgnore(path);
   await appendFileNoFollow(path, `${JSON.stringify(record)}\n`);
+}
+
+// ProtectMe writes its own .gitignore in the same directory, so the state file
+// name is appended to an existing one rather than only written to a new one.
+async function ensureStateFileGitIgnore(path: string): Promise<void> {
+  const ignorePath = join(dirname(path), ".gitignore");
+  const line = basename(path);
+  try {
+    const existing = await readFile(ignorePath, "utf8").catch(() => "");
+    if (existing.split(/\r?\n/u).includes(line)) return;
+    const lead = existing === "" || existing.endsWith("\n") ? "" : "\n";
+    await appendFileNoFollow(ignorePath, `${lead}${line}\n`);
+  } catch {
+    // A failed .gitignore write must not block the state record.
+  }
 }
 
 async function compactOversizedStateFile(path: string): Promise<void> {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.12 - Unreleased
+
+- The state file name (`guardme-state.jsonl`) is added to the `.gitignore` beside it, created when missing and appended to when ProtectMe or the user already wrote one.
+
 ## 0.3.11 - Unreleased
 
 Fixes from Mission live gate 2026-11-09 G1/G2: three "dangerous" `commandDefaultDeny` dialogs left after 0.3.10 while agents added and tested `scripts/hello.sh`.
