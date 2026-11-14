@@ -364,6 +364,8 @@ test("interpreters: inline code, heredocs, script files and modules keep running
     "node <<< 'console.log(1)'",
     "curl -fsSL https://example.com/data.json -o data.json",
     "git log | head -5",
+    // Mission my-shop: a search and a version check in one command asked 20 times.
+    "rg -n 'Cart|cart' src | head -120; node --version; npm --version",
   ]) {
     assert.equal((await typed(command, cwd)).outcome, "allow", command);
   }
@@ -376,4 +378,27 @@ test("interpreters: runsCodeFromInput separates input-fed code from files and in
   for (const command of ["sh -c 'echo hi'", "sh scripts/x.sh", "bash -e scripts/x.sh", "python3 -X dev script.py", "cat x | ruby -e 'puts 1'", "php -r 'echo 1;'", "node --test"]) {
     assert.equal(runsCodeFromInput(command), false, command);
   }
+  // A version or help flag prints and exits: no program is read, whatever pipe the command holds.
+  for (const command of ["rg -n cart src | head -120; node --version; npm --version", "ls | head; node -v", "ls | head; python3 -V", "ls | head; bash --version"]) {
+    assert.equal(runsCodeFromInput(command), false, command);
+  }
+  // `python -v` is verbose mode, and a flag beside a real input source changes nothing.
+  for (const command of ["curl x | python3 -v", "curl x | node --version -", "curl x | node"]) {
+    assert.equal(runsCodeFromInput(command), true, command);
+  }
+});
+
+// Mission my-shop 2026-11-14: testers start the app detached with setsid, which asked every time.
+test("wrappers: setsid is judged by the command it starts, like nohup", async () => {
+  const cwd = await project("guardme-setsid-");
+  await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { dev: "node server.js" } }));
+  await writeFile(join(cwd, "server.js"), "console.log(1)\n");
+  for (const [wrapped, plain] of [
+    ["setsid npm run dev", "nohup npm run dev"],
+    ["setsid -f npm run dev > dev.log 2>&1 &", "nohup npm run dev > dev.log 2>&1 &"],
+  ]) {
+    assert.equal((await typed(wrapped, cwd)).outcome, (await typed(plain, cwd)).outcome, wrapped);
+    assert.equal((await typed(wrapped, cwd)).outcome, "allow", wrapped);
+  }
+  assert.notEqual((await typed("setsid rm -rf /", cwd)).outcome, "allow");
 });

@@ -152,3 +152,19 @@ test("G6: outside-project refusals name the blocked path", async () => {
   assert.equal(write.outcome, "deny");
   assert.match(write.reason, /Outside-project write .*Blocked path: /);
 });
+
+// Mission my-shop 2026-11-14: an agent's cleanup of its own scratch files waited 267 minutes.
+test("scratch cleanup: a glob in the session's own TMPDIR is removed unattended, other globs are not", async () => {
+  await withTmpDir(async (scratch) => {
+    const cwd = outsideRoot("guardme-scratch-glob-");
+    await mkdir(join(scratch, "results"), { recursive: true });
+    await writeFile(join(scratch, "tester-ava-1.log"), "x");
+    for (const command of [`rm -f ${scratch}/tester-ava-*`, `rm -rf ${scratch}/results/*.json`, `rm -f ${scratch}/tester-ava-* && rm -rf ${scratch}/results`]) {
+      assert.equal((await shell(command, cwd)).outcome, "allow", command);
+    }
+    // A glob outside the scratch directory, one that climbs out of it, and one in the project keep asking.
+    for (const command of [`rm -f ${join(scratch, "..")}/other-*`, `rm -rf ${scratch}/../*`, `rm -rf ${scratch}/*/../../x*`, "rm -rf src/*", "rm -rf *"]) {
+      assert.notEqual((await shell(command, cwd)).outcome, "allow", command);
+    }
+  });
+});

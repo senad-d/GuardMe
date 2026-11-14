@@ -135,6 +135,7 @@ test("read tool calls inside the project are allowed unless protected", async ()
   assert.equal(envExample, undefined);
   assert.equal(blocked?.block, true);
   assert.match(blocked?.reason ?? "", /Protected by GuardMe: denyPaths \*\*\/\.env -> Environment files may contain credentials\./);
+  assert.match(blocked?.reason ?? "", /would be sent to the model, so this is blocked and no approval allows it\./);
   assert.match(blocked?.reason ?? "", /Note: Try using the tool when one is available that matches the command intent\./);
   stopGuardMeSession(ctx);
 });

@@ -262,7 +262,7 @@ function evaluateCommandSegment(
   if (!exactAllow && builtinReason) {
     return { failure: builtinApprovalFailure(request, segment, builtinReason, failureIndex) };
   }
-  const projectScopedDelete = isUnattendedPathMutation(segment, request.cwd, policy);
+  const projectScopedDelete = isUnattendedPathMutation(segment, request.cwd, policy, request.scratchRoots ?? []);
   const dangerousRule = firstMatchingSegmentCommandRule(policy.dangerousCommands, segment);
   const segmentRequiresExact = commandSegmentRequiresExactAllow(segment, Boolean(request.requiresExactCommandAllow), projectScopedDelete);
 
@@ -499,7 +499,12 @@ const COMMAND_GLOB_CHARACTERS = /[*?[\]{}]/u;
 // policy declares (the built-in defaults no longer carry one for rm -rf).
 // Recursive deletes of untracked output (target/, node_modules/) are covered;
 // a recursive removal of git-tracked paths asks first (trackedRemovalTarget).
-function isUnattendedPathMutation(segment: ExecutableCommandSegment, cwd: string, policy: MergedGuardMePolicyConfig): boolean {
+function isUnattendedPathMutation(
+  segment: ExecutableCommandSegment,
+  cwd: string,
+  policy: MergedGuardMePolicyConfig,
+  scratchRoots: readonly string[],
+): boolean {
   if (segment.hardDenied || segment.targetPaths.length === 0) {
     return false;
   }
@@ -511,19 +516,40 @@ function isUnattendedPathMutation(segment: ExecutableCommandSegment, cwd: string
   } else if (!UNATTENDED_WRITE_ACTIONS.has(segment.action)) {
     return false;
   }
-  return segment.targetPaths.every((raw) => isUnattendedTarget(segment, raw, cwd, policy));
+  return segment.targetPaths.every((raw) => isUnattendedTarget(segment, raw, cwd, policy, scratchRoots));
+}
+
+// `rm -f /tmp/session/tester-*`: a glob expands below its literal directory, so one whose
+// directory is the session's own scratch directory (TMPDIR) removes only that session's files
+// (Mission my-shop: an agent's cleanup of its own scratch files waited 267 minutes for approval).
+function isScratchGlob(raw: string, cwd: string, scratchRoots: readonly string[]): boolean {
+  const directory = raw.slice(0, raw.lastIndexOf("/", raw.search(COMMAND_GLOB_CHARACTERS)));
+  if (directory === "" || raw.includes("..")) {
+    return false;
+  }
+  const path = normalizedPathFromTarget({ kind: "path", raw: directory }, cwd);
+  return scratchRoots.some((root) => path.canonicalPath === root || isPathInside(root, path.canonicalPath));
 }
 
 // Each path is judged by its own access: the read source of `cat /etc/hosts >
 // /tmp/out` is a system read, only the redirect target is a write.
-function isUnattendedTarget(segment: ExecutableCommandSegment, raw: string, cwd: string, policy: MergedGuardMePolicyConfig): boolean {
+function isUnattendedTarget(
+  segment: ExecutableCommandSegment,
+  raw: string,
+  cwd: string,
+  policy: MergedGuardMePolicyConfig,
+  scratchRoots: readonly string[],
+): boolean {
   const accessActions = segment.classification.pathAccesses.filter((access) => access.rawPath === raw).map((access) => access.action);
   const actions = accessActions.length > 0 ? accessActions : [segment.action];
   if (actions.every((action) => action === "read" || action === "list")) {
     return true;
   }
-  if (raw === "" || raw.startsWith("~") || raw.includes("$") || COMMAND_GLOB_CHARACTERS.test(raw)) {
+  if (raw === "" || raw.startsWith("~") || raw.includes("$")) {
     return false;
+  }
+  if (COMMAND_GLOB_CHARACTERS.test(raw)) {
+    return isScratchGlob(raw, cwd, scratchRoots);
   }
   const path = normalizedPathFromTarget({ kind: "path", raw }, cwd);
   if (path.isInsideProject) {
@@ -905,7 +931,8 @@ function firstCredentialLikePathDenial(
 
 function formatProtectedRuleReason(rule: MatchedRule, reason: string): string {
   const patternLabel = rule.pattern ? ` ${rule.pattern}` : "";
-  return `Protected by GuardMe: ${rule.category}${patternLabel} -> ${reason}\nNote: Try using the tool when one is available that matches the command intent.`;
+  // Says why no approval is offered: a user reading the refusal must see it differs from a routine prompt.
+  return `Protected by GuardMe: ${rule.category}${patternLabel} -> ${reason} What it holds would be sent to the model, so this is blocked and no approval allows it.\nNote: Try using the tool when one is available that matches the command intent.`;
 }
 
 function firstHardPathDenial(

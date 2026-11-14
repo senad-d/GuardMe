@@ -191,7 +191,7 @@ const FIND_EXEC_OPTIONS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 const DISKUTIL_HARD_DENIED_SUBCOMMANDS = new Set(["erasedisk", "partitiondisk", "zerodisk"]);
 const TEST_COMMANDS = new Set(["test", "[", "[["]);
 const SHELL_WRAPPERS = new Set(["sh", "bash", "zsh"]);
-const PREFIX_WRAPPERS = new Set(["command", "builtin", "noglob", "nohup", "exec", "sudo", "doas"]);
+const PREFIX_WRAPPERS = new Set(["command", "builtin", "noglob", "nohup", "setsid", "exec", "sudo", "doas"]);
 
 // `command -v` / `-V` only looks names up and runs nothing, so it stays a
 // segment of its own (matched by the `command -v *` rule) instead of being
@@ -338,8 +338,18 @@ export function segmentRunsCodeFromInput(segmentText: string, command: string): 
   if (!kind || !inlineFlags || unwrapped.innerCommand || unwrapped.args.some((arg) => inlineFlags.has(arg))) {
     return false;
   }
+  // `rg x | head; node --version`: the interpreter prints and exits, it reads no program
+  // (Mission my-shop: 20 approval prompts for this one segment).
+  if (unwrapped.args.length > 0 && unwrapped.args.every((arg) => printsAndExits(kind, arg))) {
+    return false;
+  }
   const verdict = codeSourceFromArgs(unwrapped.args, kind === "shell");
   return verdict ?? (kind === "shell" || tokenizeShellCommand(command).includes("|"));
+}
+
+// `python -v` is verbose mode and still reads its program from input, so the short flags are per runner.
+function printsAndExits(kind: string, arg: string): boolean {
+  return arg === "--version" || arg === "--help" || (kind === "node" && arg === "-v") || (kind === "python" && arg === "-V");
 }
 
 function codeRunnerKind(commandName: string): string | undefined {
@@ -2373,7 +2383,8 @@ function wrapperInvokedCommandText(commandName: string, args: readonly string[])
   if (commandName === "exec") {
     return commandTextAfterOptions(args, EXEC_OPTIONS_WITH_VALUES);
   }
-  if (commandName === "nohup" || commandName === "time") {
+  // setsid: how an agent detaches a server it starts (Mission my-shop); its options -c, -f, -w take no value.
+  if (commandName === "nohup" || commandName === "time" || commandName === "setsid") {
     return commandTextAfterOptions(args, EMPTY_OPTIONS_WITH_VALUES);
   }
   if (commandName === "nice") {

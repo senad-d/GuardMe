@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.13 - Unreleased
+
+Fixes from the Mission my-shop investigation 2026-11-14 (44 approval prompts in one project).
+
+- An interpreter called only with a print-and-exit flag (`node --version`, `node -v`, `python3 -V`, `bash --version`, `--help`) no longer counts as running code from input. `rg x | head; node --version` asked for approval 20 times because a pipe elsewhere in the command made the version check look like `curl x | node`. `python -v` (verbose mode) and a flag beside a real input source still ask.
+- `rm` of a glob whose directory is the session's own scratch directory (`$TMPDIR`, written out) runs unattended: `rm -f /tmp/run/tester-*`. A glob outside it, one that climbs out with `..`, and any glob in the project still ask.
+- `setsid` is a wrapper like `nohup`: `setsid npm run dev > dev.log 2>&1 &` is judged by the command it starts.
+- A refused credential-like path now says why no approval is offered: what the path holds would be sent to the model.
+
 ## 0.3.12 - Unreleased
 
 - The state file name (`guardme-state.jsonl`) is added to the `.gitignore` beside it, created when missing and appended to when ProtectMe or the user already wrote one.
