@@ -27,7 +27,7 @@ test("GuardMe TUI capture writes one sanitized panel artifact", { timeout: 60_00
   assert.match(artifact, /Create project policy with sensible defaults/);
   assert.match(artifact, /SETUP\s+2\/6/);
   assert.match(artifact, /Setup - Custom Defaults Confirm/);
-  assert.match(artifact, /custom project policy • writes \.pi\/agent\/guardme\.yaml • choose defaults or blank/);
+  assert.match(artifact, /custom project policy • writes \.pi\/guardme\.yaml • choose defaults or blank/);
   assert.match(artifact, /CUSTOM POLICY START/);
   assert.match(artifact, /Start from sensible defaults\?/);
   assert.match(artifact, /Choose starting rules before adding custom entries\./);
@@ -45,12 +45,12 @@ test("GuardMe TUI capture writes one sanitized panel artifact", { timeout: 60_00
   assert.match(artifact, /Setup - Success Screen[\s\S]*↑↓ row\s+Enter inspect\s+Tab pane/);
   assert.doesNotMatch(artifact, /Setup - Success Screen[\s\S]*Enter close[\s\S]*## Setup - Custom Rule Section/);
   assert.match(artifact, /Setup - Custom Rule Section/);
-  assert.match(artifact, /Setup - Custom Rule Section[\s\S]*custom project policy • writes \.pi\/agent\/guardme\.yaml/);
+  assert.match(artifact, /Setup - Custom Rule Section[\s\S]*custom project policy • writes \.pi\/guardme\.yaml/);
   assert.match(artifact, /RULE SECTION/);
   assert.match(artifact, /1\/10 • project policy • allow matching path actions/);
   assert.match(artifact, /Setup - Custom Add Another Confirm/);
   assert.match(artifact, /CUSTOM RULES/);
-  assert.match(artifact, /custom project policy • writes \.pi\/agent\/guardme\.yaml • add rules or confirm/);
+  assert.match(artifact, /custom project policy • writes \.pi\/guardme\.yaml • add rules or confirm/);
   assert.match(artifact, /▶ Yes, add another rule\s+continue/);
   assert.match(artifact, /No, save policy\s+confirm/);
   assert.match(artifact, /1\/2 • Choose another rule section before saving\./);
@@ -60,7 +60,7 @@ test("GuardMe TUI capture writes one sanitized panel artifact", { timeout: 60_00
   assert.match(artifact, /## GENERAL\n\n[\s\S]*?│  Policies\s+│  GuardMe\s+active/);
   assert.doesNotMatch(artifact, /## GENERAL\n\n[\s\S]*?▶ GuardMe[\s\S]*?## POLICIES/);
   assert.match(artifact, /POLICIES/);
-  assert.match(artifact, /loads ~\/\.pi\/agent\/guardme\.yaml → \.pi\/agent\/guardme\.yaml/);
+  assert.match(artifact, /loads ~\/\.pi\/agent\/guardme\.yaml → \.pi\/guardme\.yaml/);
   assert.match(artifact, /Global state\s+~\/\.pi\/agent\/guardme-state\.jsonl/);
   assert.match(artifact, /Project state\s+\.pi\/agent\/guardme-state\.jsonl/);
   assert.match(artifact, /RULES/);
@@ -88,7 +88,7 @@ test("GuardMe TUI capture writes one sanitized panel artifact", { timeout: 60_00
   assert.match(artifact, /Diagnostic Detail Screen/);
   assert.match(artifact, /DIAGNOSTIC DETAILS\s+Line 1\/5/);
   assert.match(artifact, /ERROR config\.invalidRoot/);
-  assert.match(artifact, /Source\s+local \.pi\/agent\/guardme\.yaml/);
+  assert.match(artifact, /Source\s+local \.pi\/guardme\.yaml/);
   assert.match(artifact, /Source line\s+12/);
   assert.match(artifact, /Action\s+Fix policy YAML or use Setup to recreate it\./);
   assert.match(artifact, /Confirm - GuardMe Off/);

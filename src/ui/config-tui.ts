@@ -1785,7 +1785,7 @@ function moveDetailSelection(snapshot: ConfigSnapshot, detail: ConfigDetailState
 
 function contextForPane(snapshot: ConfigSnapshot, pane: ConfigPane): string {
   if (pane === "Setup") {
-    return "writes ~/.pi/agent/guardme.yaml or .pi/agent/guardme.yaml • external overrides may apply";
+    return "writes ~/.pi/agent/guardme.yaml or .pi/guardme.yaml • external overrides may apply";
   }
   if (pane === "General") {
     return `writes ${snapshot.settingsPath} • Pi project trust writes ~/.pi/agent/trust.json`;

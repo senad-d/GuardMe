@@ -34,7 +34,7 @@ GuardMe is a Pi extension for LLM tool-call safety. It checks Pi shell and files
 - **Filesystem-aware:** sensitive paths, `.git`, credentials, destructive moves/deletes, and unsafe generated file content are guarded.
 - **Approval-based:** first risky attempts are blocked with coaching; repeated attempts use a mode-aware, fail-closed approval flow.
 - **Pi-native:** install globally, project-locally, from git, or from a source checkout.
-- **Configurable:** use `/guardme`, `~/.pi/agent/guardme.yaml`, and `.pi/agent/guardme.yaml`.
+- **Configurable:** use `/guardme`, `~/.pi/agent/guardme.yaml`, and `.pi/guardme.yaml`.
 
 > **Security:** pi packages run with your full system permissions. GuardMe reduces accidental or model-requested access inside Pi sessions, but it is not an OS sandbox or privilege boundary. It can read/write GuardMe policy, settings, and state files under `~/.pi/agent/` and `.pi/agent/`. Read [`SECURITY.md`](SECURITY.md).
 
@@ -153,7 +153,7 @@ See [`docs/POLICY.md`](docs/POLICY.md) for the full policy reference.
 | Scope | Policy YAML | Generated state | Runtime settings |
 | --- | --- | --- | --- |
 | Global | `~/.pi/agent/guardme.yaml` | `~/.pi/agent/guardme-state.jsonl` | n/a |
-| Project local | `.pi/agent/guardme.yaml` | `.pi/agent/guardme-state.jsonl` | `.pi/agent/guardme-settings.json` |
+| Project local | `.pi/guardme.yaml` | `.pi/agent/guardme-state.jsonl` | `.pi/agent/guardme-settings.json` |
 
 Global policy loads first. Project-local policy, runtime settings, and generated state load only after the project is trusted. Missing runtime settings mean GuardMe is active and Insecure edits is on. Existing settings that omit `insecureEdits` also default to on; an explicit `"insecureEdits": false` is preserved. Turning GuardMe off from `/guardme` writes project-local settings and bypasses GuardMe enforcement for that trusted project until you turn it active again. Insecure edits makes only `write`/`edit` skip proposed content/script scanning; path protections and deny rules still apply, and `bash`, reads, and discovery tools stay guarded. Turn Insecure edits off in `/guardme` to enable proposed content/script scanning; the choice is saved in the same project-local settings file.
 

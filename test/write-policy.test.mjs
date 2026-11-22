@@ -172,7 +172,7 @@ test("local policy writes refuse symlinked project config directories", async ()
 
   assert.equal(result.saved, false);
   assert.match(result.reason ?? "", /symbolic links?/i);
-  await assert.rejects(access(join(outside, "agent", "guardme.yaml")));
+  await assert.rejects(access(join(outside, "guardme.yaml")));
 });
 
 test("global policy writes refuse symlinked global config directories", async () => {

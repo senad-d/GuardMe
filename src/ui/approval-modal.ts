@@ -30,8 +30,8 @@ export interface ApprovalChoice {
 export const APPROVAL_CHOICES: readonly ApprovalChoice[] = [
   { decision: "allow-once", label: "Allow once", description: "Run this call only; do not save a rule." },
   { decision: "deny-once", label: "Deny once", description: "Block this call only; do not save a rule." },
-  { decision: "allow-local", label: "Allow + save project rule", description: "Run now and save an allow rule in .pi/agent/guardme.yaml." },
-  { decision: "deny-local", label: "Deny + save project rule", description: "Block now and save a deny rule in .pi/agent/guardme.yaml." },
+  { decision: "allow-local", label: "Allow + save project rule", description: "Run now and save an allow rule in .pi/guardme.yaml." },
+  { decision: "deny-local", label: "Deny + save project rule", description: "Block now and save a deny rule in .pi/guardme.yaml." },
   { decision: "allow-global", label: "Allow + save global rule", description: "Run now and save an allow rule in ~/.pi/agent/guardme.yaml." },
   { decision: "deny-global", label: "Deny + save global rule", description: "Block now and save a deny rule in ~/.pi/agent/guardme.yaml." },
 ];

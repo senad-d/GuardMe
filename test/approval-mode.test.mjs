@@ -21,7 +21,7 @@ async function createApprovalModePolicies(globalMode, localMode) {
     await writeFile(join(homeDir, ".pi", "agent", "guardme.yaml"), `version: 1\napprovalMode: ${globalMode}\n`, "utf8");
   }
   if (localMode !== undefined) {
-    await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), `version: 1\napprovalMode: ${localMode}\n`, "utf8");
+    await writeFile(join(cwd, ".pi", "guardme.yaml"), `version: 1\napprovalMode: ${localMode}\n`, "utf8");
   }
   return { cwd, homeDir };
 }

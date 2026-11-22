@@ -280,7 +280,7 @@ export function commandRuleMatchCandidates(command: string): readonly string[] {
 export function commandSegmentRuleMatchCandidates(command: string): readonly string[] {
   const candidates = new Set<string>();
   addCommandRuleCandidate(candidates, command);
-  for (const segment of splitCommandSegments(stripFunctionDefinitionHeaders(tokenizeShellCommand(command)).tokens)) {
+  for (const segment of segmentsWithFunctionCallsExpanded(stripFunctionDefinitionHeaders(tokenizeShellCommand(command)))) {
     const leadingWrapperCommand = leadingWrapperInvokedCommandText(segment);
     if (leadingWrapperCommand) {
       addCommandRuleCandidate(candidates, leadingWrapperCommand);
@@ -457,7 +457,8 @@ function classifyShellCommandInternal(command: string, depth: number): CommandCl
     : extractExecutableShellSubcommands(command).map((subcommand) =>
         withPriority(rebaseNestedClassification(command, subcommand, classifyShellCommandInternal(subcommand.command, depth + 1))),
       );
-  const segments = splitCommandSegments(tokens);
+  // A call to a function defined here is classified as the body it runs.
+  const segments = segmentsWithFunctionCallsExpanded(stripFunctionDefinitionHeaders(tokens));
   const classifications = [...nestedClassifications, ...segments.map((segment) => classifySegment(command, segment, depth))];
   const selected = [...classifications].sort((left, right) => right.priority - left.priority)[0];
   return selected
@@ -499,7 +500,7 @@ function extractExecutableCommandSegmentsInternal( // NOSONAR
     );
   }
 
-  for (const segmentTokens of splitCommandSegments(tokens)) {
+  for (const segmentTokens of segmentsWithFunctionCallsExpanded(definitions)) {
     const segmentText = joinTokensAsRuleCommand(segmentTokens);
     if (!segmentText) {
       continue;
@@ -549,30 +550,123 @@ function extractExecutableCommandSegmentsInternal( // NOSONAR
 
 const SHELL_FUNCTION_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/u;
 
+// Positional parameters a call's arguments replace, and the forms GuardMe
+// cannot map from the call (`$#`, `${@:2}`, `${1:-x}`) or that change the
+// mapping (shift, set, getopts); a body with those keeps today's path.
+const FUNCTION_POSITIONAL = /\$(?:\{([1-9])\}|([1-9]))/gu;
+const FUNCTION_UNMAPPED_POSITIONAL = /\$(?:#|\{[#@*]|\{[1-9][^}])/u;
+const FUNCTION_POSITIONAL_CHANGERS: ReadonlySet<string> = new Set(["shift", "set", "getopts"]);
+
+interface ShellFunctionDefinitions {
+  readonly tokens: readonly string[];
+  readonly names: ReadonlySet<string>;
+  /** Bodies of the functions this command calls, which {@link expandFunctionCall} inlines. */
+  readonly bodies: ReadonlyMap<string, readonly string[]>;
+}
+
+interface FunctionBodyRange {
+  readonly name: string;
+  readonly start: number;
+  readonly end: number;
+}
+
 // "name () { ... }" and "function name { ... }" define a function; the header
 // executes nothing and the body splits into ordinary segments once the header
 // is gone. The names let trap recognise a locally defined cleanup function.
-function stripFunctionDefinitionHeaders(tokens: readonly string[]): { readonly tokens: readonly string[]; readonly names: ReadonlySet<string> } {
+// A function the command calls loses its body here: each call is judged by the
+// body with the call's arguments instead (`f() { docker compose "$@"; }; f ps`).
+function stripFunctionDefinitionHeaders(tokens: readonly string[]): ShellFunctionDefinitions {
   const kept: string[] = [];
   const names = new Set<string>();
+  const ranges: FunctionBodyRange[] = [];
+  const redefined = new Set<string>();
   let index = 0;
   while (index < tokens.length) {
-    const token = tokens[index] ?? "";
-    const next = tokens[index + 1] ?? "";
-    if (token === "function" && SHELL_FUNCTION_NAME.test(next)) {
-      names.add(next);
-      index += tokens[index + 2] === "(" && tokens[index + 3] === ")" ? 4 : 2;
+    const header = functionHeader(tokens, index);
+    if (!header) {
+      kept.push(tokens[index] ?? "");
+      index += 1;
       continue;
     }
-    if (SHELL_FUNCTION_NAME.test(token) && next === "(" && tokens[index + 2] === ")") {
-      names.add(token);
-      index += 3;
-      continue;
+    if (names.has(header.name)) {
+      redefined.add(header.name);
     }
-    kept.push(token);
-    index += 1;
+    names.add(header.name);
+    index += header.length;
+    const end = compoundCommandEnd(tokens, index);
+    if (end !== undefined && !tokens.slice(index, end).some((_token, offset) => functionHeader(tokens, index + offset))) {
+      ranges.push({ name: header.name, start: kept.length, end: kept.length + end - index });
+    }
   }
-  return { tokens: kept, names };
+  const outside = kept.filter((_token, position) => !ranges.some((range) => position >= range.start && position < range.end));
+  const expandable = new Map(ranges.filter((range) => !redefined.has(range.name)).map((range) => [range.name, kept.slice(range.start + 1, range.end - 1)] as const));
+  const bodies = new Map([...expandable].filter(([name, body]) => isExpandableFunctionBody(body) && splitCommandSegments(outside).some((segment) => functionCallName(segment) === name)));
+  const removed = ranges.filter((range) => bodies.has(range.name));
+  return { tokens: kept.filter((_token, position) => !removed.some((range) => position >= range.start && position < range.end)), names, bodies };
+}
+
+function functionHeader(tokens: readonly string[], index: number): { readonly name: string; readonly length: number } | undefined {
+  const token = tokens[index] ?? "";
+  const next = tokens[index + 1] ?? "";
+  if (token === "function" && SHELL_FUNCTION_NAME.test(next)) {
+    return { name: next, length: tokens[index + 2] === "(" && tokens[index + 3] === ")" ? 4 : 2 };
+  }
+  if (SHELL_FUNCTION_NAME.test(token) && next === "(" && tokens[index + 2] === ")") {
+    return { name: token, length: 3 };
+  }
+  return undefined;
+}
+
+// End (exclusive) of the `{ ... }` or `( ... )` body starting at `start`.
+function compoundCommandEnd(tokens: readonly string[], start: number): number | undefined {
+  const open = tokens[start];
+  let close: string;
+  if (open === "{") {
+    close = "}";
+  } else if (open === "(") {
+    close = ")";
+  } else {
+    return undefined;
+  }
+
+  let depth = 0;
+  for (let index = start; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === open) {
+      depth += 1;
+    } else if (token === close) {
+      depth -= 1;
+    }
+    if (depth === 0) {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
+
+function isExpandableFunctionBody(body: readonly string[]): boolean {
+  return !body.some((token) => FUNCTION_POSITIONAL_CHANGERS.has(token) || FUNCTION_UNMAPPED_POSITIONAL.test(token));
+}
+
+function functionCallName(segment: readonly string[]): string | undefined {
+  return segment.find((token) => !SHELL_LEADING_CONTROL_WORDS.has(token));
+}
+
+// Segments a call to a function defined in the same command runs: the body with
+// `$@`, `$*` and `$1`..`$9` replaced by the call's arguments.
+function expandFunctionCall(segment: readonly string[], bodies: ReadonlyMap<string, readonly string[]>): readonly (readonly string[])[] | undefined {
+  const index = segment.findIndex((token) => !SHELL_LEADING_CONTROL_WORDS.has(token));
+  const body = bodies.get(segment[index] ?? "");
+  if (!body) {
+    return undefined;
+  }
+  const args = segment.slice(index + 1);
+  const expanded = body.flatMap((token) => (token === "$@" || token === "$*" ? args : [token.replaceAll(FUNCTION_POSITIONAL, (_match, braced?: string, bare?: string) => args[Number(braced ?? bare) - 1] ?? "")]));
+  return splitCommandSegments(expanded);
+}
+
+function segmentsWithFunctionCallsExpanded(definitions: ShellFunctionDefinitions): readonly (readonly string[])[] {
+  return splitCommandSegments(definitions.tokens).flatMap((segment) => expandFunctionCall(segment, definitions.bodies) ?? [segment]);
 }
 
 // Returns the command text a trap would run ("" when nothing runs), or
@@ -1630,7 +1724,7 @@ function addNestedCommandRuleCandidates(candidates: Set<string>, command: string
   for (const subcommand of extractExecutableShellSubcommands(command)) {
     addCommandRuleCandidatesFromNestedCommand(candidates, subcommand.command, depth);
   }
-  for (const segment of splitCommandSegments(stripFunctionDefinitionHeaders(tokenizeShellCommand(command)).tokens)) {
+  for (const segment of segmentsWithFunctionCallsExpanded(stripFunctionDefinitionHeaders(tokenizeShellCommand(command)))) {
     addSegmentCommandRuleCandidates(candidates, segment, depth);
   }
 }
@@ -2199,7 +2293,8 @@ function shellWrapperScriptPath(args: readonly string[]): string | undefined {
     if (arg === "--") {
       return args[index + 1];
     }
-    if (isShellCommandStringOption(arg)) {
+    // `-n` (also in a group such as `-nv`) only checks syntax: the script runs nothing.
+    if (isShellCommandStringOption(arg) || (arg.includes("n") && /^-[A-Za-z]+$/u.test(arg))) {
       return undefined;
     }
     if (arg === "-o" || arg === "--init-file" || arg === "--rcfile") {

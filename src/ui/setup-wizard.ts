@@ -58,7 +58,7 @@ export const SETUP_MODE_CHOICES: readonly SetupModeChoice[] = [
   {
     mode: "local-defaults",
     label: "Create project policy with sensible defaults",
-    description: "Writes .pi/agent/guardme.yaml for this project only.",
+    description: "Writes .pi/guardme.yaml for this project only.",
   },
   {
     mode: "global-custom",
@@ -78,7 +78,7 @@ export const SETUP_MODE_CHOICES: readonly SetupModeChoice[] = [
   {
     mode: "local-add-rule",
     label: "Add custom rule locally",
-    description: "Append custom rules to .pi/agent/guardme.yaml without replacing existing rules.",
+    description: "Append custom rules to .pi/guardme.yaml without replacing existing rules.",
   },
 ];
 
@@ -451,7 +451,7 @@ function buildSetupModeLines(width: number, theme: SetupTheme, selectedIndex: nu
     {
       title: "GuardMe",
       activePane: "Setup",
-      context: "GuardMe setup • writes ~/.pi/agent/guardme.yaml or .pi/agent/guardme.yaml • custom rules available",
+      context: "GuardMe setup • writes ~/.pi/agent/guardme.yaml or .pi/guardme.yaml • custom rules available",
       keys: "↑↓ option  Enter select  Esc/q quit",
       sidebar: CONFIG_PANE_LABELS.map((label) => ({ label, active: label === "Setup" })),
       rows,
@@ -590,7 +590,7 @@ export function setupScopeLabel(scope: SetupScope): string {
 }
 
 function setupScopeTarget(scope: SetupScope): string {
-  return scope === "global" ? "~/.pi/agent/guardme.yaml" : ".pi/agent/guardme.yaml";
+  return scope === "global" ? "~/.pi/agent/guardme.yaml" : ".pi/guardme.yaml";
 }
 
 function ruleSectionChoices(): readonly RuleSectionChoice[] {

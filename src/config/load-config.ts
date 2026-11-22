@@ -52,7 +52,7 @@ const MAX_POLICY_FILE_BYTES = 1024 * 1024;
 export function resolvePolicyConfigPaths(cwd: string, homeDir = homedir()): GuardMeConfigPaths {
   return {
     globalPolicyPath: join(resolve(homeDir), ".pi", "agent", "guardme.yaml"),
-    localPolicyPath: join(resolve(cwd), ".pi", "agent", "guardme.yaml"),
+    localPolicyPath: join(resolve(cwd), ".pi", "guardme.yaml"),
     displayGlobalPolicyPath: GLOBAL_POLICY_PATH,
     displayLocalPolicyPath: LOCAL_POLICY_PATH,
   };
@@ -103,6 +103,7 @@ export async function loadGuardMeConfig(options: LoadGuardMeConfigOptions): Prom
     ...files.flatMap((file) => file.diagnostics),
     ...merged.diagnostics,
     ...approvalMode.diagnostics,
+    ...(await movedLocalPolicyDiagnostics(options.cwd)),
   ];
 
   return {
@@ -131,13 +132,31 @@ async function skippedLocalPolicyConfigFile(path: string): Promise<PolicyConfigF
             severity: "warning",
             code: "config.localPolicySkippedUntrustedProject",
             message:
-              "Project is not trusted: .pi/agent/guardme.yaml exists but was ignored. Its rules, approvalMode, and guardedTools do not apply until the project is trusted from /guardme.",
+              "Project is not trusted: .pi/guardme.yaml exists but was ignored. Its rules, approvalMode, and guardedTools do not apply until the project is trusted from /guardme.",
             source: { kind: "local", path },
             path,
           },
         ]
       : [],
   };
+}
+
+// The project policy moved from .pi/agent/guardme.yaml to .pi/guardme.yaml;
+// the old file is no longer read, so its rules silently stop applying.
+async function movedLocalPolicyDiagnostics(cwd: string): Promise<readonly PolicyDiagnostic[]> {
+  const path = join(resolve(cwd), ".pi", "agent", "guardme.yaml");
+  if (!(await localPolicyFileExists(path))) {
+    return [];
+  }
+  return [
+    {
+      severity: "warning",
+      code: "config.localPolicyMoved",
+      message: `GuardMe project policy moved to ${LOCAL_POLICY_PATH}, rename it: .pi/agent/guardme.yaml is no longer read.`,
+      source: { kind: "local", path },
+      path,
+    },
+  ];
 }
 
 async function localPolicyFileExists(path: string): Promise<boolean> {

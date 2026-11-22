@@ -292,7 +292,37 @@ function evaluateCommandSegment(
 }
 
 function isHarmlessReadOnlySegment(segment: ExecutableCommandSegment, command: CommandClassification | undefined, request: PolicyRequest): boolean {
-  return !commandWritesPaths(command) && isHarmlessShellSegment(segment, (rawPath) => allowedRootRelativePath(request, rawPath));
+  const resolveAllowedPath = (rawPath: string): string | undefined => allowedRootRelativePath(request, rawPath);
+  if (!commandWritesPaths(command)) {
+    return isHarmlessShellSegment(segment, resolveAllowedPath);
+  }
+  // `./run.sh > "$TMPDIR/run.log" 2>&1`: when every write lands inside the
+  // project or the session TMPDIR, the segment is judged with its redirects removed.
+  const accesses = [...(command?.pathAccesses ?? []), ...segment.classification.pathAccesses];
+  if (!accesses.every((access) => access.action === "read" || access.action === "list" || isAllowedRootWrite(request, access.rawPath))) {
+    return false;
+  }
+  const withoutRedirects = extractExecutableCommandSegments(withoutOutputRedirections(segment.normalizedText));
+  return withoutRedirects.length > 0 && withoutRedirects.every((part) => isHarmlessShellSegment(part, resolveAllowedPath));
+}
+
+function isAllowedRootWrite(request: PolicyRequest, rawPath: string): boolean {
+  if (rawPath === "" || rawPath.startsWith("~") || hasUnresolvedShellReference(rawPath) || COMMAND_GLOB_CHARACTERS.test(rawPath)) {
+    return false;
+  }
+  const relativePath = allowedRootRelativePath(request, rawPath);
+  return relativePath !== undefined && relativePath !== "." && relativePath !== ".git" && !relativePath.startsWith(".git/");
+}
+
+const OUTPUT_REDIRECTION_OPERATOR = /^\d?>>?\|?$/u;
+
+// Drops `> file`, `>> file`, `2> file` and `>| file`; descriptor duplications stay.
+function withoutOutputRedirections(text: string): string {
+  const tokens = tokenizeShellCommand(text);
+  return tokens
+    .filter((token, index) => !OUTPUT_REDIRECTION_OPERATOR.test(token) && !OUTPUT_REDIRECTION_OPERATOR.test(tokens[index - 1] ?? ""))
+    .map((token) => JSON.stringify(token))
+    .join(" ");
 }
 
 function builtinApprovalReason(trackedRemoval: string | undefined, runnerVariable: string | undefined, codeFromInput: boolean): string | undefined {

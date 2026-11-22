@@ -75,7 +75,11 @@ export async function startGuardMeSession(
   setGuardMeSessionState(state);
   ctx.ui.setStatus(EXTENSION_STATUS_KEY, formatGuardMeStatus(state));
 
-  if (ctx.hasUI && degraded) {
+  const movedPolicy = config.diagnostics.find((diagnostic) => diagnostic.code === "config.localPolicyMoved");
+  if (ctx.hasUI && movedPolicy) {
+    ctx.ui.notify?.(movedPolicy.message, "warning");
+  }
+    if (ctx.hasUI && degraded) {
     ctx.ui.notify?.(`${EXTENSION_DISPLAY_NAME} loaded with ${diagnostics.length} diagnostic${diagnostics.length === 1 ? "" : "s"}. Run /guardme for details.`, "warning");
   }
 

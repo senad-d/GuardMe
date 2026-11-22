@@ -45,7 +45,7 @@ async function trackedPathFact(raw: string, cwd: string): Promise<TrackedPath | 
   return { raw, tree: entries.some((entry) => entry !== relativePath) };
 }
 
-async function gitLsFiles(cwd: string, relativePath: string): Promise<readonly string[]> {
+export async function gitLsFiles(cwd: string, relativePath: string): Promise<readonly string[]> {
   const output = await new Promise<string>((resolveOutput) => {
     execFile(GIT_EXECUTABLE, ["ls-files", "-z", "--", `:(literal)${relativePath}`], { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (error, stdout) => {
       resolveOutput(error && !stdout ? "" : String(stdout));

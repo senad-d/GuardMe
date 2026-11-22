@@ -24,7 +24,7 @@ async function createGuardContext(options = {}) {
   }
   if (options.localPolicy) {
     await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
-    await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), options.localPolicy, "utf8");
+    await writeFile(join(cwd, ".pi", "guardme.yaml"), options.localPolicy, "utf8");
   }
   if (options.insecureEdits !== undefined) {
     await writeGuardMeRuntimeSettings({ cwd, insecureEdits: options.insecureEdits });
@@ -938,7 +938,7 @@ test("agent mode allows one identical retry only in a later agent turn and consu
   assert.equal(automaticRecords.length, 2);
   assert.ok(automaticRecords.every((record) => record.decision === "allow-once" && record.approvalMode === "agent" && record.persistedTo === "none"));
   assert.equal(records.some((record) => record.type === "decision"), false);
-  await assert.rejects(access(join(cwd, ".pi", "agent", "guardme.yaml")));
+  await assert.rejects(access(join(cwd, ".pi", "guardme.yaml")));
   stopGuardMeSession(ctx);
 });
 
@@ -1098,7 +1098,7 @@ test("persisted warnings fail closed with bounded guidance in auto RPC mode with
   assert.equal(allowed, undefined);
   assert.equal(stateText.trim().split("\n").length, 1);
   assert.doesNotMatch(stateText, /"type":"decision"/);
-  await assert.rejects(access(join(cwd, ".pi", "agent", "guardme.yaml")));
+  await assert.rejects(access(join(cwd, ".pi", "guardme.yaml")));
   stopGuardMeSession(ctx);
 });
 

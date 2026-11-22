@@ -92,6 +92,10 @@ test("F2: built-ins and in-project script runs pass inside inspected scripts", a
     "output=$(./hello.sh)",
     "cd tests",
     "cd .",
+    // I15c: a redirect into the project is judged without it.
+    "printf x > out.txt",
+    "echo x >> out.txt",
+    "printf x &> out.txt",
   ]) {
     assert.equal((await scriptSegment(command, cwd)).outcome, "allow", command);
   }
@@ -103,10 +107,7 @@ test("F2: the same constructs with a redirect, an outside path or an unknown tar
   await writeScript(join(outside, "x.sh"), "#!/bin/sh\necho hi\n");
   for (const command of [
     "set",
-    "printf x > out.txt",
-    "echo x >> out.txt",
     `echo x > ${outside}/out.txt`,
-    "printf x &> out.txt",
     `test -f ${outside}/x.sh`,
     "test -f $UNKNOWN/x",
     "cd",

@@ -20,7 +20,7 @@ function snapshotFixture(config = createBuiltInDefaultPolicy()) {
     diagnostics: [],
     settingsPath: ".pi/agent/guardme-settings.json",
     globalPolicyPath: "~/.pi/agent/guardme.yaml",
-    localPolicyPath: "/repo/.pi/agent/guardme.yaml",
+    localPolicyPath: "/repo/.pi/guardme.yaml",
     globalStatePath: "~/.pi/agent/guardme-state.jsonl",
     localStatePath: "/repo/.pi/agent/guardme-state.jsonl",
     ruleGroups: createRuleGroups(config),
@@ -121,7 +121,7 @@ test("config TUI routes setup default actions to the correct policy target", asy
 
   for (const scenario of [
     { setupRowMoves: 0, scope: "global", displayPath: "~/.pi/agent/guardme.yaml" },
-    { setupRowMoves: 1, scope: "local", displayPath: ".pi/agent/guardme.yaml" },
+    { setupRowMoves: 1, scope: "local", displayPath: ".pi/guardme.yaml" },
   ]) {
     const result = await requestGuardMeConfigAction(
       {
@@ -162,8 +162,8 @@ test("config TUI routes setup default actions to the correct policy target", asy
         ok: true,
         plan: {
           scope: setupConfig.scope,
-          targetPath: setupConfig.scope === "global" ? "/home/.pi/agent/guardme.yaml" : "/repo/.pi/agent/guardme.yaml",
-          displayPath: setupConfig.scope === "global" ? "~/.pi/agent/guardme.yaml" : ".pi/agent/guardme.yaml",
+          targetPath: setupConfig.scope === "global" ? "/home/.pi/agent/guardme.yaml" : "/repo/.pi/guardme.yaml",
+          displayPath: setupConfig.scope === "global" ? "~/.pi/agent/guardme.yaml" : ".pi/guardme.yaml",
           policyKind: "default",
           existing: false,
           rules: 46,
@@ -186,8 +186,8 @@ test("policy write confirmation distinguishes Go back from Cancel", async () => 
   };
   const plan = {
     scope: "local",
-    targetPath: "/repo/.pi/agent/guardme.yaml",
-    displayPath: ".pi/agent/guardme.yaml",
+    targetPath: "/repo/.pi/guardme.yaml",
+    displayPath: ".pi/guardme.yaml",
     policyKind: "custom",
     existing: false,
     rules: 46,
@@ -230,8 +230,8 @@ test("policy write confirmation distinguishes Go back from Cancel", async () => 
 test("config TUI policy write success references the written policy instead of runtime settings", async () => {
   const plan = {
     scope: "local",
-    targetPath: "/repo/.pi/agent/guardme.yaml",
-    displayPath: ".pi/agent/guardme.yaml",
+    targetPath: "/repo/.pi/guardme.yaml",
+    displayPath: ".pi/guardme.yaml",
     policyKind: "default",
     existing: false,
     rules: 46,
@@ -260,9 +260,9 @@ test("config TUI policy write success references the written policy instead of r
     plan,
   );
 
-  assert.ok(rendered.some((line) => line.includes("wrote .pi/agent/guardme.yaml")));
+  assert.ok(rendered.some((line) => line.includes("wrote .pi/guardme.yaml")));
   assert.ok(rendered.some((line) => line.includes("Created project policy")));
-  assert.ok(rendered.some((line) => line.includes(".pi/agent/guardme.yaml")));
+  assert.ok(rendered.some((line) => line.includes(".pi/guardme.yaml")));
   assert.ok(rendered.some((line) => line.includes("General reloaded")));
   assert.equal(rendered.some((line) => line.includes("guardme-settings.json")), false);
 });
@@ -309,8 +309,8 @@ test("config TUI global policy write success references the written policy inste
 test("config TUI policy write success explains untrusted project-local loading", async () => {
   const plan = {
     scope: "local",
-    targetPath: "/repo/.pi/agent/guardme.yaml",
-    displayPath: ".pi/agent/guardme.yaml",
+    targetPath: "/repo/.pi/guardme.yaml",
+    displayPath: ".pi/guardme.yaml",
     policyKind: "default",
     existing: false,
     rules: 46,
@@ -339,7 +339,7 @@ test("config TUI policy write success explains untrusted project-local loading",
     plan,
   );
 
-  assert.ok(rendered.some((line) => line.includes("wrote .pi/agent/guardme.yaml")));
+  assert.ok(rendered.some((line) => line.includes("wrote .pi/guardme.yaml")));
   assert.ok(rendered.some((line) => line.includes("enable project trust to load")));
   assert.equal(rendered.some((line) => line.includes("guardme-settings.json")), false);
 });
@@ -347,8 +347,8 @@ test("config TUI policy write success explains untrusted project-local loading",
 test("config TUI policy write success keeps General actions interactive", async () => {
   const plan = {
     scope: "local",
-    targetPath: "/repo/.pi/agent/guardme.yaml",
-    displayPath: ".pi/agent/guardme.yaml",
+    targetPath: "/repo/.pi/guardme.yaml",
+    displayPath: ".pi/guardme.yaml",
     policyKind: "default",
     existing: false,
     rules: 46,
@@ -398,8 +398,8 @@ test("config TUI policy write success keeps General actions interactive", async 
 test("config TUI policy write success summary does not close on Enter", async () => {
   const plan = {
     scope: "local",
-    targetPath: "/repo/.pi/agent/guardme.yaml",
-    displayPath: ".pi/agent/guardme.yaml",
+    targetPath: "/repo/.pi/guardme.yaml",
+    displayPath: ".pi/guardme.yaml",
     policyKind: "default",
     existing: false,
     rules: 46,
@@ -447,8 +447,8 @@ test("config TUI policy write success summary does not close on Enter", async ()
 test("config TUI policy write success can launch another setup workflow", async () => {
   const plan = {
     scope: "local",
-    targetPath: "/repo/.pi/agent/guardme.yaml",
-    displayPath: ".pi/agent/guardme.yaml",
+    targetPath: "/repo/.pi/guardme.yaml",
+    displayPath: ".pi/guardme.yaml",
     policyKind: "append",
     existing: true,
     rules: 1,
@@ -919,8 +919,8 @@ test("config TUI opens warning and diagnostic detail screens and Esc returns to 
         severity: "error",
         code: "config.invalidRoot",
         message: "GuardMe policy must be a YAML object.",
-        source: { kind: "local", path: "/repo/.pi/agent/guardme.yaml" },
-        path: "/repo/.pi/agent/guardme.yaml",
+        source: { kind: "local", path: "/repo/.pi/guardme.yaml" },
+        path: "/repo/.pi/guardme.yaml",
         ruleIndex: 12,
       },
     ],

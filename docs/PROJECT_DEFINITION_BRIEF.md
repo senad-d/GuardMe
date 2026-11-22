@@ -61,7 +61,7 @@
 
 - Config source:
   - Global base: `~/.pi/agent/guardme.yaml`
-  - Local overlay: `.pi/agent/guardme.yaml`
+  - Local overlay: `.pi/guardme.yaml`
   - Arrays merged/unioned; local can tighten but never weaken global hard protections/denies.
 - Session state:
   - Warned-once fingerprints persisted in separate JSONL state.

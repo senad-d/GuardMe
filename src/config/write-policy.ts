@@ -1,10 +1,12 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 import { POLICY_VERSION } from "../constants.ts";
 import { POLICY_ACTIONS, type PolicyAction, type PolicyDiagnostic, type PolicyRequest, type UserDecision } from "../policy/action.ts";
 import { redactSensitiveText } from "../policy/redact.ts";
+import { gitLsFiles } from "../policy/shell-target-facts.ts";
+import { ensureGitIgnoreEntries } from "../state/warnings.ts";
 import { loadPolicyConfigFile, resolvePolicyConfigPaths } from "./load-config.ts";
 import { existingSymlinkInPath, isPathInsideRoot, writeTextAtomically } from "./safe-fs.ts";
 import {
@@ -657,5 +659,10 @@ async function writePolicyTextAtomically(
     throw new Error(safety.reason ?? "Unsafe GuardMe policy write target.");
   }
   await writeTextAtomically(path, text, ".guardme");
+  // A saved project rule must not show up in git status, unless the project
+  // chose to commit its policy. The repository's root .gitignore is not touched.
+  if (options.scope === "local" && (await gitLsFiles(directory, basename(path))).length === 0) {
+    await ensureGitIgnoreEntries(directory, [".gitignore", basename(path)]);
+  }
 }
 

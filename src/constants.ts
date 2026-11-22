@@ -9,7 +9,7 @@ export const BUILT_IN_GUARDED_TOOLS: Readonly<Record<GuardedToolContract, Guarde
   Object.fromEntries(GUARDED_TOOL_NAMES.map((name) => [name, name])) as Record<GuardedToolContract, GuardedToolContract>;
 
 export const GLOBAL_POLICY_PATH = "~/.pi/agent/guardme.yaml";
-export const LOCAL_POLICY_PATH = ".pi/agent/guardme.yaml";
+export const LOCAL_POLICY_PATH = ".pi/guardme.yaml";
 export const GLOBAL_STATE_PATH = "~/.pi/agent/guardme-state.jsonl";
 export const LOCAL_STATE_PATH = ".pi/agent/guardme-state.jsonl";
 export const LOCAL_SETTINGS_PATH = ".pi/agent/guardme-settings.json";

@@ -35,7 +35,7 @@ test("session_start loads policy and warning state, exposes status, and stores s
   await mkdir(join(home, ".pi", "agent"), { recursive: true });
   await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
   await writeFile(join(home, ".pi", "agent", "guardme.yaml"), "version: 1\nallowPaths:\n  - pattern: \"global/**\"\n", "utf8");
-  await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), "version: 1\nallowPaths:\n  - pattern: \"local/**\"\n", "utf8");
+  await writeFile(join(cwd, ".pi", "guardme.yaml"), "version: 1\nallowPaths:\n  - pattern: \"local/**\"\n", "utf8");
   const statePaths = resolveStatePaths(cwd, home);
   await appendWarningRecord(statePaths.localStatePath, {
     fingerprint: "sha256:lifecycle",
@@ -88,7 +88,7 @@ test("untrusted projects skip local policy, settings, and state while still load
   await mkdir(join(home, ".pi", "agent"), { recursive: true });
   await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
   await writeFile(join(home, ".pi", "agent", "guardme.yaml"), "version: 1\nallowPaths:\n  - pattern: \"global/**\"\n", "utf8");
-  await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), "version: 1\nallowPaths:\n  - pattern: \"local/**\"\n", "utf8");
+  await writeFile(join(cwd, ".pi", "guardme.yaml"), "version: 1\nallowPaths:\n  - pattern: \"local/**\"\n", "utf8");
   await writeGuardMeRuntimeSettings({ cwd, enabled: false });
   const statePaths = resolveStatePaths(cwd, home);
   await appendWarningRecord(statePaths.localStatePath, {

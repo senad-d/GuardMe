@@ -41,7 +41,7 @@ Deny rules always win over allow rules. Deny and dangerous command rules are eva
 Policy files:
 
 - global base: `~/.pi/agent/guardme.yaml`
-- project overlay: `.pi/agent/guardme.yaml`
+- project overlay: `.pi/guardme.yaml`
 
 Generated `write`/`edit` payloads, local scripts, and package-manager scripts loaded from `package.json` may be inspected in memory before mutation or execution. When Insecure edits is on, `write` and `edit` skip proposed content/script inspection after path policy allows the mutation, but local scripts and package-manager scripts are still inspected before `bash` execution. GuardMe stores only redacted command labels, fingerprints, reason codes, reasons, and matched policy metadata; it must not store full generated file content, full policy files, or command output. Do not put secrets in policy rules.
 

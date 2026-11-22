@@ -86,8 +86,8 @@ test("diagnostics render severity code message and source metadata", () => {
       severity: "error",
       code: "config.invalidRoot",
       message: "GuardMe policy must be a YAML object.",
-      source: { kind: "local", path: "/repo/.pi/agent/guardme.yaml" },
-      path: "/repo/.pi/agent/guardme.yaml",
+      source: { kind: "local", path: "/repo/.pi/guardme.yaml" },
+      path: "/repo/.pi/guardme.yaml",
       ruleIndex: 12,
     },
     {
@@ -99,7 +99,7 @@ test("diagnostics render severity code message and source metadata", () => {
 
   assert.ok(lines.includes("ERROR config.invalidRoot"));
   assert.ok(lines.includes("  Message  GuardMe policy must be a YAML object."));
-  assert.ok(lines.includes("  Source   local /repo/.pi/agent/guardme.yaml"));
+  assert.ok(lines.includes("  Source   local /repo/.pi/guardme.yaml"));
   assert.ok(lines.includes("  Source line 12"));
   assert.ok(lines.includes("  Action   Fix policy YAML or use Setup to recreate it."));
   assert.ok(lines.includes("WARNING state.malformedJsonl"));

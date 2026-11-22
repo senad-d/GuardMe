@@ -216,22 +216,23 @@ export async function appendStateRecord(path: string, record: GuardMeStateRecord
   await mkdir(directory, { recursive: true });
   await assertNoSymlinkInExistingPath(directory);
   await compactOversizedStateFile(path);
-  await ensureStateFileGitIgnore(path);
+  await ensureGitIgnoreEntries(dirname(path), [basename(path)]);
   await appendFileNoFollow(path, `${JSON.stringify(record)}\n`);
 }
 
-// ProtectMe writes its own .gitignore in the same directory, so the state file
-// name is appended to an existing one rather than only written to a new one.
-async function ensureStateFileGitIgnore(path: string): Promise<void> {
-  const ignorePath = join(dirname(path), ".gitignore");
-  const line = basename(path);
+// ProtectMe writes its own .gitignore in the same directory, so the names are
+// appended to an existing one rather than only written to a new one.
+export async function ensureGitIgnoreEntries(directory: string, entries: readonly string[]): Promise<void> {
+  const ignorePath = join(directory, ".gitignore");
   try {
     const existing = await readFile(ignorePath, "utf8").catch(() => "");
-    if (existing.split(/\r?\n/u).includes(line)) return;
+    const lines = new Set(existing.split(/\r?\n/u));
+    const missing = entries.filter((entry) => !lines.has(entry));
+    if (missing.length === 0) return;
     const lead = existing === "" || existing.endsWith("\n") ? "" : "\n";
-    await appendFileNoFollow(ignorePath, `${lead}${line}\n`);
+    await appendFileNoFollow(ignorePath, `${lead}${missing.join("\n")}\n`);
   } catch {
-    // A failed .gitignore write must not block the state record.
+    // A failed .gitignore write must not block the write it accompanies.
   }
 }
 

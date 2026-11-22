@@ -130,9 +130,9 @@ test("config path resolution uses approved global and local policy paths", async
   const paths = resolvePolicyConfigPaths(cwd, home);
 
   assert.equal(paths.globalPolicyPath, join(home, ".pi", "agent", "guardme.yaml"));
-  assert.equal(paths.localPolicyPath, join(cwd, ".pi", "agent", "guardme.yaml"));
+  assert.equal(paths.localPolicyPath, join(cwd, ".pi", "guardme.yaml"));
   assert.equal(paths.displayGlobalPolicyPath, "~/.pi/agent/guardme.yaml");
-  assert.equal(paths.displayLocalPolicyPath, ".pi/agent/guardme.yaml");
+  assert.equal(paths.displayLocalPolicyPath, ".pi/guardme.yaml");
 });
 
 test("missing config files are accepted and load built-in defaults", async () => {
@@ -155,7 +155,7 @@ test("policy reads refuse symlinked config paths", async () => {
   await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
   await mkdir(outside, { recursive: true });
   const outsidePolicy = join(outside, "guardme.yaml");
-  const localPolicy = join(cwd, ".pi", "agent", "guardme.yaml");
+  const localPolicy = join(cwd, ".pi", "guardme.yaml");
   await writeFile(outsidePolicy, "version: 1\nallowCommands:\n  - pattern: \"npm *\"\n", "utf8");
   try {
     await symlink(outsidePolicy, localPolicy);
@@ -390,7 +390,7 @@ allowCommands:
 test("malformed config returns diagnostics with file source information", async () => {
   const root = await mkdtemp(join(tmpdir(), "guardme-bad-config-"));
   await mkdir(join(root, ".pi", "agent"), { recursive: true });
-  const policyPath = join(root, ".pi", "agent", "guardme.yaml");
+  const policyPath = join(root, ".pi", "guardme.yaml");
   await writeFile(
     policyPath,
     `version: one
@@ -501,7 +501,7 @@ test("untrusted projects warn only when a local policy file exists", async () =>
   );
 
   await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
-  await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), "version: 1\napprovalMode: agent\n", "utf8");
+  await writeFile(join(cwd, ".pi", "guardme.yaml"), "version: 1\napprovalMode: agent\n", "utf8");
   const withFile = await loadGuardMeConfig({ cwd, homeDir: join(root, "home"), loadLocalPolicy: false });
   const warning = withFile.diagnostics.find((diagnostic) => diagnostic.code === "config.localPolicySkippedUntrustedProject");
 

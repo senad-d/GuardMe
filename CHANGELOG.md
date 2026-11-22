@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.14 - Unreleased
+
+Fixes from a Mission end-to-end run that raised 18 needless approval dialogs.
+
+- A call to a shell function defined in the same command is judged by the function's body with the call's arguments: `compose() { docker compose -p x "$@"; }; compose port linkbox 3000`. A body that uses `shift`, `set`, `getopts` or `$#` keeps the old path.
+- `: "${NAME:?unset}"` is allowed by the default rule `: *`; substitutions in it run as their own segments and redirects are still judged.
+- A redirect into the project or the session TMPDIR no longer turns a harmless command (echo, printf, test, cd, an in-project script) into a dangerous write; the command is judged with the redirect removed.
+- `sh -n script.sh` (also `-nv`) only checks syntax, so the script is no longer inspected line by line.
+- `fnm list*` is allowed by default.
+- The project policy moved from `.pi/agent/guardme.yaml` to `.pi/guardme.yaml`. The old file is no longer read; GuardMe warns once per session when it exists.
+- Writing the project policy adds `guardme.yaml` and `.gitignore` to `.pi/.gitignore`, unless git already tracks the policy.
+
 ## 0.3.13 - Unreleased
 
 Fixes from the Mission my-shop investigation 2026-11-14 (44 approval prompts in one project).

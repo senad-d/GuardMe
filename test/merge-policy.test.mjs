@@ -64,7 +64,7 @@ test("merge loads global rules before local overlay rules with source metadata",
 
   const merged = mergePolicyConfigs([
     sourcePolicyConfig("global", globalConfig, "/home/user/.pi/agent/guardme.yaml"),
-    sourcePolicyConfig("local", localConfig, "/repo/.pi/agent/guardme.yaml"),
+    sourcePolicyConfig("local", localConfig, "/repo/.pi/guardme.yaml"),
   ]);
 
   assert.deepEqual(
@@ -155,7 +155,7 @@ test("untrusted local policy cannot add guarded tool mappings", async () => {
   await mkdir(join(home, ".pi", "agent"), { recursive: true });
   await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
   await writeFile(join(home, ".pi", "agent", "guardme.yaml"), "version: 1\nguardedTools:\n  pwsh: bash\n", "utf8");
-  await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), "version: 1\nguardedTools:\n  patcher: edit\n", "utf8");
+  await writeFile(join(cwd, ".pi", "guardme.yaml"), "version: 1\nguardedTools:\n  patcher: edit\n", "utf8");
 
   const loaded = await loadGuardMeConfig({ cwd, homeDir: home, loadLocalPolicy: false });
 
@@ -171,7 +171,7 @@ test("loadGuardMeConfig returns merged built-in, global, and local policy source
   await mkdir(join(home, ".pi", "agent"), { recursive: true });
   await mkdir(join(cwd, ".pi", "agent"), { recursive: true });
   await writeFile(join(home, ".pi", "agent", "guardme.yaml"), "version: 1\nallowPaths:\n  - pattern: \"global/**\"\n", "utf8");
-  await writeFile(join(cwd, ".pi", "agent", "guardme.yaml"), "version: 1\nallowPaths:\n  - pattern: \"local/**\"\n", "utf8");
+  await writeFile(join(cwd, ".pi", "guardme.yaml"), "version: 1\nallowPaths:\n  - pattern: \"local/**\"\n", "utf8");
 
   const loaded = await loadGuardMeConfig({ cwd, homeDir: home });
 

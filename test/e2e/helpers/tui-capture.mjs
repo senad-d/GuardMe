@@ -581,7 +581,7 @@ function createCapturePlan(fixture, setupConfig) {
   return {
     scope: setupConfig.scope,
     targetPath: fixture.localPolicyPath,
-    displayPath: ".pi/agent/guardme.yaml",
+    displayPath: ".pi/guardme.yaml",
     policyKind: setupConfig.summary.includes("custom") ? "custom" : "default",
     existing: false,
     rules: countPolicyRules(setupConfig.config),
