@@ -89,6 +89,57 @@ test("I15d: sh -n only checks syntax, so the script is not inspected", () => {
   assert.deepEqual(detectLocalScriptExecutions("sh -x x.sh").map((script) => script.rawPath), ["x.sh"]);
 });
 
+test("I15a: redirects on a function call are judged as on a plain command", async () => {
+  const cwd = outsideRoot("guardme-i15a-redirect-");
+  for (const command of ['f() { echo "$1"; }; f key >> ~/.ssh/authorized_keys', "f() { echo hi; }; f > .pi/guardme.yaml", "f() { cat; }; f < ~/.ssh/id_rsa", 'f() { rm "$1"; }; f 2>/dev/null /etc/passwd']) {
+    assert.notEqual((await decide(command, cwd)).outcome, "allow", command);
+  }
+  assert.equal((await decide("f() { echo hi; }; f 2>/dev/null", cwd)).outcome, "allow");
+  assert.equal((await decide("f() { echo hi; }; f > out.txt", cwd)).outcome, "allow");
+});
+
+test("I15b: >& with a file target is a write, with a descriptor it is not", async () => {
+  const cwd = outsideRoot("guardme-i15b-fd-");
+  for (const command of [": >& /etc/x", "echo x >& /etc/x", "echo x 2>& /etc/x", "echo x &> /etc/x", "echo x &>> /etc/x"]) {
+    assert.notEqual((await decide(command, cwd)).outcome, "allow", command);
+  }
+  for (const command of ["echo x >&2", "echo x 2>&1", "echo x >&-"]) {
+    assert.equal((await decide(command, cwd)).outcome, "allow", command);
+  }
+});
+
+test("I15c: a script the same command writes is not run unapproved", async () => {
+  const cwd = outsideRoot("guardme-i15c-rewrite-");
+  await writeFile(join(cwd, "run.sh"), "#!/bin/sh\necho hi\n");
+  await chmod(join(cwd, "run.sh"), 0o755);
+  const write = "printf 'docker compose push\\n' > run.sh";
+  for (const run of ["./run.sh", "sh run.sh", "bash -x run.sh", ". ./run.sh", "source run.sh"]) {
+    assert.notEqual((await decide(`${write}; ${run}`, cwd)).outcome, "allow", run);
+  }
+  assert.equal((await decide(write, cwd)).outcome, "allow");
+  assert.equal((await decide("sh run.sh", cwd)).outcome, "allow");
+  assert.equal((await decide("test -f run.sh; ./run.sh", cwd)).outcome, "allow");
+  assert.equal((await decide("printf x > out.txt; ./run.sh", cwd)).outcome, "allow");
+});
+
+test("I15d: a + option can turn noexec off again, so the script is inspected", () => {
+  for (const command of ["bash -n +n x.sh", "bash -n +o noexec x.sh", "bash +o noexec -n x.sh", "bash -n +x -- x.sh", "bash +x x.sh"]) {
+    assert.deepEqual(detectLocalScriptExecutions(command).map((script) => script.rawPath), ["x.sh"], command);
+  }
+});
+
+test("I15d: shell option parsing skips values and stops at the script path", () => {
+  const cases = [
+    ["bash --rcfile -n x.sh", "x.sh"],
+    ["bash -o errexit x.sh -n", "x.sh"],
+    ["bash -- -n", "-n"],
+  ];
+  for (const [command, scriptPath] of cases) {
+    assert.deepEqual(detectLocalScriptExecutions(command).map((script) => script.rawPath), [scriptPath], command);
+  }
+  assert.deepEqual(detectLocalScriptExecutions("bash -n -o errexit -- x.sh"), []);
+});
+
 test("I15f: fnm list is allowed, fnm install still asks", async () => {
   const cwd = outsideRoot("guardme-i15f-");
   assert.equal((await decide("fnm list", cwd)).outcome, "allow");

@@ -18,6 +18,7 @@ import {
 import {
   commandRuleMatchCandidates,
   commandSegmentRuleMatchCandidates,
+  detectLocalScriptExecutions,
   extractExecutableCommandSegments,
   type CommandClassification,
   type ExecutableCommandSegment,
@@ -258,7 +259,7 @@ function evaluateCommandSegment(
   const trackedRemoval = trackedRemovalTarget(segment, request.trackedPaths);
   const runnerVariable = runnerVariableAssignment(segment);
   const codeFromInput = segmentRunsCodeFromInput(segment.normalizedText, request.command ?? "");
-  const builtinReason = builtinApprovalReason(trackedRemoval, runnerVariable, codeFromInput);
+  const builtinReason = builtinApprovalReason(trackedRemoval, runnerVariable, codeFromInput) ?? rewrittenScriptReason(segment, command, request);
   if (!exactAllow && builtinReason) {
     return { failure: builtinApprovalFailure(request, segment, builtinReason, failureIndex) };
   }
@@ -334,6 +335,20 @@ function builtinApprovalReason(trackedRemoval: string | undefined, runnerVariabl
   }
   // `curl x | python3 -`: the program text arrives at run time, so neither policy nor script inspection sees it.
   return codeFromInput ? "It runs code read from a pipe or redirect, which GuardMe cannot inspect before it runs." : undefined;
+}
+
+// `printf ... > run.sh; ./run.sh`: script inspection reads run.sh before this command rewrites it.
+// Compares lexical paths only; it does not follow symlinks or track directory renames.
+function rewrittenScriptReason(segment: ExecutableCommandSegment, command: CommandClassification | undefined, request: PolicyRequest): string | undefined {
+  const base = request.shellDirectory ?? request.cwd;
+  const written = new Set((command?.pathAccesses ?? [])
+    .filter((access) => access.action !== "read" && access.action !== "list")
+    .map((access) => resolve(base, access.rawPath)));
+  if (written.size === 0) {
+    return undefined;
+  }
+  const script = detectLocalScriptExecutions(segment.normalizedText).find((execution) => written.has(resolve(base, execution.rawPath)));
+  return script ? `This command also writes '${redactSensitiveText(script.rawPath)}', so GuardMe cannot inspect what the script will run.` : undefined;
 }
 
 const HARMLESS_SHELL_SEGMENT_RULE: MatchedRule = {

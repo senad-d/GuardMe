@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.15 - Unreleased
+
+- Apply path policy to shell function redirects and distinguish file targets from descriptor targets in `>&` redirects.
+- Require approval when a command writes to a script path and also runs that script.
+- Keep inspecting scripts when shell options can turn off syntax-only mode.
+
 ## 0.3.14 - Unreleased
 
 Fixes from a Mission end-to-end run that raised 18 needless approval dialogs.

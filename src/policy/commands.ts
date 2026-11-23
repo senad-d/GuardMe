@@ -215,6 +215,7 @@ const SHELL_CLOSING_SEGMENT_BOUNDARY_TOKENS = new Set([")", "}"]);
 const OUTPUT_REDIRECTION_TOKENS = new Set([">", ">>", ">|", "1>", "1>>", "1>|", "2>", "2>>", "2>|", "<>", "0<>"]);
 // Read/write redirections must satisfy both read and write path policy.
 const INPUT_REDIRECTION_TOKENS = new Set(["<", "0<", "<>", "0<>"]);
+const FD_DUPLICATION_TOKENS = new Set([">&", "1>&", "2>&"]);
 const REDIRECTION_TOKENS_WITH_TARGET = new Set([
   ...OUTPUT_REDIRECTION_TOKENS,
   ...INPUT_REDIRECTION_TOKENS,
@@ -653,16 +654,20 @@ function functionCallName(segment: readonly string[]): string | undefined {
 }
 
 // Segments a call to a function defined in the same command runs: the body with
-// `$@`, `$*` and `$1`..`$9` replaced by the call's arguments.
+// `$@`, `$*` and `$1`..`$9` replaced by the call's arguments. Redirections on
+// the call apply to the whole body, so they follow as a segment of their own,
+// which is judged as `{ body; } > file` is.
 function expandFunctionCall(segment: readonly string[], bodies: ReadonlyMap<string, readonly string[]>): readonly (readonly string[])[] | undefined {
   const index = segment.findIndex((token) => !SHELL_LEADING_CONTROL_WORDS.has(token));
   const body = bodies.get(segment[index] ?? "");
   if (!body) {
     return undefined;
   }
-  const args = segment.slice(index + 1);
+  const call = segment.slice(index + 1);
+  const args = stripRedirectionOperands(call);
+  const redirections = call.filter((token, position) => REDIRECTION_TOKENS_WITH_TARGET.has(token) || REDIRECTION_TOKENS_WITH_TARGET.has(call[position - 1] ?? ""));
   const expanded = body.flatMap((token) => (token === "$@" || token === "$*" ? args : [token.replaceAll(FUNCTION_POSITIONAL, (_match, braced?: string, bare?: string) => args[Number(braced ?? bare) - 1] ?? "")]));
-  return splitCommandSegments(expanded);
+  return [...splitCommandSegments(expanded), ...(redirections.length > 0 ? [redirections] : [])];
 }
 
 function segmentsWithFunctionCallsExpanded(definitions: ShellFunctionDefinitions): readonly (readonly string[])[] {
@@ -2287,26 +2292,33 @@ function localScriptExecutableTokenIndex(tokens: readonly string[]): number | un
   return undefined;
 }
 
+const SHELL_OPTIONS_WITH_VALUE = new Set(["-o", "+o", "--init-file", "--rcfile"]);
+
+// `-n` (also in a group such as `-nv`) only checks syntax. If any `+` option
+// is present, inspect conservatively: `+n` or `+o noexec` can turn noexec off.
 function shellWrapperScriptPath(args: readonly string[]): string | undefined {
-  for (let index = 0; index < args.length; index += 1) {
+  let syntaxCheckOnly = false;
+  let plusOption = false;
+  let index = 0;
+  for (; index < args.length; index += 1) {
     const arg = args[index] ?? "";
     if (arg === "--") {
-      return args[index + 1];
+      index += 1;
+      break;
     }
-    // `-n` (also in a group such as `-nv`) only checks syntax: the script runs nothing.
-    if (isShellCommandStringOption(arg) || (arg.includes("n") && /^-[A-Za-z]+$/u.test(arg))) {
+    if (isShellCommandStringOption(arg)) {
       return undefined;
     }
-    if (arg === "-o" || arg === "--init-file" || arg === "--rcfile") {
+    if (!arg.startsWith("-") && !arg.startsWith("+")) {
+      break;
+    }
+    plusOption ||= arg.startsWith("+");
+    syntaxCheckOnly ||= arg.includes("n") && /^-[A-Za-z]+$/u.test(arg);
+    if (SHELL_OPTIONS_WITH_VALUE.has(arg)) {
       index += 1;
-      continue;
     }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    return arg;
   }
-  return undefined;
+  return syntaxCheckOnly && !plusOption ? undefined : args[index];
 }
 
 function isLocalScriptExecutableToken(token: string): boolean {
@@ -2890,8 +2902,12 @@ function extractLikelyPathOperands(commandName: string | undefined, args: readon
   return [];
 }
 
+// `>& file` writes the file like `> file`; `>&2`, `2>&1` and `>&2-` only duplicate or move a descriptor.
 function extractOutputRedirectionTargets(tokens: readonly string[]): readonly string[] {
-  return extractFileRedirectionTargets(tokens, OUTPUT_REDIRECTION_TOKENS);
+  return [
+    ...extractFileRedirectionTargets(tokens, OUTPUT_REDIRECTION_TOKENS),
+    ...extractFileRedirectionTargets(tokens, FD_DUPLICATION_TOKENS).filter((target) => !/^(?:\d+-?|-)$/u.test(target)),
+  ];
 }
 
 function extractInputRedirectionTargets(tokens: readonly string[]): readonly string[] {
