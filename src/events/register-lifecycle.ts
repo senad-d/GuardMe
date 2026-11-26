@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { EXTENSION_DISPLAY_NAME, EXTENSION_STATUS_KEY } from "../constants.ts";
-import { loadGuardMeConfig } from "../config/load-config.ts";
+import { loadGuardMeConfig, setSessionMemoryPolicy } from "../config/load-config.ts";
 import { loadGuardMeRuntimeSettings } from "../config/runtime-settings.ts";
 import { loadWarningState } from "../state/warnings.ts";
 import {
@@ -30,6 +30,8 @@ export interface StartGuardMeSessionOptions {
 /** Register GuardMe session lifecycle handlers. */
 export function registerLifecycle(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
+    // Session rules end with the session they were approved in.
+    setSessionMemoryPolicy();
     await startGuardMeSession(ctx, {});
   });
 

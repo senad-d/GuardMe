@@ -11,7 +11,7 @@ GuardMe enforces IAM-like, deny-first policy for Pi LLM tool calls routed throug
 
 Global policy loads first. Project-local policy, runtime settings, and generated state are loaded only when the project is trusted. GuardMe runtime settings are project-local; missing settings mean GuardMe is active with Insecure edits on. Existing settings that omit `insecureEdits` also default to on, while an explicit `"insecureEdits": false` keeps proposed content/script scanning enabled. `{ "version": 1, "enabled": false }` means GuardMe is off for that project after trust, and `{ "version": 1, "enabled": true, "insecureEdits": true }` means `write`/`edit` skip proposed content/script scanning while path protections and other guarded tools remain enforced. Invalid settings fail safe to active with Insecure edits off and report diagnostics. Missing policy files are accepted at runtime, and GuardMe still applies built-in defaults. Use `/guardme` Setup to create or update `~/.pi/agent/guardme.yaml` or `.pi/guardme.yaml`; policy writes are explicit user actions, refuse symlinked policy paths, and use owner-only permissions for new files. Policy, runtime settings, and state reads fail closed for symlinked GuardMe paths or oversized files. In untrusted projects, new warned-once state is recorded in the global state file for the active cwd rather than trusting project-local state, and saved project settings apply after project trust is enabled.
 
-Approval behavior is configured by the top-level policy key `approvalMode` (`auto`, `interactive`, `agent`, or `block`). Built-in `auto` is the safe default. Global policy can set the mode, trusted project policy overrides global policy, and `GUARDME_APPROVAL_MODE` overrides both for the current process. Invalid policy or environment values produce error diagnostics and resolve to `block` for the invalid source/override; an untrusted project's mode is not loaded.
+Approval behavior is configured by the top-level policy key `approvalMode` (`auto`, `interactive`, `list`, `agent`, or `block`). Built-in `auto` is the safe default. Global policy can set the mode, trusted project policy overrides global policy, and `GUARDME_APPROVAL_MODE` overrides both for the current process. Invalid policy or environment values produce error diagnostics and resolve to `block` for the invalid source/override; an untrusted project's mode is not loaded.
 
 ## Built-in defaults and starter policies
 
@@ -120,6 +120,7 @@ Supported path actions are `read`, `list`, `write`, `edit`, `delete`, `move`, an
 
 - `auto`: TUI sessions may show GuardMe's existing approval UI. RPC, JSON, print, and unknown/non-interactive modes block without invoking an approval dialog method.
 - `interactive`: GuardMe may use the relevant approval method when Pi reports UI support. This is required for an RPC controller that intentionally handles `extension_ui_request` and sends `extension_ui_response`.
+- `list`: as `interactive`, and a TUI session gets Pi's plain selection list (`ui.select`) instead of GuardMe's drawn box. The list starts on its first row and its rows are the fixed labels below, so an orchestrator can answer with arrow keys and Enter without reading the screen.
 - `agent`: no session ever shows approval UI. Every run mode (TUI included) uses an in-memory turn gate: the first matching attempt in the current process and same-turn duplicates block with a short agent-facing notification; an identical fingerprint retried in a later agent turn receives one automatic allow-once. That approval saves no YAML rule and appends an `automatic-decision` audit record. Dangerous actions consume the approval immediately, so each repetition needs a new block/retry cycle; a policy-missing command stays allowed for the rest of the session after its first automatic approval, with every reuse audited.
 - `block`: GuardMe never invokes `ui.custom`, `ui.select`, or another interactive approval method.
 
@@ -158,18 +159,40 @@ Outside-project writes, edits, deletes, moves, and renames require explicit `all
 
 For repeated dangerous-but-not-hard-forbidden actions or repeated policy-missing shell/script commands, GuardMe shows an approval flow only when the resolved approval mode permits it:
 
-- Allow once
-- Deny once
-- Allow + save project rule
-- Deny + save project rule
-- Allow + save global rule
-- Deny + save global rule
+| Label | Decision | Lasts | Saved in |
+| --- | --- | --- | --- |
+| `Allow once`, `Deny once` | `allow-once`, `deny-once` | this call | nothing |
+| `Allow for session`, `Deny for session` | `allow-session`, `deny-session` | the Pi session | the session source |
+| `Allow for project`, `Deny for project` | `allow-local`, `deny-local` | always, in this project | `.pi/guardme.yaml` |
+| `Allow globally`, `Deny globally` | `allow-global`, `deny-global` | always | `~/.pi/agent/guardme.yaml` |
+
+The labels are fixed; orchestrators answer by them. The deny group is listed first unless the risk is low, so the first row, where the cursor starts, is `Deny once` for a medium or dangerous call and `Allow once` for a low-risk one. A scope the request may not use is left out: the project scope in an untrusted project, and every saving scope for a command with secret-like values.
+
+### What a saved choice writes
+
+The prompt names the rule on its `Saves:` line and shows the blocked segment apart from the whole command.
+
+- A policy-missing command saves its kind: the executable and ` *` (`pdftotext -v` saves `pdftotext *`). For tools whose first argument is a subcommand (`git`, `gh`, `npm`, `pnpm`, `yarn`, `npx`, `docker`, `kubectl`, `cargo`, `go`, `pip`, `apt`, `apt-get`, `brew`, `systemctl`, `terraform`, `make`) the subcommand stays in the rule: `git push origin x` saves `git push *`.
+- The exact command is saved for a dangerous, delete, move or rename segment, a script or interpreter finding, a wrapper or interpreter (`sudo`, `env`, `xargs`, `sh`, `bash`, `python`, `node` and the like), and a command whose name is not a plain word. A wildcard allow rule never covers a dangerous segment anyway.
+- A path request saves the file's directory (`src/api/**`) when the file is inside the project and the risk is not dangerous, otherwise the exact path.
+
+### Session source
+
+Session rules are a fourth policy source, merged after the project policy. Deny still wins over allow. Without `GUARDME_SESSION_POLICY` they live in memory and end with the Pi session. When `GUARDME_SESSION_POLICY` names a file, session rules are read from and appended to that file (same YAML shape as a policy file), so an orchestrator can give every agent of one run the same file. Put the file where agents cannot write. Rules from this source are recorded with `source.kind: "session"`.
+
+### Shared policy across processes
+
+Before each guarded call GuardMe compares the size and modification time of the global, project and session files with what it loaded, and reloads when one changed. A rule saved by another Pi process or by hand applies to running sessions. In a linked git worktree the project policy is the `.pi/guardme.yaml` of the main checkout, for reading and for saving, so a project rule outlives the worktree it was approved in.
+
+### Event for orchestrators
+
+While a prompt is open GuardMe emits `herdr:blocked` on Pi's extension event bus: `{ active: true, id, label, guard }` when it opens and `{ active: false, id }` when it closes. `guard` holds `name: "guardme"`, `kind` (`command` or `path`), `title`, `risk`, `tool`, `command` (redacted, at most 4000 characters), `subject` (the blocked segment or the paths), `reason`, `rule` (`pattern`, `covers`, `exact`, `scopes`) and `options` (the labels in drawn order).
 
 Escape or the configured selection-cancel binding behaves as deny once. The custom TUI follows Pi's configured selection bindings and uses a height-bounded compact layout in short panes; every decision remains reachable and the current decision, count, description, and safe cancellation guidance remain visible. Under `auto` outside TUI, under `block`, or whenever required UI support is absent, approval-required calls fail closed as ordinary blocked tool results. GuardMe does not synthesize a user decision, write an allow/deny rule, or append a decision record. The result includes bounded, redacted `WARNINGS & DECISIONS` guidance with risk, tool/action, target or command, reason, matched rules, explicit approval unavailability, safer alternatives, and a direction not to retry the identical request unchanged. Persisted warned fingerprints follow the same mode check and cannot force RPC UI under `auto`.
 
 Under explicit `agent` mode, blocks instead explain that the identical request may be retried in a later agent turn. The gate is process-local and keyed by policy fingerprint plus GuardMe's monotonically tracked Pi turn. The automatic allow-once is consumed before another execution can use it, never writes policy, and is audited separately from `decision` records created by users. For dangerous actions, a call after consumption starts a new block/later-turn-retry cycle; approved policy-missing commands keep a session-scoped allowance instead, and each reuse appends its own audit record.
 
-Saved interactive decisions append narrow YAML rules, reload policy for the current session, and record a decision in JSONL state. For policy-missing or dangerous compound commands, persistent allow decisions save the failed segment as an exact command rule by default rather than saving the whole compound. Warning records include reason codes such as `dangerous-command`, `policy-missing-command`, `script-content-denied`, and `local-script-uninspectable`; blocked deny decisions are also recorded with redacted reason and matched-rule metadata for the `/guardme` warning details screen. Model-facing follow-up guidance includes a `WARNINGS & DECISIONS` block with the reason and relevant matched rules. GuardMe refuses to save allow rules for hard-denied actions, refuses to persist command rules containing secret-like values, validates loaded JSONL state enums before using records, skips project-local policy/settings/state until the project is trusted, refuses symlinked or oversized policy/settings/state reads, refuses policy and runtime-settings writes that would follow symbolic links out of the expected config path, and refuses generated state writes through project-local state symlinks.
+Saved interactive decisions append narrow YAML rules, reload policy for the current session, and record a decision in JSONL state. For policy-missing or dangerous compound commands, persistent decisions save a rule for the failed segment rather than for the whole compound. Decision records carry `toolName`, the redacted `target`, and the saved `rule`. Warning records include reason codes such as `dangerous-command`, `policy-missing-command`, `script-content-denied`, and `local-script-uninspectable`; blocked deny decisions are also recorded with redacted reason and matched-rule metadata for the `/guardme` warning details screen. Model-facing follow-up guidance includes a `WARNINGS & DECISIONS` block with the reason and relevant matched rules. GuardMe refuses to save allow rules for hard-denied actions, never writes a command rule containing secret-like values, validates loaded JSONL state enums before using records, skips project-local policy/settings/state until the project is trusted, refuses symlinked or oversized policy/settings/state reads, refuses policy and runtime-settings writes that would follow symbolic links out of the expected config path, and refuses generated state writes through project-local state symlinks.
 
 ## `/guardme` General pane
 

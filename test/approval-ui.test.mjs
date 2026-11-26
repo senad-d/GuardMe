@@ -10,6 +10,8 @@ import { USER_DECISIONS } from "../src/policy/action.ts";
 import { evaluateGuardedToolCall } from "../src/events/register-guard.ts";
 import { startGuardMeSession, stopGuardMeSession } from "../src/events/register-lifecycle.ts";
 
+const RULE = { pattern: "rm -rf build", covers: "this exact command", exact: true, scopes: ["once", "session", "project", "global"] };
+
 function needsDecisionFixture() {
   const request = {
     toolName: "bash",
@@ -58,6 +60,7 @@ test("auto mode suppresses approval UI in RPC even when UI methods exist", async
       hasUI: true,
       mode: "rpc",
       approvalMode: "auto",
+      rule: RULE,
       ui: {
         custom: async () => {
           interactiveCalls += 1;
@@ -168,17 +171,23 @@ test("block mode suppresses every approval UI method in TUI", async () => {
 
 test("approval select fallback returns the selected decision", async () => {
   const { request, decision } = needsDecisionFixture();
-  const label = `${APPROVAL_CHOICES[0].label} — ${APPROVAL_CHOICES[0].description}`;
   const ctx = {
     cwd: request.cwd,
     hasUI: true,
     mode: "rpc",
     approvalMode: "interactive",
+    rule: RULE,
     ui: {
       select: async (title, options) => {
         assert.match(title, /GuardMe approval required/);
-        assert.equal(options.length, 6);
-        return label;
+        assert.match(title, /Target: SECRET_KEY=<redacted> rm -rf build/);
+        assert.match(title, /Saves: rm -rf build \(this exact command\)/);
+        // Dangerous: the deny group leads, so the list's first row is "Deny once".
+        assert.deepEqual(options, [
+          "Deny once", "Deny for session", "Deny for project", "Deny globally",
+          "Allow once", "Allow for session", "Allow for project", "Allow globally",
+        ]);
+        return "Allow once";
       },
     },
   };
@@ -187,27 +196,27 @@ test("approval select fallback returns the selected decision", async () => {
 
   assert.deepEqual(
     APPROVAL_CHOICES.map((choice) => choice.decision),
-    ["allow-once", "deny-once", "allow-local", "deny-local", "allow-global", "deny-global"],
+    ["allow-once", "allow-session", "allow-local", "allow-global", "deny-once", "deny-session", "deny-local", "deny-global"],
   );
   assert.deepEqual(result, { kind: "decision", decision: "allow-once" });
 });
 
 test("approval falls back to native select when custom TUI creation fails", async () => {
   const { request, decision } = needsDecisionFixture();
-  const selectedLabel = `${APPROVAL_CHOICES[4].label} — ${APPROVAL_CHOICES[4].description}`;
   const result = await requestApprovalDecision(
     {
       cwd: request.cwd,
       hasUI: true,
       mode: "tui",
       approvalMode: "auto",
+      rule: RULE,
       ui: {
         custom: async () => {
           throw new Error("custom TUI unavailable");
         },
         select: async (_title, options) => {
-          assert.equal(options.length, 6);
-          return selectedLabel;
+          assert.equal(options.length, 8);
+          return "Allow globally";
         },
       },
     },
@@ -226,6 +235,7 @@ test("native approval cancellation denies once", async () => {
       hasUI: true,
       mode: "rpc",
       approvalMode: "interactive",
+      rule: RULE,
       ui: { select: async () => undefined },
     },
     request,
@@ -243,6 +253,7 @@ test("TUI approval frame renders facts, redacts secrets, and escape denies once"
     hasUI: true,
     mode: "tui",
     approvalMode: "auto",
+    rule: RULE,
     ui: {
       custom: async (factory, options) => {
         assert.equal(options?.overlay, undefined);
@@ -270,7 +281,8 @@ test("TUI approval frame renders facts, redacts secrets, and escape denies once"
   assert.equal(rendered.some((line) => line.includes("…") || line.includes("...")), false);
   assert.ok(rendered.some((line) => line.includes("Risk:")));
   assert.ok(rendered.some((line) => line.includes("dangerousCommands")));
-  assert.ok(rendered.some((line) => line.includes("Allow + save project rule")));
+  assert.ok(rendered.some((line) => line.includes("Allow for project")));
+  assert.ok(rendered.some((line) => line.includes("Saves: rm -rf build (this exact command)")));
   assert.ok(rendered.some((line) => line.includes("Block this call only")));
   assert.equal(rendered.some((line) => line.includes("supersecret")), false);
   assert.equal(rendered.some((line) => line.includes("hunter2")), false);
@@ -303,6 +315,7 @@ test("TUI approval frame strips terminal control sequences from untrusted text",
     hasUI: true,
     mode: "tui",
     approvalMode: "auto",
+    rule: RULE,
     ui: {
       custom: async (factory) => {
         const component = factory(
@@ -331,6 +344,7 @@ test("TUI approval selection wraps between first and last choices", async () => 
     hasUI: true,
     mode: "tui",
     approvalMode: "auto",
+    rule: RULE,
     ui: {
       custom: async (factory) => {
         let selected;
@@ -352,7 +366,7 @@ test("TUI approval selection wraps between first and last choices", async () => 
 
   const result = await requestApprovalDecision(ctx, request, decision);
 
-  assert.deepEqual(result, { kind: "decision", decision: "deny-global" });
+  assert.deepEqual(result, { kind: "decision", decision: "allow-local" });
 });
 
 test("TUI approval uses injected selection keybindings for navigation, confirm, and cancel", async () => {
@@ -370,6 +384,7 @@ test("TUI approval uses injected selection keybindings for navigation, confirm, 
     hasUI: true,
     mode: "tui",
     approvalMode: "auto",
+    rule: RULE,
     ui: {
       custom: async (factory) => {
         call += 1;
@@ -407,6 +422,7 @@ test("TUI approval stays width- and height-bounded in short and narrow panes", a
     hasUI: true,
     mode: "tui",
     approvalMode: "auto",
+    rule: RULE,
     ui: {
       custom: async (factory) => {
         const component = factory(
@@ -431,15 +447,15 @@ test("TUI approval stays width- and height-bounded in short and narrow panes", a
   for (const rendered of renderedBySize) {
     assert.ok(rendered.lines.length <= approvalRowBudget(rendered.rows));
     assert.ok(rendered.lines.every((line) => visibleWidth(line) <= rendered.width));
-    assert.ok(rendered.lines.some((line) => line.includes("2/6")));
-    assert.doesNotMatch(rendered.lines[0] ?? "", /\d\/6/, "the cursor position stays out of the title");
+    assert.ok(rendered.lines.some((line) => line.includes("1/8")));
+    assert.doesNotMatch(rendered.lines[0] ?? "", /\d\/8/, "the cursor position stays out of the title");
     assert.ok(rendered.lines.some((line) => line.includes("Deny once")));
     assert.ok(rendered.lines.some((line) => /Esc.*Deny once|Esc cancel = Deny once/.test(line)));
   }
   assert.notEqual(renderedBySize[0].lines.length, renderedBySize[1].lines.length);
 });
 
-test("short TUI approval keeps all six decisions reachable and reports omitted rules", async () => {
+test("short TUI approval keeps all eight decisions reachable and reports omitted rules", async () => {
   const { request, decision } = needsDecisionFixture();
   const manyRulesDecision = {
     ...decision,
@@ -455,6 +471,7 @@ test("short TUI approval keeps all six decisions reachable and reports omitted r
     hasUI: true,
     mode: "tui",
     approvalMode: "auto",
+    rule: RULE,
     ui: {
       custom: async (factory) => {
         const terminal = { rows: 16 };
@@ -487,7 +504,6 @@ test("guard uses approval fallback for repeated dangerous actions", async () => 
   const home = join(root, "home");
   const cwd = join(root, "project");
   await mkdir(cwd, { recursive: true });
-  const allowLabel = `${APPROVAL_CHOICES[0].label} — ${APPROVAL_CHOICES[0].description}`;
   const ctx = {
     cwd,
     hasUI: true,
@@ -496,7 +512,7 @@ test("guard uses approval fallback for repeated dangerous actions", async () => 
     ui: {
       setStatus: () => {},
       notify: () => {},
-      select: async () => allowLabel,
+      select: async () => "Allow once",
     },
   };
   await startGuardMeSession(ctx, {
@@ -510,4 +526,33 @@ test("guard uses approval fallback for repeated dangerous actions", async () => 
   assert.equal(first?.block, true);
   assert.equal(second, undefined);
   stopGuardMeSession(ctx);
+});
+
+test("list mode uses the plain list in TUI and leaves out scopes the request may not use", async () => {
+  const { request, decision } = needsDecisionFixture();
+  let customCalls = 0;
+  const result = await requestApprovalDecision(
+    {
+      cwd: request.cwd,
+      hasUI: true,
+      mode: "tui",
+      approvalMode: "list",
+      rule: { ...RULE, scopes: ["once"] },
+      ui: {
+        custom: async () => {
+          customCalls += 1;
+        },
+        select: async (title, options) => {
+          assert.match(title, /Saves: nothing/);
+          assert.deepEqual(options, ["Deny once", "Allow once"]);
+          return "Allow once";
+        },
+      },
+    },
+    request,
+    { ...decision, risk: "medium" },
+  );
+
+  assert.equal(customCalls, 0);
+  assert.deepEqual(result, { kind: "decision", decision: "allow-once" });
 });

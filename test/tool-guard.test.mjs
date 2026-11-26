@@ -1274,8 +1274,28 @@ test("an interactive approval reports the agent blocked to Herdr while the dialo
   const result = await evaluateGuardedToolCall(call, ctx);
 
   assert.match(result?.reason ?? "", /deny-once/);
-  assert.deepEqual(seenDuringDialog, [["herdr:blocked", { active: true, label: "GuardMe approval: bash" }]]);
-  assert.deepEqual(emitted.at(-1), ["herdr:blocked", { active: false }]);
+  const [name, opened] = seenDuringDialog[0];
+  assert.equal(seenDuringDialog.length, 1);
+  assert.equal(name, "herdr:blocked");
+  assert.deepEqual({ ...opened, id: 0 }, {
+    active: true,
+    id: 0,
+    label: "GuardMe approval: bash",
+    guard: {
+      name: "guardme",
+      kind: "command",
+      title: "Command needs approval",
+      risk: "dangerous",
+      tool: "bash",
+      command: "find build -delete",
+      subject: "find build -delete",
+      reason: opened.guard.reason,
+      rule: { pattern: "find build -delete", covers: "this exact command", exact: true, scopes: ["once", "session", "project", "global"] },
+      options: ["Deny once", "Deny for session", "Deny for project", "Deny globally", "Allow once", "Allow for session", "Allow for project", "Allow globally"],
+    },
+  });
+  assert.match(opened.guard.reason, /find build -delete/);
+  assert.deepEqual(emitted.at(-1), ["herdr:blocked", { active: false, id: opened.id }]);
   stopGuardMeSession(ctx);
 });
 

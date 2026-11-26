@@ -7,7 +7,7 @@ export type PathPolicyAction = (typeof PATH_POLICY_ACTIONS)[number];
 export const RISK_LEVELS = ["low", "medium", "dangerous", "hard-denied"] as const;
 export type RiskLevel = (typeof RISK_LEVELS)[number];
 
-export const RULE_SOURCE_KINDS = ["builtin", "global", "local", "default", "user"] as const;
+export const RULE_SOURCE_KINDS = ["builtin", "global", "local", "session", "default", "user"] as const;
 export type RuleSourceKind = (typeof RULE_SOURCE_KINDS)[number];
 
 export const POLICY_RULE_CATEGORIES = [
@@ -45,10 +45,12 @@ export type PolicyReasonCode = (typeof POLICY_REASON_CODES)[number] | (string & 
 
 export const USER_DECISIONS = [
   "allow-once",
-  "deny-once",
+  "allow-session",
   "allow-local",
-  "deny-local",
   "allow-global",
+  "deny-once",
+  "deny-session",
+  "deny-local",
   "deny-global",
 ] as const;
 export type UserDecision = (typeof USER_DECISIONS)[number];
@@ -173,6 +175,8 @@ interface PolicyDecisionBase {
   readonly recommendation?: string;
   readonly reasonCode?: PolicyReasonCode;
   readonly suggestedCommandRule?: string;
+  /** The failing shell segment as written, when suggestedCommandRule generalises it. */
+  readonly commandSegment?: string;
 }
 
 export interface AllowPolicyDecision extends PolicyDecisionBase {

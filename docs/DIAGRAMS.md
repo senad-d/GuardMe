@@ -37,12 +37,13 @@ Examples with built-in defaults and no additional policy:
 | --- | --- |
 | `auto` (default) | Ask in TUI when approval UI is available. RPC, JSON, print, unknown modes and missing UI fail closed. |
 | `interactive` | Ask when the relevant approval UI is available. RPC requires a controller that handles `extension_ui_request` and responds with `extension_ui_response`. No UI means blocked. |
+| `list` | As `interactive`, with Pi's plain selection list in TUI instead of the drawn box. |
 | `agent` (explicit opt-in) | Never prompt, even in TUI. Block the first in-process attempt and same-turn duplicates. An identical fingerprint in a later agent turn can receive automatic allow-once. |
 | `block` | Never prompt or automatically approve an approval-required call. Already-allowed calls still proceed. |
 
 Hard denials, explicit command/path denies, protected credentials/paths, and missing outside-project permissions are not approval candidates. Approval does not skip any remaining checks on the tool call.
 
-**Human decisions:** allow or deny once, or save a narrow project/global rule. Cancellation means deny once. Saved rules reload policy; project rules require trust, and unsafe persistence (such as secret-bearing command rules) is refused. Missing UI does not invent a user decision or save an approval. Warnings and actual decisions are recorded in redacted JSONL state.
+**Human decisions:** allow or deny once, for the session, for the project or globally. A saved rule names the kind of command (`pdftotext *`), or the exact command when it is dangerous. Cancellation means deny once. Saved rules reload policy; project rules require trust, and unsafe persistence (such as secret-bearing command rules) is refused. Missing UI does not invent a user decision or save an approval. Warnings and actual decisions are recorded in redacted JSONL state.
 
 **Automatic decisions:** `agent` mode writes `automatic-decision` audit entries, never YAML rules. Dangerous actions need a new block/later-turn retry cycle for each use. An approved policy-missing command keeps a session-scoped allowance, with each reuse audited and protections still evaluated. Old warning state cannot arm the in-memory turn gate. A turn is one assistant response and its tool calls, not necessarily a new user message. Child processes are not automatically opted in.
 

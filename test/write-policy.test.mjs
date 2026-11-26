@@ -7,7 +7,6 @@ import test from "node:test";
 import { loadPolicyConfigFile, resolvePolicyConfigPaths } from "../src/config/load-config.ts";
 import { createEmptyPolicyConfig } from "../src/config/schema.ts";
 import { persistUserDecisionRule, writePolicyConfigFile } from "../src/config/write-policy.ts";
-import { APPROVAL_CHOICES } from "../src/ui/approval-modal.ts";
 import { evaluateGuardedToolCall } from "../src/events/register-guard.ts";
 import { startGuardMeSession, stopGuardMeSession } from "../src/events/register-lifecycle.ts";
 
@@ -217,8 +216,7 @@ test("guard persists selected global allow rule from approval flow", async () =>
   const cwd = join(root, "project");
   await mkdir(cwd, { recursive: true });
   const paths = resolvePolicyConfigPaths(cwd, home);
-  const allowGlobal = APPROVAL_CHOICES.find((choice) => choice.decision === "allow-global");
-  const label = `${allowGlobal.label} — ${allowGlobal.description}`;
+  const label = "Allow globally";
   let selectCalls = 0;
   const ctx = {
     cwd,
@@ -252,14 +250,14 @@ test("guard persists selected global allow rule from approval flow", async () =>
   stopGuardMeSession(ctx);
 });
 
-test("approval flow refuses to persist secret-like command rules", async () => {
+test("approval flow offers no saved rule for a command with secret-like values", async () => {
+  let offered = [];
   const root = await mkdtemp(join(tmpdir(), "guardme-write-guard-secret-command-"));
   const home = join(root, "home");
   const cwd = join(root, "project");
   await mkdir(cwd, { recursive: true });
   const paths = resolvePolicyConfigPaths(cwd, home);
-  const allowGlobal = APPROVAL_CHOICES.find((choice) => choice.decision === "allow-global");
-  const label = `${allowGlobal.label} — ${allowGlobal.description}`;
+  const label = "Allow globally";
   const ctx = {
     cwd,
     hasUI: true,
@@ -268,7 +266,11 @@ test("approval flow refuses to persist secret-like command rules", async () => {
     ui: {
       setStatus: () => {},
       notify: () => {},
-      select: async () => label,
+      select: async (title, options) => {
+        offered = options;
+        assert.match(title, /Saves: nothing/);
+        return label;
+      },
     },
   };
   await startGuardMeSession(ctx, {
@@ -276,11 +278,12 @@ test("approval flow refuses to persist secret-like command rules", async () => {
     environment: { GUARDME_APPROVAL_MODE: "interactive" },
   });
 
-  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "custom-tool --token secret-value" } }, ctx);
-  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "custom-tool --token secret-value" } }, ctx);
+  // "kubectl --token ..." has no subcommand to generalise to, so the rule would be the literal command.
+  await evaluateGuardedToolCall({ toolName: "bash", input: { command: "kubectl --token secret-value" } }, ctx);
+  const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "kubectl --token secret-value" } }, ctx);
 
   assert.equal(second?.block, true);
-  assert.match(second?.reason ?? "", /secret-like values/i);
+  assert.deepEqual(offered, ["Deny once", "Allow once"]);
   await assert.rejects(readFile(paths.globalPolicyPath, "utf8"));
   stopGuardMeSession(ctx);
 });
@@ -364,8 +367,7 @@ test("guard persists selected local allow rule for a missing compound segment", 
   const cwd = join(root, "project");
   await mkdir(cwd, { recursive: true });
   const paths = resolvePolicyConfigPaths(cwd, home);
-  const allowLocal = APPROVAL_CHOICES.find((choice) => choice.decision === "allow-local");
-  const label = `${allowLocal.label} — ${allowLocal.description}`;
+  const label = "Allow for project";
   const ctx = {
     cwd,
     hasUI: true,
@@ -390,7 +392,7 @@ test("guard persists selected local allow rule for a missing compound segment", 
   assert.equal(second, undefined);
   assert.equal(third, undefined);
   assert.match(yaml, /allowCommands:/);
-  assert.match(yaml, /pattern: "unknown-tool"/);
+  assert.match(yaml, /pattern: "unknown-tool \*"/);
   assert.doesNotMatch(yaml, /pwd && unknown-tool/);
   stopGuardMeSession(ctx);
 });
@@ -401,8 +403,7 @@ test("guard persists selected local allow rule from approval flow", async () => 
   const cwd = join(root, "project");
   await mkdir(cwd, { recursive: true });
   const paths = resolvePolicyConfigPaths(cwd, home);
-  const allowLocal = APPROVAL_CHOICES.find((choice) => choice.decision === "allow-local");
-  const label = `${allowLocal.label} — ${allowLocal.description}`;
+  const label = "Allow for project";
   let selectCalls = 0;
   const ctx = {
     cwd,
@@ -436,14 +437,14 @@ test("guard persists selected local allow rule from approval flow", async () => 
   stopGuardMeSession(ctx);
 });
 
-test("guard refuses to save project rules in untrusted projects", async () => {
+test("guard does not offer project rules in untrusted projects", async () => {
+  let offered = [];
   const root = await mkdtemp(join(tmpdir(), "guardme-write-untrusted-"));
   const home = join(root, "home");
   const cwd = join(root, "project");
   await mkdir(cwd, { recursive: true });
   const paths = resolvePolicyConfigPaths(cwd, home);
-  const allowLocal = APPROVAL_CHOICES.find((choice) => choice.decision === "allow-local");
-  const label = `${allowLocal.label} — ${allowLocal.description}`;
+  const label = "Allow for project";
   const ctx = {
     cwd,
     hasUI: true,
@@ -452,7 +453,10 @@ test("guard refuses to save project rules in untrusted projects", async () => {
     ui: {
       setStatus: () => {},
       notify: () => {},
-      select: async () => label,
+      select: async (_title, options) => {
+        offered = options;
+        return label;
+      },
     },
   };
   await startGuardMeSession(ctx, {
@@ -463,8 +467,9 @@ test("guard refuses to save project rules in untrusted projects", async () => {
   await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
   const second = await evaluateGuardedToolCall({ toolName: "bash", input: { command: "find build -delete" } }, ctx);
 
-  assert.ok(second);
-  assert.match(second.reason, /not trusted/i);
+  // The project scope is not offered, so the answer counts as a cancelled prompt.
+  assert.equal(offered.includes(label), false);
+  assert.match(second.reason, /deny-once/);
   await assert.rejects(readFile(paths.localPolicyPath, "utf8"));
   stopGuardMeSession(ctx);
 });
@@ -487,8 +492,7 @@ test("persisting an approval decision preserves existing YAML comments", async (
     ].join("\n"),
     "utf8",
   );
-  const allowLocal = APPROVAL_CHOICES.find((choice) => choice.decision === "allow-local");
-  const label = `${allowLocal.label} — ${allowLocal.description}`;
+  const label = "Allow for project";
   const ctx = {
     cwd,
     hasUI: true,

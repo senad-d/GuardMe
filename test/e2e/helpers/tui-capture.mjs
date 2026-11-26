@@ -504,6 +504,7 @@ async function captureApprovalModal(snapshot) {
       hasUI: true,
       mode: "tui",
       approvalMode: "auto",
+      rule: { pattern: request.command, covers: "this exact command", exact: true, scopes: ["once", "session", "project", "global"] },
       ui: {
         custom: async (factory) => {
           let selected;

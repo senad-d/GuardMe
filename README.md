@@ -167,7 +167,7 @@ guardedTools:
 
 The built-ins `bash`, `read`, `write`, `edit`, `grep`, `find`, and `ls` are always guarded and cannot be remapped. Global aliases load before aliases from trusted project policy; identical mappings are deduplicated, while a conflicting later mapping reports an error and leaves the earlier mapping effective. Untrusted project aliases are not loaded. Unknown third-party tools are not inferred and remain outside GuardMe enforcement until explicitly mapped. Inspect the effective built-ins and aliases in `/guardme diagnostics` or the Policies pane.
 
-Policy YAML also accepts the validated top-level key `approvalMode: auto | interactive | agent | block`. Built-in `auto` is the safe default: only TUI sessions can request GuardMe approval UI. The explicit `agent` mode never opens an approval prompt in any run mode: GuardMe blocks the first attempt with a short agent-facing notification and automatically allows one identical retry in a later agent turn. Trusted project policy overrides global policy, and the process environment variable `GUARDME_APPROVAL_MODE` overrides both for managed child launches.
+Policy YAML also accepts the validated top-level key `approvalMode: auto | interactive | list | agent | block`. Built-in `auto` is the safe default: only TUI sessions can request GuardMe approval UI. The explicit `agent` mode never opens an approval prompt in any run mode: GuardMe blocks the first attempt with a short agent-facing notification and automatically allows one identical retry in a later agent turn. Trusted project policy overrides global policy, and the process environment variable `GUARDME_APPROVAL_MODE` overrides both for managed child launches.
 
 YAML rule sections:
 
@@ -267,6 +267,7 @@ Approval modes:
 
 - `auto` (default): preserve TUI approval; RPC, JSON, print, and other non-interactive modes fail closed without an approval UI request.
 - `interactive`: allow approval UI when Pi exposes the relevant method, including RPC controllers that implement `extension_ui_request` / `extension_ui_response`.
+- `list`: like `interactive`, and in TUI the prompt is Pi's plain selection list instead of GuardMe's drawn box. For orchestrators that answer the prompt with arrow keys.
 - `agent`: never show an approval prompt in any run mode (TUI included); block the first in-process attempt and same-turn duplicates with a short notification, then automatically allow-once only an identical fingerprint retried in a later agent turn.
 - `block`: never call an interactive GuardMe approval UI method.
 
@@ -280,16 +281,18 @@ GUARDME_APPROVAL_MODE=agent pi --mode json ...
 
 Pi exposes the current run mode but no reliable subagent marker, so GuardMe never auto-detects children or enables `agent` mode for them. Set `GUARDME_APPROVAL_MODE=agent` only in explicitly managed child processes. Use `GUARDME_APPROVAL_MODE=block` to force all children to fail closed, or `GUARDME_APPROVAL_MODE=interactive` only when an RPC controller explicitly completes the extension approval round trip. Invalid YAML or environment values report diagnostics and resolve safely to `block` for that source/override.
 
-Interactive approval choices:
+Interactive approval choices are allow or deny, each in one of four scopes:
 
-- Allow once
-- Deny once
-- Allow + save project rule
-- Deny + save project rule
-- Allow + save global rule
-- Deny + save global rule
+| Choice | Lasts | Saved in |
+| --- | --- | --- |
+| Allow once / Deny once | this call | nothing |
+| Allow for session / Deny for session | until the Pi session ends | memory, or the file named by `GUARDME_SESSION_POLICY` |
+| Allow for project / Deny for project | always, in this project | `.pi/guardme.yaml` of the main checkout |
+| Allow globally / Deny globally | always, everywhere | `~/.pi/agent/guardme.yaml` |
 
-Saved decisions append narrow YAML rules, reload policy for the current session, and record redacted state. GuardMe refuses to save allow rules for hard-denied actions and refuses persistent command rules that contain secret-like values.
+The prompt shows what a saved choice writes on its `Saves:` line. It is the kind of command, not the literal text: `pdftotext -v` saves `pdftotext *`, `git push origin x` saves `git push *`. Dangerous, delete, move and script commands save the exact command. A command with secret-like values offers only the two "once" choices. The deny choices are listed first unless the risk is low, so the cursor never starts on an allow for a risky call. Details: [docs/POLICY.md](docs/POLICY.md#approval-choices).
+
+Saved decisions append YAML rules and record redacted state. A running session reloads its policy when a policy file changes, so a rule saved by another Pi process applies without a restart. GuardMe refuses to save allow rules for hard-denied actions.
 
 ---
 

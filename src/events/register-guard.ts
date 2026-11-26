@@ -37,13 +37,14 @@ import {
   type ExtractedScriptCommand,
   type ScriptContentExtractionResult,
 } from "../policy/script-content.ts";
-import { loadGuardMeConfig } from "../config/load-config.ts";
-import { persistUserDecisionRule } from "../config/write-policy.ts";
-import { appendAutomaticDecisionRecord, appendDecisionRecord, appendWarningRecord } from "../state/warnings.ts";
+import { loadGuardMeConfig, policyFilesSignature } from "../config/load-config.ts";
+import { type ApprovalRule, approvalRule, persistUserDecisionRule } from "../config/write-policy.ts";
+import { type PersistedDecisionTarget, appendAutomaticDecisionRecord, appendDecisionRecord, appendWarningRecord } from "../state/warnings.ts";
 import {
   APPROVAL_UNAVAILABLE_NEXT_STEP,
   formatAgentModeBlockReason,
   formatApprovalUnavailableBlockReason,
+  approvalChoices,
   isAllowDecision,
   requestApprovalDecision,
   type ApprovalUiContext,
@@ -84,7 +85,7 @@ export interface ToolCallBlockResult {
 }
 
 type ScriptInspectionSourceKind = "script-content" | "local-script";
-type PersistedPolicyTarget = "none" | "local-yaml" | "global-yaml";
+type PersistedPolicyTarget = PersistedDecisionTarget;
 type StateFileSourceKind = "global" | "local";
 
 const AGENT_APPROVAL_NEXT_STEP =
@@ -140,6 +141,9 @@ interface ScriptContentInspectionOptions extends ScriptInspectionSource {
 // blocked while a "herdr:blocked" request is active, so an orchestrator sees a
 // pending approval instead of a tool call that is still running.
 let approvalEvents: Pick<ExtensionAPI["events"], "emit"> | undefined;
+// Pairs the open and close event of one approval prompt.
+let approvalEventId = 0;
+const MAX_EVENT_COMMAND_LENGTH = 4000;
 
 /** Register GuardMe tool-call enforcement handlers. */
 export function registerGuard(pi: ExtensionAPI): void {
@@ -156,21 +160,22 @@ export async function evaluateGuardedToolCall(
   event: GuardedToolCallEvent,
   ctx: GuardedToolCallContext,
 ): Promise<ToolCallBlockResult | undefined> {
-  const state = getGuardMeSessionState();
+  const loadedState = getGuardMeSessionState();
   const guardedTools: Readonly<Record<string, GuardedToolContract>> =
-    state?.config.config.guardedTools ?? getLastKnownGuardedTools() ?? BUILT_IN_GUARDED_TOOLS;
+    loadedState?.config.config.guardedTools ?? getLastKnownGuardedTools() ?? BUILT_IN_GUARDED_TOOLS;
   const contract = Object.hasOwn(guardedTools, event.toolName)
     ? guardedTools[event.toolName]
     : undefined;
   if (!contract) {
     return undefined;
   }
-  if (!state) {
+  if (!loadedState) {
     return block("GuardMe blocked the tool call because policy state is not initialized.");
   }
-  if (!state.enabled) {
+  if (!loadedState.enabled) {
     return undefined;
   }
+  const state = await reloadPolicyIfChanged(loadedState);
 
   const mapped = await mapToolCallToPolicyRequest(event, ctx.cwd, state.homeDir, contract);
   if ("error" in mapped) {
@@ -319,12 +324,14 @@ async function handleApprovalDecision(
     return block(formatAgentModeBlockReason(request, decision, AGENT_APPROVAL_BLOCK_REASON, AGENT_APPROVAL_NEXT_STEP));
   }
 
-  approvalEvents?.emit("herdr:blocked", { active: true, label: `GuardMe approval: ${request.toolName}` });
+  const rule = approvalRule(request, decision, state.projectTrusted);
+  const id = ++approvalEventId;
+  approvalEvents?.emit("herdr:blocked", { active: true, id, label: `GuardMe approval: ${request.toolName}`, guard: approvalEventGuard(request, decision, rule) });
   let approval: Awaited<ReturnType<typeof requestApprovalDecision>>;
   try {
-    approval = await requestApprovalDecision(toApprovalContext(ctx, state.config.config.approvalMode), request, decision);
+    approval = await requestApprovalDecision(toApprovalContext(ctx, state.config.config.approvalMode, rule), request, decision);
   } finally {
-    approvalEvents?.emit("herdr:blocked", { active: false });
+    approvalEvents?.emit("herdr:blocked", { active: false, id });
   }
   if (approval.kind === "blocked") {
     recordDecisionGuidance(request, decision, APPROVAL_UNAVAILABLE_NEXT_STEP);
@@ -336,7 +343,11 @@ async function handleApprovalDecision(
     return block(persisted.reason);
   }
   await reloadPolicyAfterPersistentDecision(state, persisted.persistedTo);
-  await appendApprovalDecisionRecord(state, approval.decision, persisted.persistedTo, decision.fingerprint);
+  await appendApprovalDecisionRecord(state, approval.decision, persisted.persistedTo, decision.fingerprint, {
+    toolName: request.toolName,
+    target: describePolicyRequestTarget(request),
+    ...(persisted.persistedTo === "none" ? {} : { rule: rule.pattern }),
+  });
   refreshGuardMeStatus(ctx);
   if (isAllowDecision(approval.decision)) {
     return undefined;
@@ -344,6 +355,23 @@ async function handleApprovalDecision(
   const reason = `GuardMe denied this action by user decision: ${approval.decision}.`;
   recordDecisionGuidance(request, decision, reason);
   return block(reason);
+}
+
+/** Card data for orchestrators: what is asked, why, and what a saved choice writes. */
+function approvalEventGuard(request: PolicyRequest, decision: PolicyDecision, rule: ApprovalRule): Record<string, unknown> {
+  const paths = request.targets.map((target) => target.raw).filter(Boolean).join(", ");
+  return {
+    name: "guardme",
+    kind: request.command ? "command" : "path",
+    title: request.command ? "Command needs approval" : "File access needs approval",
+    risk: decision.risk,
+    tool: request.toolName,
+    ...(request.command ? { command: redactSensitiveText(request.command).slice(0, MAX_EVENT_COMMAND_LENGTH) } : {}),
+    subject: redactSensitiveText(decision.commandSegment ?? request.command ?? paths),
+    reason: redactSensitiveText(decision.reason),
+    rule,
+    options: approvalChoices(decision.risk, rule.scopes).map((choice) => choice.label),
+  };
 }
 
 type AgentModeApprovalResolution = "not-applicable" | "blocked" | "allowed";
@@ -1279,7 +1307,12 @@ export async function persistApprovalRuleIfRequested(
     return { saved: true, reason: "No persistent rule requested.", persistedTo: "none" };
   }
 
-  const scope = userDecision.endsWith("global") ? "global" : "local";
+  let scope: "global" | "session" | "local" = "local";
+  if (userDecision.endsWith("global")) {
+    scope = "global";
+  } else if (userDecision.endsWith("session")) {
+    scope = "session";
+  }
   if (scope === "local" && !state.projectTrusted) {
     return {
       saved: false,
@@ -1288,7 +1321,8 @@ export async function persistApprovalRuleIfRequested(
       persistedTo: "none",
     };
   }
-  const policyPath = scope === "global" ? state.config.paths.globalPolicyPath : state.config.paths.localPolicyPath;
+  const paths = state.config.paths;
+  const policyPath = { global: paths.globalPolicyPath, local: paths.localPolicyPath, session: paths.sessionPolicyPath }[scope];
   const persistenceRequest = policyDecision.suggestedCommandRule && request.command
     ? { ...request, command: policyDecision.suggestedCommandRule, targets: [{ kind: "command" as const, raw: policyDecision.suggestedCommandRule, normalized: policyDecision.suggestedCommandRule }] }
     : request;
@@ -1300,14 +1334,25 @@ export async function persistApprovalRuleIfRequested(
     decision: userDecision,
     request: persistenceRequest,
     hardDenied: policyDecision.risk === "hard-denied",
+    exactPath: policyDecision.risk === "dangerous",
     reason: `Saved from GuardMe approval decision '${userDecision}'.`,
   });
 
   return {
     saved: result.saved,
     reason: result.reason ?? (result.saved ? "Saved GuardMe policy rule." : "Unable to save GuardMe policy rule."),
-    persistedTo: scope === "global" ? "global-yaml" : "local-yaml",
+    persistedTo: ({ global: "global-yaml", local: "local-yaml", session: "session" } as const)[scope],
   };
+}
+
+/** Picks up a rule another agent or the user saved while this session runs. */
+async function reloadPolicyIfChanged(state: GuardMeSessionState): Promise<GuardMeSessionState> {
+  // No signature: the state was not loaded from the policy files (tests).
+  if (state.config.signature === undefined || (await policyFilesSignature(state.config.paths)) === state.config.signature) {
+    return state;
+  }
+  await reloadPolicyAfterPersistentDecision(state, "session");
+  return currentSessionStateFor(state) ?? state;
 }
 
 export async function reloadPolicyAfterPersistentDecision(
@@ -1318,7 +1363,12 @@ export async function reloadPolicyAfterPersistentDecision(
     return;
   }
 
-  const config = await loadGuardMeConfig({ cwd: state.cwd, homeDir: state.homeDir, loadLocalPolicy: state.projectTrusted });
+  const config = await loadGuardMeConfig({
+    cwd: state.cwd,
+    homeDir: state.homeDir,
+    loadLocalPolicy: state.projectTrusted,
+    environment: state.config.environment,
+  });
   const diagnostics = [...state.settings.diagnostics, ...config.diagnostics, ...state.warnings.diagnostics];
   setGuardMeSessionState({
     ...state,
@@ -1333,6 +1383,7 @@ export async function appendApprovalDecisionRecord(
   userDecision: UserDecision,
   persistedTo: PersistedPolicyTarget,
   fingerprint: string,
+  details: { readonly toolName?: string; readonly target?: string; readonly rule?: string } = {},
 ): Promise<void> {
   const globalDecision = persistedTo === "global-yaml" || userDecision.endsWith("global") || (!state.projectTrusted && persistedTo === "none");
   const path = globalDecision ? state.warnings.paths.globalStatePath : state.warnings.paths.localStatePath;
@@ -1344,6 +1395,7 @@ export async function appendApprovalDecisionRecord(
       decision: userDecision,
       persistedTo,
       reason: `User selected ${userDecision}.`,
+      ...details,
     });
     const currentState = currentSessionStateFor(state);
     if (!currentState) {
@@ -1515,7 +1567,7 @@ function recordDecisionGuidance(request: PolicyRequest, decision: PolicyDecision
 }
 
 function isPersistentUserDecision(decision: UserDecision): boolean {
-  return decision === "allow-local" || decision === "deny-local" || decision === "allow-global" || decision === "deny-global";
+  return !decision.endsWith("-once");
 }
 
 function isEditMutationContract(contract: GuardedToolContract): boolean {
@@ -1864,12 +1916,14 @@ async function normalizeTargets(
 function toApprovalContext(
   ctx: GuardedToolCallContext,
   approvalMode: ApprovalUiContext["approvalMode"],
+  rule: ApprovalRule,
 ): ApprovalUiContext {
   return {
     cwd: ctx.cwd,
     hasUI: ctx.hasUI,
     mode: ctx.mode,
     approvalMode,
+    rule,
     ui: isRecord(ctx.ui) ? ctx.ui : {},
   } as ApprovalUiContext;
 }

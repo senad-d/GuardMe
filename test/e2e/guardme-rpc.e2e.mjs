@@ -407,7 +407,7 @@ async function assertDangerousDenyLocalPersistence(client, fixture) {
   assert.match(resultText(end), /Recursive force deletion|GuardMe coaching|dangerous/i);
   assert.equal(await pathExists(fixture.denyTargetPath), true);
 
-  const deny = await runScenario(client, "approval-dangerous-deny", { uiHandler: createApprovalUiHandler("Deny + save project rule") });
+  const deny = await runScenario(client, "approval-dangerous-deny", { uiHandler: createApprovalUiHandler("Deny for project") });
   assert.ok(deny.uiRequests.some((request) => request.method === "select" && /GuardMe approval required/i.test(request.title ?? "")));
   end = expectToolEnd(deny.events, "bash", { error: true });
   assert.match(resultText(end), /user decision|deny-local|denied/i);
@@ -441,7 +441,7 @@ async function assertDangerousApprovalPersistence(client, fixture) {
   assert.equal(await fixture.readLocalPolicy(), beforeYaml, "deny once must not persist a YAML rule");
 
   await fixture.recreateApprovalTarget();
-  const allow = await runScenario(client, "approval-dangerous-delete", { uiHandler: createApprovalUiHandler("Allow + save project rule") });
+  const allow = await runScenario(client, "approval-dangerous-delete", { uiHandler: createApprovalUiHandler("Allow for project") });
   end = expectToolEnd(allow.events, "bash", { error: false });
   assert.equal(resultText(end).includes("GuardMe blocked"), false);
   assert.equal(await pathExists(fixture.approvalTargetPath), false, "allow-local should let the delete run");

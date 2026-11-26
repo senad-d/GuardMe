@@ -992,7 +992,7 @@ function validateApprovalMode(
     configDiagnostic(
       "error",
       "config.invalidApprovalMode",
-      "GuardMe approvalMode must be one of: auto, interactive, agent, block. GuardMe is using block mode for this policy source.",
+      "GuardMe approvalMode must be one of: auto, interactive, list, agent, block. GuardMe is using block mode for this policy source.",
       source,
     ),
   );

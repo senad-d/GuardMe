@@ -22,10 +22,12 @@ test("policy decisions and user decisions model the approved outcomes", () => {
   assert.deepEqual(POLICY_DECISION_OUTCOMES, ["allow", "deny", "coach", "needs-user-decision"]);
   assert.deepEqual(USER_DECISIONS, [
     "allow-once",
-    "deny-once",
+    "allow-session",
     "allow-local",
-    "deny-local",
     "allow-global",
+    "deny-once",
+    "deny-session",
+    "deny-local",
     "deny-global",
   ]);
   assert.equal(isUserDecision("allow-local"), true);
@@ -34,7 +36,7 @@ test("policy decisions and user decisions model the approved outcomes", () => {
 
 test("policy domain module remains independent from Pi runtime APIs", async () => {
   const source = await readFile(new URL("../src/policy/action.ts", import.meta.url), "utf8");
-  assert.deepEqual(RULE_SOURCE_KINDS, ["builtin", "global", "local", "default", "user"]);
+  assert.deepEqual(RULE_SOURCE_KINDS, ["builtin", "global", "local", "session", "default", "user"]);
   assert.doesNotMatch(source, /@earendil-works\/pi-coding-agent/);
   assert.doesNotMatch(source, /ExtensionAPI/);
 });

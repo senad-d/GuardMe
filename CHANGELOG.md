@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0 - Unreleased
+
+Approval prompts for orchestrated agents (Mission guard cards).
+
+- Eight approval choices with fixed labels: `Allow once`, `Allow for session`, `Allow for project`, `Allow globally`, and the same four for deny. The old labels (`Allow + save project rule`, ...) are gone.
+- New session scope: rules that last for the Pi session, in memory, or in the file named by `GUARDME_SESSION_POLICY` so every agent of one orchestrated run shares them. Rules from it have `source.kind: "session"`.
+- A saved rule is the kind of command, not the literal text: `pdftotext -v` saves `pdftotext *`, `git push origin x` saves `git push *`. Dangerous, delete, move, script, wrapper and interpreter commands still save the exact command. A file inside the project saves its directory (`src/api/**`).
+- The prompt shows the blocked segment apart from the whole command and a `Saves:` line with the rule. The plain selection list now has the same facts; before it had only a title.
+- The deny choices are listed first unless the risk is low. Scopes a request may not use are left out: the project scope in an untrusted project, every saving scope for a command with secret-like values.
+- New `approvalMode: list` (`GUARDME_APPROVAL_MODE=list`): the plain selection list in TUI instead of the drawn box.
+- `herdr:blocked` carries an `id` and a `guard` object with the card data (title, risk, tool, command, subject, reason, rule, options).
+- A running session reloads its policy when a policy file changed on disk, so a rule saved by another Pi process applies without a restart.
+- In a linked git worktree the project policy is `.pi/guardme.yaml` of the main checkout.
+- Decision records carry `toolName`, `target` and `rule`.
+
 ## 0.3.16 - Unreleased
 
 Fixes from the Mission refusal review 2026-11-26: 116 refusals in two weeks, about 100 of them harmless.

@@ -220,6 +220,7 @@ test("approval dialog starts on Allow once for low risk and Deny once otherwise"
       hasUI: true,
       mode: "tui",
       approvalMode: "auto",
+      rule: { pattern: "make build *", covers: "every make build command", exact: false, scopes: ["once", "session", "project", "global"] },
       ui: {
         custom: async (factory) => {
           const component = factory({ requestRender: () => {} }, { fg: (_color, text) => text, bold: (text) => text }, {}, (value) => {

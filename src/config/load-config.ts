@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { lstat, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -19,6 +20,8 @@ import {
 export interface GuardMeConfigPaths {
   readonly globalPolicyPath: string;
   readonly localPolicyPath: string;
+  /** Set by GUARDME_SESSION_POLICY: a rule file shared by every agent of one orchestrated run. */
+  readonly sessionPolicyPath?: string;
   readonly displayGlobalPolicyPath: typeof GLOBAL_POLICY_PATH;
   readonly displayLocalPolicyPath: typeof LOCAL_POLICY_PATH;
 }
@@ -38,6 +41,10 @@ export interface LoadedGuardMeConfig {
   readonly paths: GuardMeConfigPaths;
   readonly files: readonly PolicyConfigFileResult[];
   readonly diagnostics: readonly PolicyDiagnostic[];
+  /** Size and mtime of the policy files when they were read; a change means another process saved a rule. */
+  readonly signature?: string;
+  /** The environment the config was resolved with; a reload uses it again. */
+  readonly environment?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface LoadGuardMeConfigOptions {
@@ -48,11 +55,49 @@ export interface LoadGuardMeConfigOptions {
 }
 
 const MAX_POLICY_FILE_BYTES = 1024 * 1024;
+export const SESSION_POLICY_ENV = "GUARDME_SESSION_POLICY";
 
-export function resolvePolicyConfigPaths(cwd: string, homeDir = homedir()): GuardMeConfigPaths {
+// Session rules of this Pi process when GUARDME_SESSION_POLICY names no file.
+let sessionMemoryPolicy: GuardMePolicyConfig = createEmptyPolicyConfig();
+
+export function getSessionMemoryPolicy(): GuardMePolicyConfig {
+  return sessionMemoryPolicy;
+}
+
+export function setSessionMemoryPolicy(config: GuardMePolicyConfig = createEmptyPolicyConfig()): void {
+  sessionMemoryPolicy = config;
+}
+
+/**
+ * A linked git worktree uses the project policy of its main checkout, so a
+ * project rule saved from a worktree outlives it and applies to the others.
+ */
+export function projectPolicyRoot(cwd: string): string {
+  const root = resolve(cwd);
+  try {
+    const gitEntry = readFileSync(join(root, ".git"), "utf8");
+    if (!gitEntry.startsWith("gitdir:")) {
+      return root;
+    }
+    const gitDir = resolve(root, gitEntry.slice("gitdir:".length).trim());
+    const commonDir = resolve(gitDir, readFileSync(join(gitDir, "commondir"), "utf8").trim());
+    return basename(commonDir) === ".git" ? dirname(commonDir) : root;
+  } catch {
+    // No .git, a main checkout (.git is a directory) or a submodule (no commondir).
+    return root;
+  }
+}
+
+export function resolvePolicyConfigPaths(
+  cwd: string,
+  homeDir = homedir(),
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): GuardMeConfigPaths {
+  const sessionPolicyPath = environment[SESSION_POLICY_ENV];
   return {
     globalPolicyPath: join(resolve(homeDir), ".pi", "agent", "guardme.yaml"),
-    localPolicyPath: join(resolve(cwd), ".pi", "guardme.yaml"),
+    localPolicyPath: join(projectPolicyRoot(cwd), ".pi", "guardme.yaml"),
+    ...(sessionPolicyPath ? { sessionPolicyPath: resolve(sessionPolicyPath) } : {}),
     displayGlobalPolicyPath: GLOBAL_POLICY_PATH,
     displayLocalPolicyPath: LOCAL_POLICY_PATH,
   };
@@ -87,16 +132,19 @@ export async function loadPolicyConfigFile(
 }
 
 export async function loadGuardMeConfig(options: LoadGuardMeConfigOptions): Promise<LoadedGuardMeConfig> {
-  const paths = resolvePolicyConfigPaths(options.cwd, options.homeDir);
+  const paths = resolvePolicyConfigPaths(options.cwd, options.homeDir, options.environment);
+  const signature = await policyFilesSignature(paths);
   const builtInConfig = createBuiltInDefaultPolicy();
   const globalFile = await loadPolicyConfigFile(paths.globalPolicyPath, "global");
   const localFile = options.loadLocalPolicy === false
     ? await skippedLocalPolicyConfigFile(paths.localPolicyPath)
     : await loadPolicyConfigFile(paths.localPolicyPath, "local");
-  const files = [globalFile, localFile];
+  const sessionFile = paths.sessionPolicyPath ? await loadPolicyConfigFile(paths.sessionPolicyPath, "session") : undefined;
+  const files = [globalFile, localFile, ...(sessionFile ? [sessionFile] : [])];
   const merged = mergePolicyConfigs([
     sourcePolicyConfig("builtin", builtInConfig),
     ...files.filter((file) => file.found).map((file) => sourcePolicyConfig(file.sourceKind, file.config, file.path)),
+    ...(sessionFile ? [] : [sourcePolicyConfig("session", sessionMemoryPolicy)]),
   ]);
   const approvalMode = resolveApprovalModeEnvironment(merged.config.approvalMode, options.environment);
   const diagnostics = [
@@ -112,7 +160,18 @@ export async function loadGuardMeConfig(options: LoadGuardMeConfigOptions): Prom
     paths,
     files,
     diagnostics,
+    signature,
+    ...(options.environment ? { environment: options.environment } : {}),
   };
+}
+
+export async function policyFilesSignature(paths: GuardMeConfigPaths): Promise<string> {
+  const stats = await Promise.all(
+    [paths.globalPolicyPath, paths.localPolicyPath, paths.sessionPolicyPath].map(async (path) => (
+      path ? stat(path).catch(() => undefined) : undefined
+    )),
+  );
+  return stats.map((entry) => (entry ? `${entry.size}:${entry.mtimeMs}` : "-")).join("|");
 }
 
 async function skippedLocalPolicyConfigFile(path: string): Promise<PolicyConfigFileResult> {

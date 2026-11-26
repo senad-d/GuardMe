@@ -1226,7 +1226,7 @@ function commandHasMultipleShellSegments(command: string): boolean {
   return /(?:\n|\r|;|&&|\|\||\|&|(?<![<>])\|(?![|&])|(?<![&<>|])&(?![&>|]))/u.test(command);
 }
 
-function hasCommandGlob(pattern: string): boolean {
+export function hasCommandGlob(pattern: string): boolean {
   return /[*?]/u.test(pattern);
 }
 
@@ -1347,7 +1347,10 @@ function coachableDecision(options: {
   readonly recommendation: string;
 }): PolicyDecision {
   const fingerprint = createPolicyFingerprint(options.request);
-  const suggestedCommandRule = options.request.command ? normalizeCommandText(options.request.command) : undefined;
+  const commandSegment = options.request.command ? normalizeCommandText(options.request.command) : undefined;
+  // Dangerous, delete, move and script segments are only ever allowed by an exact rule.
+  const generalise = options.reasonCode === "policy-missing-command" && options.risk === "medium" && !options.request.requiresExactCommandAllow;
+  const suggestedCommandRule = commandSegment && generalise ? suggestCommandRule(commandSegment) : commandSegment;
   if (options.warnedFingerprints?.has(fingerprint)) {
     return {
       outcome: "needs-user-decision",
@@ -1360,7 +1363,7 @@ function coachableDecision(options: {
       choices: USER_DECISIONS,
       recommendation: options.recommendation,
       reasonCode: options.reasonCode,
-      ...(suggestedCommandRule ? { suggestedCommandRule } : {}),
+      ...(suggestedCommandRule ? { suggestedCommandRule, commandSegment } : {}),
     };
   }
 
@@ -1375,8 +1378,31 @@ function coachableDecision(options: {
     guidance: options.guidance,
     recommendation: options.recommendation,
     reasonCode: options.reasonCode,
-    ...(suggestedCommandRule ? { suggestedCommandRule } : {}),
+    ...(suggestedCommandRule ? { suggestedCommandRule, commandSegment } : {}),
   };
+}
+
+// Tools whose first argument names the command: the rule keeps it ("git push *").
+const SUBCOMMAND_TOOLS = new Set([
+  "git", "gh", "npm", "pnpm", "yarn", "npx", "docker", "kubectl", "cargo", "go", "pip", "apt", "apt-get", "brew", "systemctl", "terraform", "make",
+]);
+// Wrappers and interpreters run whatever their arguments say, so "<name> *" would allow anything.
+const EXACT_ONLY_COMMANDS = new Set([
+  "sudo", "env", "xargs", "sh", "bash", "zsh", "eval", "exec", "nohup", "time", "ssh", "python", "python3", "node", "perl", "ruby",
+]);
+const PLAIN_COMMAND_WORD = /^[\w.@+/-]+$/u;
+
+/** The rule an approval saves for a shell segment: the kind of command, not its literal text. */
+export function suggestCommandRule(segment: string): string {
+  const text = normalizeCommandText(segment);
+  const [name, subcommand] = tokenizeShellCommand(text);
+  if (!name || !PLAIN_COMMAND_WORD.test(name) || EXACT_ONLY_COMMANDS.has(basename(name))) {
+    return text;
+  }
+  if (!SUBCOMMAND_TOOLS.has(name)) {
+    return `${name} *`;
+  }
+  return subcommand && /^[a-z][\w:-]*$/u.test(subcommand) ? `${name} ${subcommand} *` : text;
 }
 
 function credentialLikePathPattern(path: NormalizedPolicyPath): string | undefined {

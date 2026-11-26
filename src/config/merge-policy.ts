@@ -11,7 +11,7 @@ import type {
 } from "./schema.ts";
 import { createEmptyPolicyConfig } from "./schema.ts";
 
-export type PolicyConfigSourceKind = Extract<RuleSourceKind, "builtin" | "global" | "local">;
+export type PolicyConfigSourceKind = Extract<RuleSourceKind, "builtin" | "global" | "local" | "session">;
 
 export interface PolicyConfigSource {
   readonly kind: PolicyConfigSourceKind;

@@ -1,4 +1,5 @@
 import type { ApprovalMode } from "../config/approval-mode.ts";
+import type { ApprovalRule, ApprovalScope } from "../config/write-policy.ts";
 import type { PolicyDecision, PolicyRequest, UserDecision } from "../policy/action.ts";
 import { isUserDecision } from "../policy/action.ts";
 import { fitCell, type ConfigFrameTheme } from "./config-frame.ts";
@@ -19,25 +20,46 @@ export interface ApprovalUiContext {
     readonly custom?: <T>(factory: (...args: any[]) => unknown, options?: Record<string, unknown>) => Promise<T>;
     readonly select?: (title: string, options: readonly string[]) => Promise<string | undefined>;
   };
+  /** The rule a saved choice writes; limits and orders the choices. */
+  readonly rule: ApprovalRule;
 }
 
 export interface ApprovalChoice {
   readonly decision: UserDecision;
+  readonly scope: ApprovalScope;
   readonly label: string;
   readonly description: string;
 }
 
+// Orchestrators answer by these labels; keep them fixed.
 export const APPROVAL_CHOICES: readonly ApprovalChoice[] = [
-  { decision: "allow-once", label: "Allow once", description: "Run this call only; do not save a rule." },
-  { decision: "deny-once", label: "Deny once", description: "Block this call only; do not save a rule." },
-  { decision: "allow-local", label: "Allow + save project rule", description: "Run now and save an allow rule in .pi/guardme.yaml." },
-  { decision: "deny-local", label: "Deny + save project rule", description: "Block now and save a deny rule in .pi/guardme.yaml." },
-  { decision: "allow-global", label: "Allow + save global rule", description: "Run now and save an allow rule in ~/.pi/agent/guardme.yaml." },
-  { decision: "deny-global", label: "Deny + save global rule", description: "Block now and save a deny rule in ~/.pi/agent/guardme.yaml." },
+  { decision: "allow-once", scope: "once", label: "Allow once", description: "Run this call only; do not save a rule." },
+  { decision: "allow-session", scope: "session", label: "Allow for session", description: "Run now and allow the rule until this session ends." },
+  { decision: "allow-local", scope: "project", label: "Allow for project", description: "Run now and save an allow rule in .pi/guardme.yaml." },
+  { decision: "allow-global", scope: "global", label: "Allow globally", description: "Run now and save an allow rule in ~/.pi/agent/guardme.yaml." },
+  { decision: "deny-once", scope: "once", label: "Deny once", description: "Block this call only; do not save a rule." },
+  { decision: "deny-session", scope: "session", label: "Deny for session", description: "Block now and deny the rule until this session ends." },
+  { decision: "deny-local", scope: "project", label: "Deny for project", description: "Block now and save a deny rule in .pi/guardme.yaml." },
+  { decision: "deny-global", scope: "global", label: "Deny globally", description: "Block now and save a deny rule in ~/.pi/agent/guardme.yaml." },
 ];
 
-const DEFAULT_SELECTED_INDEX = 1;
-const LOW_RISK_SELECTED_INDEX = 0;
+/**
+ * The choices of one prompt in drawn order. The first row is where the cursor
+ * starts, so the deny group leads unless the risk is low: a stray Enter must
+ * not approve.
+ */
+export function approvalChoices(risk: PolicyDecision["risk"], scopes: readonly ApprovalScope[]): readonly ApprovalChoice[] {
+  const offered = APPROVAL_CHOICES.filter((choice) => scopes.includes(choice.scope));
+  const allows = offered.filter((choice) => isAllowDecision(choice.decision));
+  const denies = offered.filter((choice) => isDenyDecision(choice.decision));
+  return risk === "low" ? [...allows, ...denies] : [...denies, ...allows];
+}
+
+/** "Saves: ..." line of the prompt. */
+export function savedRuleSummary(rule: ApprovalRule): string {
+  return rule.scopes.length > 1 ? `Saves: ${rule.pattern} (${rule.covers})` : "Saves: nothing, this request can only be answered once";
+}
+
 const MAX_APPROVAL_TARGET_WIDTH = 512;
 const MAX_APPROVAL_REASON_WIDTH = 768;
 const MAX_APPROVAL_RULE_WIDTH = 384;
@@ -78,7 +100,8 @@ export function resolveApprovalUi(ctx: ApprovalUiContext): ApprovalUiResolution 
       reason: "GuardMe requires user approval for this action, but this Pi session has no UI. Blocking by default.",
     };
   }
-  if (ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
+  // "list": a plain list an orchestrator can answer with arrow keys, without reading a drawn box.
+  if (ctx.approvalMode !== "list" && ctx.mode === "tui" && typeof ctx.ui.custom === "function") {
     return { kind: "custom" };
   }
   if (typeof ctx.ui.select === "function") {
@@ -176,11 +199,11 @@ function boundApprovalBlock(value: string): string {
 }
 
 export function isAllowDecision(decision: UserDecision): boolean {
-  return decision === "allow-once" || decision === "allow-local" || decision === "allow-global";
+  return decision.startsWith("allow-");
 }
 
 export function isDenyDecision(decision: UserDecision): boolean {
-  return decision === "deny-once" || decision === "deny-local" || decision === "deny-global";
+  return decision.startsWith("deny-");
 }
 
 async function requestSelectApproval(
@@ -188,13 +211,27 @@ async function requestSelectApproval(
   request: PolicyRequest,
   decision: PolicyDecision,
 ): Promise<UserDecision | undefined> {
-  const labels = APPROVAL_CHOICES.map((choice) => `${choice.label} — ${choice.description}`);
-  const selected = await ctx.ui.select?.(
+  const choices = approvalChoices(decision.risk, ctx.rule.scopes);
+  const selected = await ctx.ui.select?.(approvalSelectTitle(request, decision, ctx.rule), choices.map((choice) => choice.label));
+  return choices.find((choice) => choice.label === selected)?.decision;
+}
+
+export function approvalSelectTitle(request: PolicyRequest, decision: PolicyDecision, rule: ApprovalRule): string {
+  const summary = renderPolicySummary(request, decision);
+  const segment = blockedSegment(request, decision);
+  return [
     `GuardMe approval required: ${request.toolName}:${request.action} (${decision.risk})`,
-    labels,
-  );
-  const selectedIndex = selected === undefined ? -1 : labels.indexOf(selected);
-  return selectedIndex >= 0 ? APPROVAL_CHOICES[selectedIndex]?.decision : undefined;
+    `Target: ${boundedApprovalValue(summaryValue(summary, "Target", "<unknown>"), MAX_APPROVAL_TARGET_WIDTH)}`,
+    ...(segment ? [`Blocked part: ${boundedApprovalValue(segment, MAX_APPROVAL_TARGET_WIDTH)}`] : []),
+    `Reason: ${boundedApprovalValue(summaryValue(summary, "Reason", decision.reason), MAX_APPROVAL_REASON_WIDTH)}`,
+    boundedApprovalValue(savedRuleSummary(rule), MAX_APPROVAL_RULE_WIDTH),
+  ].join("\n");
+}
+
+/** The failing shell segment, when it is only a part of the command. */
+function blockedSegment(request: PolicyRequest, decision: PolicyDecision): string | undefined {
+  const whole = request.command?.trim().replaceAll(/\s+/g, " ");
+  return decision.commandSegment && decision.commandSegment !== whole ? decision.commandSegment : undefined;
 }
 
 interface ApprovalTui {
@@ -209,7 +246,7 @@ async function requestTuiApproval(
 ): Promise<UserDecision | undefined> {
   return ctx.ui.custom?.<UserDecision | undefined>(
     (tui: ApprovalTui, theme: ApprovalTheme, keybindings: KeybindingManager, done: (value: UserDecision | undefined) => void) =>
-      createApprovalComponent(tui, theme, keybindings, done, request, decision),
+      createApprovalComponent(tui, theme, keybindings, done, request, decision, ctx.rule),
   );
 }
 
@@ -229,9 +266,11 @@ function createApprovalComponent(
   done: (value: UserDecision | undefined) => void,
   request: PolicyRequest,
   decision: PolicyDecision,
+  rule: ApprovalRule,
 ): { render: (width: number) => string[]; invalidate: () => void; handleInput: (data: string) => void } {
   // Low-risk prompts start on "Allow once"; everything else starts on "Deny once".
-  let selectedIndex = decision.risk === "low" ? LOW_RISK_SELECTED_INDEX : DEFAULT_SELECTED_INDEX;
+  const choices = approvalChoices(decision.risk, rule.scopes);
+  let selectedIndex = 0;
   let cachedWidth: number | undefined;
   let cachedRows: number | undefined;
   let cachedLines: string[] | undefined;
@@ -248,7 +287,7 @@ function createApprovalComponent(
       if (cachedLines && cachedWidth === width && cachedRows === terminalRows) {
         return cachedLines;
       }
-      const lines = buildApprovalLines(width, theme, request, decision, selectedIndex, approvalRowBudget(terminalRows));
+      const lines = buildApprovalLines({ width, theme, request, decision, rule, choices, selectedIndex, rowBudget: approvalRowBudget(terminalRows) });
       cachedWidth = width;
       cachedRows = terminalRows;
       cachedLines = lines;
@@ -257,19 +296,19 @@ function createApprovalComponent(
     invalidate,
     handleInput(data: string): void {
       if (isUp(data, keybindings)) {
-        selectedIndex = wrapIndex(selectedIndex - 1, APPROVAL_CHOICES.length);
+        selectedIndex = wrapIndex(selectedIndex - 1, choices.length);
         invalidate();
         tui.requestRender?.();
         return;
       }
       if (isDown(data, keybindings)) {
-        selectedIndex = wrapIndex(selectedIndex + 1, APPROVAL_CHOICES.length);
+        selectedIndex = wrapIndex(selectedIndex + 1, choices.length);
         invalidate();
         tui.requestRender?.();
         return;
       }
       if (isEnter(data, keybindings)) {
-        done(APPROVAL_CHOICES[selectedIndex]?.decision ?? "deny-once");
+        done(choices[selectedIndex]?.decision ?? "deny-once");
         return;
       }
       if (isEscape(data, keybindings)) {
@@ -280,59 +319,62 @@ function createApprovalComponent(
 }
 
 const SELECTED_MARKER = "▶ ";
-const APPROVAL_FIXED_FULL_ROWS = 15;
+const APPROVAL_FIXED_FULL_ROWS = 19;
 
-function buildApprovalLines(
-  width: number,
-  theme: ApprovalTheme,
-  request: PolicyRequest,
-  decision: PolicyDecision,
-  selectedIndex: number,
-  rowBudget: number,
-): string[] {
-  const frameWidth = Math.max(1, Math.floor(width));
-  const budget = Math.max(1, Math.floor(rowBudget));
-  const summary = renderPolicySummary(request, decision);
-  const selectedChoice = APPROVAL_CHOICES[selectedIndex] ?? APPROVAL_CHOICES[DEFAULT_SELECTED_INDEX]!;
-
-  if (budget < 7) {
-    return buildUltraShortApprovalLines(summary, decision, selectedChoice, selectedIndex, frameWidth, budget);
-  }
-  if (frameWidth < 20) {
-    return buildTinyApprovalLines(summary, decision, selectedChoice, selectedIndex, frameWidth, budget);
-  }
-  if (budget < 16) {
-    return buildShortApprovalLines(summary, decision, selectedChoice, selectedIndex, frameWidth, budget, theme);
-  }
-  return buildFullApprovalLines({ summary, decision, selectedChoice, selectedIndex, width: frameWidth, budget, theme, request });
-}
-
-interface FullApprovalLineOptions {
-  readonly summary: readonly PolicySummaryLine[];
-  readonly decision: PolicyDecision;
-  readonly selectedChoice: ApprovalChoice;
-  readonly selectedIndex: number;
+interface ApprovalLineOptions {
   readonly width: number;
-  readonly budget: number;
   readonly theme: ApprovalTheme;
   readonly request: PolicyRequest;
+  readonly decision: PolicyDecision;
+  readonly rule: ApprovalRule;
+  readonly choices: readonly ApprovalChoice[];
+  readonly selectedIndex: number;
+  readonly rowBudget: number;
+}
+
+function buildApprovalLines(options: ApprovalLineOptions): string[] {
+  const { theme, request, decision, choices, selectedIndex } = options;
+  const frameWidth = Math.max(1, Math.floor(options.width));
+  const budget = Math.max(1, Math.floor(options.rowBudget));
+  const summary = renderPolicySummary(request, decision);
+  const selectedChoice = choices[selectedIndex] ?? choices[0]!;
+
+  if (budget < 7) {
+    return buildUltraShortApprovalLines(summary, decision, choices, selectedIndex, frameWidth, budget);
+  }
+  if (frameWidth < 20) {
+    return buildTinyApprovalLines(summary, decision, choices, selectedIndex, frameWidth, budget);
+  }
+  if (budget < APPROVAL_FIXED_FULL_ROWS + 1) {
+    return buildShortApprovalLines(summary, decision, choices, selectedIndex, frameWidth, budget, theme);
+  }
+  return buildFullApprovalLines({ ...options, summary, selectedChoice, width: frameWidth, budget });
+}
+
+interface FullApprovalLineOptions extends ApprovalLineOptions {
+  readonly summary: readonly PolicySummaryLine[];
+  readonly selectedChoice: ApprovalChoice;
+  readonly budget: number;
 }
 
 function buildFullApprovalLines(options: FullApprovalLineOptions): string[] {
-  const { summary, decision, selectedChoice, selectedIndex, width, budget, theme, request } = options;
+  const { summary, decision, rule, choices, selectedChoice, selectedIndex, width, budget, theme, request } = options;
   const innerWidth = width - 2;
-  const counter = `${selectedIndex + 1}/${APPROVAL_CHOICES.length}`;
-  const ruleRows = compactMatchedRuleRows(decision, Math.min(MAX_APPROVAL_MATCHED_RULES, budget - APPROVAL_FIXED_FULL_ROWS));
+  const counter = `${selectedIndex + 1}/${choices.length}`;
+  const segment = blockedSegment(request, decision);
+  const ruleRows = compactMatchedRuleRows(decision, Math.min(MAX_APPROVAL_MATCHED_RULES, budget - APPROVAL_FIXED_FULL_ROWS + (segment ? 0 : 1) + APPROVAL_CHOICES.length - choices.length));
   const toolAction = `${request.toolName}:${request.action}`;
   const summaryText = `Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", toolAction)}`;
   const rows = [
     framedLine(summaryText, innerWidth, theme),
     framedLine(`Target: ${summaryValue(summary, "Target", "<unknown>")}`, innerWidth, theme),
+    ...(segment ? [framedLine(`Blocked part: ${redactSensitiveText(segment)}`, innerWidth, theme)] : []),
     framedLine(`Reason: ${summaryValue(summary, "Reason", decision.reason)}`, innerWidth, theme, "warning"),
+    framedLine(redactSensitiveText(savedRuleSummary(rule)), innerWidth, theme),
     ...ruleRows.map((row) => framedLine(row, innerWidth, theme, "dim")),
     buildApprovalFullBorder(width, theme),
     framedLine(`DECISION ${counter}`, innerWidth, theme, "accent"),
-    ...APPROVAL_CHOICES.map((choice, index) => compactChoiceLine(choice, index === selectedIndex, innerWidth, theme)),
+    ...choices.map((choice, index) => compactChoiceLine(choice, index === selectedIndex, innerWidth, theme)),
     framedLine(`Selected: ${selectedChoice.label} — ${selectedChoice.description}`, innerWidth, theme, "accent"),
     framedLine("Esc = Deny once • ↑↓/j/k choose • Enter select", innerWidth, theme, "dim"),
     buildApprovalBottomBorder(width, theme),
@@ -345,23 +387,24 @@ function buildFullApprovalLines(options: FullApprovalLineOptions): string[] {
 function buildShortApprovalLines(
   summary: readonly PolicySummaryLine[],
   decision: PolicyDecision,
-  selectedChoice: ApprovalChoice,
+  choices: readonly ApprovalChoice[],
   selectedIndex: number,
   width: number,
   budget: number,
   theme: ApprovalTheme,
 ): string[] {
+  const selectedChoice = choices[selectedIndex] ?? choices[0]!;
   const innerWidth = width - 2;
   const choiceCount = Math.max(1, budget - 7);
-  const visibleIndexes = approvalChoiceWindow(selectedIndex, choiceCount);
+  const visibleIndexes = approvalChoiceWindow(selectedIndex, choiceCount, choices.length);
   const omittedRules = decision.matchedRules.length;
   const omittedRuleSummary = formatOmittedRuleCount(omittedRules, " • ");
-  const decisionHeading = `DECISION ${selectedIndex + 1}/${APPROVAL_CHOICES.length}${omittedRuleSummary}`;
+  const decisionHeading = `DECISION ${selectedIndex + 1}/${choices.length}${omittedRuleSummary}`;
   const lines = [
     buildApprovalTopBorder(width, "GuardMe", "Decision", theme),
     framedLine(`Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", decision.action)} • Target: ${summaryValue(summary, "Target", "<unknown>")}`, innerWidth, theme),
     framedLine(decisionHeading, innerWidth, theme, "accent"),
-    ...visibleIndexes.map((index) => compactChoiceLine(APPROVAL_CHOICES[index]!, index === selectedIndex, innerWidth, theme)),
+    ...visibleIndexes.map((index) => compactChoiceLine(choices[index]!, index === selectedIndex, innerWidth, theme)),
     framedLine(`Selected: ${selectedChoice.label} — ${selectedChoice.description}`, innerWidth, theme, "accent"),
     framedLine("Esc = Deny once • ↑↓/j/k choose • Enter select", innerWidth, theme, "dim"),
     buildApprovalBottomBorder(width, theme),
@@ -372,16 +415,17 @@ function buildShortApprovalLines(
 function buildUltraShortApprovalLines(
   summary: readonly PolicySummaryLine[],
   decision: PolicyDecision,
-  selectedChoice: ApprovalChoice,
+  choices: readonly ApprovalChoice[],
   selectedIndex: number,
   width: number,
   budget: number,
 ): string[] {
+  const selectedChoice = choices[selectedIndex] ?? choices[0]!;
   const omittedRuleSummary = decision.matchedRules.length > 0 ? `Rules omitted: ${decision.matchedRules.length} • ` : "";
   const target = summaryValue(summary, "Target", "<unknown>");
   const lines = [
     `GuardMe • ${selectedChoice.label} • Esc=Deny once`,
-    `${selectedIndex + 1}/${APPROVAL_CHOICES.length} • Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", decision.action)}`,
+    `${selectedIndex + 1}/${choices.length} • Risk: ${summaryValue(summary, "Risk", decision.risk)} • Action: ${summaryValue(summary, "Action", decision.action)}`,
     `${omittedRuleSummary}Target: ${target}`,
     selectedChoice.description,
     "↑↓/j/k choose • Enter select • Esc=Deny once",
@@ -392,21 +436,22 @@ function buildUltraShortApprovalLines(
 function buildTinyApprovalLines(
   summary: readonly PolicySummaryLine[],
   decision: PolicyDecision,
-  selectedChoice: ApprovalChoice,
+  choices: readonly ApprovalChoice[],
   selectedIndex: number,
   width: number,
   budget: number,
 ): string[] {
+  const selectedChoice = choices[selectedIndex] ?? choices[0]!;
   const ruleRows = decision.matchedRules.length > 0 ? [`Rules omitted: ${decision.matchedRules.length}`] : [];
   const choiceCount = Math.max(1, budget - 5 - ruleRows.length);
-  const visibleIndexes = approvalChoiceWindow(selectedIndex, choiceCount);
+  const visibleIndexes = approvalChoiceWindow(selectedIndex, choiceCount, choices.length);
   const lines = [
     "GuardMe",
     `Risk: ${summaryValue(summary, "Risk", decision.risk)} Action: ${summaryValue(summary, "Action", decision.action)}`,
     `Target: ${summaryValue(summary, "Target", "<unknown>")}`,
     ...ruleRows,
-    ...visibleIndexes.map((index) => `${index === selectedIndex ? ">" : " "} ${APPROVAL_CHOICES[index]!.label}`),
-    `${selectedIndex + 1}/${APPROVAL_CHOICES.length} ${selectedChoice.label}: ${selectedChoice.description}`,
+    ...visibleIndexes.map((index) => `${index === selectedIndex ? ">" : " "} ${choices[index]!.label}`),
+    `${selectedIndex + 1}/${choices.length} ${selectedChoice.label}: ${selectedChoice.description}`,
     "Esc = Deny once",
   ];
   return lines.slice(0, budget).map((line) => boundedApprovalValue(line, width));
@@ -446,9 +491,9 @@ function compactChoiceLine(choice: ApprovalChoice, selected: boolean, width: num
   return framedLine(selected ? maybeBold(theme, text) : text, width, theme, selected ? "accent" : "normal");
 }
 
-function approvalChoiceWindow(selectedIndex: number, count: number): readonly number[] {
-  const visibleCount = Math.min(APPROVAL_CHOICES.length, Math.max(1, count));
-  const start = Math.min(Math.max(0, selectedIndex - Math.floor(visibleCount / 2)), APPROVAL_CHOICES.length - visibleCount);
+function approvalChoiceWindow(selectedIndex: number, count: number, total: number): readonly number[] {
+  const visibleCount = Math.min(total, Math.max(1, count));
+  const start = Math.min(Math.max(0, selectedIndex - Math.floor(visibleCount / 2)), total - visibleCount);
   return Array.from({ length: visibleCount }, (_value, index) => start + index);
 }
 

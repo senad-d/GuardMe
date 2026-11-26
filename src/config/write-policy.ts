@@ -1,13 +1,14 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, posix, resolve } from "node:path";
 
 import { POLICY_VERSION } from "../constants.ts";
-import { POLICY_ACTIONS, type PolicyAction, type PolicyDiagnostic, type PolicyRequest, type UserDecision } from "../policy/action.ts";
+import { POLICY_ACTIONS, type PathTarget, type PolicyAction, type PolicyDecision, type PolicyDiagnostic, type PolicyRequest, type UserDecision } from "../policy/action.ts";
+import { hasCommandGlob } from "../policy/evaluate.ts";
 import { redactSensitiveText } from "../policy/redact.ts";
 import { gitLsFiles } from "../policy/shell-target-facts.ts";
 import { ensureGitIgnoreEntries } from "../state/warnings.ts";
-import { loadPolicyConfigFile, resolvePolicyConfigPaths } from "./load-config.ts";
+import { getSessionMemoryPolicy, loadPolicyConfigFile, projectPolicyRoot, resolvePolicyConfigPaths, setSessionMemoryPolicy } from "./load-config.ts";
 import { existingSymlinkInPath, isPathInsideRoot, writeTextAtomically } from "./safe-fs.ts";
 import {
   COMMAND_RULE_SECTIONS,
@@ -19,7 +20,7 @@ import {
   createEmptyPolicyConfig,
 } from "./schema.ts";
 
-export type PolicyWriteScope = "local" | "global";
+export type PolicyWriteScope = "local" | "global" | "session";
 type WritableRuleSection = PathRuleSection | CommandRuleSection;
 type PolicyWriteRuleSource = { readonly kind: PolicyWriteScope; readonly path: string };
 
@@ -35,6 +36,8 @@ export interface PersistUserDecisionRuleOptions {
   readonly decision: UserDecision;
   readonly request: PolicyRequest;
   readonly hardDenied?: boolean;
+  /** Save the path as written instead of its directory. */
+  readonly exactPath?: boolean;
   readonly reason?: string;
 }
 
@@ -96,7 +99,7 @@ function rejectedDecisionResult(
   return {
     saved: false,
     path,
-    diagnostics: [{ severity: "error", code, message, source: { kind: scope === "global" ? "global" : "local", path }, path }],
+    diagnostics: [{ severity: "error", code, message, source: { kind: scope, path }, path }],
     reason,
   };
 }
@@ -143,6 +146,10 @@ export async function persistUserDecisionRule(
     return preparedRule.result;
   }
   const rule = preparedRule.rule;
+  if (path === SESSION_MEMORY_PATH) {
+    setSessionMemoryPolicy(appendRule(getSessionMemoryPolicy(), rule.section, rule.rule));
+    return { saved: true, path, section: rule.section, diagnostics: [] };
+  }
 
   const safety = await validatePolicyWriteTarget({ cwd: options.cwd, homeDir: options.homeDir, path, scope: options.scope });
   if (!safety.safe) {
@@ -155,7 +162,7 @@ export async function persistUserDecisionRule(
     };
   }
 
-  const loaded = await loadPolicyConfigFile(path, options.scope === "global" ? "global" : "local");
+  const loaded = await loadPolicyConfigFile(path, options.scope);
   const errors = loaded.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
   if (errors.length > 0) {
     return {
@@ -197,7 +204,7 @@ export async function appendPolicyConfigRules(
   options: AppendPolicyConfigRulesOptions,
 ): Promise<AppendPolicyConfigRulesResult> {
   const path = options.policyPath ?? policyPathForScope(options.scope, options.cwd, options.homeDir);
-  const source = { kind: options.scope === "global" ? "global" : "local", path } as const;
+  const source = { kind: options.scope, path } as const;
   const safety = await validatePolicyWriteTarget({ cwd: options.cwd, homeDir: options.homeDir, path, scope: options.scope });
   if (!safety.safe) {
     return {
@@ -211,7 +218,7 @@ export async function appendPolicyConfigRules(
     };
   }
 
-  const loaded = await loadPolicyConfigFile(path, options.scope === "global" ? "global" : "local");
+  const loaded = await loadPolicyConfigFile(path, options.scope);
   const errors = loaded.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
   if (errors.length > 0) {
     return {
@@ -339,8 +346,8 @@ export async function validatePolicyWriteTarget(
   options: PolicyWriteTargetValidationOptions,
 ): Promise<PolicyWriteTargetValidationResult> {
   const targetPath = resolve(options.path);
-  const scopeRoot = resolve(options.scope === "global" ? options.homeDir ?? homedir() : options.cwd);
-  const source = { kind: options.scope === "global" ? "global" : "local", path: targetPath } as const;
+  const scopeRoot = policyWriteScopeRoot(options, targetPath);
+  const source = { kind: options.scope, path: targetPath } as const;
 
   if (!isPathInsideRoot(scopeRoot, targetPath)) {
     return {
@@ -376,6 +383,14 @@ export async function validatePolicyWriteTarget(
   }
 
   return { safe: true, diagnostics: [] };
+}
+
+function policyWriteScopeRoot(options: PolicyWriteTargetValidationOptions, targetPath: string): string {
+  if (options.scope === "global") {
+    return resolve(options.homeDir ?? homedir());
+  }
+  // The session file is wherever the orchestrator put it.
+  return options.scope === "session" ? dirname(targetPath) : projectPolicyRoot(options.cwd);
 }
 
 export async function writePolicyConfigFile(
@@ -547,16 +562,63 @@ function secretCommandRuleDiagnostic(
 }
 
 function isAllowDecision(decision: UserDecision): boolean {
-  return decision === "allow-once" || decision === "allow-local" || decision === "allow-global";
+  return decision.startsWith("allow-");
 }
 
 function isDenyDecision(decision: UserDecision): boolean {
-  return decision === "deny-once" || decision === "deny-local" || decision === "deny-global";
+  return decision.startsWith("deny-");
 }
 
 function policyPathForScope(scope: PolicyWriteScope, cwd: string, homeDir?: string): string {
   const paths = resolvePolicyConfigPaths(cwd, homeDir);
+  if (scope === "session") {
+    return paths.sessionPolicyPath ?? SESSION_MEMORY_PATH;
+  }
   return scope === "global" ? paths.globalPolicyPath : paths.localPolicyPath;
+}
+
+const SESSION_MEMORY_PATH = "<session memory>";
+
+export interface ApprovalRule {
+  /** What a saved choice writes. */
+  readonly pattern: string;
+  readonly covers: string;
+  /** True when the pattern is the literal request and could not be generalised. */
+  readonly exact: boolean;
+  readonly scopes: readonly ApprovalScope[];
+}
+export type ApprovalScope = "once" | "session" | "project" | "global";
+
+/** The rule an approval of this request saves, and the scopes it may be saved in. */
+export function approvalRule(request: PolicyRequest, decision: PolicyDecision, projectTrusted: boolean): ApprovalRule {
+  const saveScopes: readonly ApprovalScope[] = projectTrusted ? ["once", "session", "project", "global"] : ["once", "session", "global"];
+  if (request.command) {
+    const pattern = decision.suggestedCommandRule ?? request.command.trim().replaceAll(/\s+/g, " ");
+    const exact = !hasCommandGlob(pattern);
+    // A command with secret-like values is never written to a policy file.
+    const secret = redactSensitiveText(pattern) !== pattern;
+    return {
+      pattern: redactSensitiveText(pattern),
+      covers: exact ? "this exact command" : `every ${pattern.slice(0, -2)} command`,
+      exact,
+      scopes: secret ? ["once"] : saveScopes,
+    };
+  }
+  const target = request.targets.find((candidate): candidate is PathTarget => candidate.kind === "path");
+  const pattern = target ? pathRulePattern(target, decision.risk === "dangerous") : "";
+  const exact = !pattern.endsWith("/**");
+  return {
+    pattern,
+    covers: exact ? "this path" : `every path under ${pattern.slice(0, -3)}`,
+    exact,
+    scopes: target ? saveScopes : ["once"],
+  };
+}
+
+// A file inside the project is saved as its directory, anything else as the exact path.
+function pathRulePattern(target: PathTarget, exactOnly: boolean): string {
+  const directory = target.isInsideProject && target.projectRelativePath ? posix.dirname(target.projectRelativePath.replaceAll("\\", "/")) : ".";
+  return exactOnly || directory === "." ? target.raw : `${directory}/**`;
 }
 
 type DecisionRuleResult =
@@ -595,7 +657,7 @@ function ruleFromDecision(options: PersistUserDecisionRuleOptions): DecisionRule
     };
   }
 
-  const pathTarget = options.request.targets.find((target) => target.kind === "path");
+  const pathTarget = options.request.targets.find((target): target is PathTarget => target.kind === "path");
   if (!pathTarget) {
     return undefined;
   }
@@ -603,7 +665,7 @@ function ruleFromDecision(options: PersistUserDecisionRuleOptions): DecisionRule
   return {
     section: allow ? "allowPaths" : "denyPaths",
     rule: {
-      pattern: pathTarget.raw,
+      pattern: pathRulePattern(pathTarget, options.exactPath === true),
       actions: [options.request.action],
       reason,
     },

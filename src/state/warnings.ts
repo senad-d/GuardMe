@@ -26,9 +26,9 @@ import {
 import { redactSensitiveText } from "../policy/redact.ts";
 
 export type GuardMeStateScope = "global" | "project";
-export type PersistedDecisionTarget = "none" | "local-yaml" | "global-yaml";
+export type PersistedDecisionTarget = "none" | "local-yaml" | "global-yaml" | "session";
 
-const PERSISTED_DECISION_TARGETS = ["none", "local-yaml", "global-yaml"] as const;
+const PERSISTED_DECISION_TARGETS = ["none", "local-yaml", "global-yaml", "session"] as const;
 const MAX_STATE_FILE_BYTES = 1024 * 1024;
 // Compact before the file can reach MAX_STATE_FILE_BYTES: past that cap the
 // whole state file becomes unreadable and warned-once history is lost.
@@ -69,6 +69,11 @@ export interface UserDecisionStateRecord {
   readonly decision: UserDecision;
   readonly persistedTo: PersistedDecisionTarget;
   readonly reason?: string;
+  readonly toolName?: string;
+  /** The command or paths the decision was about, redacted. */
+  readonly target?: string;
+  /** The saved rule pattern, when the decision saved one. */
+  readonly rule?: string;
 }
 
 export interface AutomaticDecisionStateRecord {
@@ -124,6 +129,9 @@ export interface CreateDecisionRecordInput {
   readonly persistedTo?: PersistedDecisionTarget;
   readonly reason?: string;
   readonly timestamp?: string;
+  readonly toolName?: string;
+  readonly target?: string;
+  readonly rule?: string;
 }
 
 export interface CreateAutomaticDecisionRecordInput {
@@ -179,6 +187,9 @@ export function createDecisionRecord(input: CreateDecisionRecordInput): UserDeci
     decision: input.decision,
     persistedTo: input.persistedTo ?? "none",
     ...(input.reason ? { reason: redactSensitiveText(input.reason) } : {}),
+    ...(input.toolName ? { toolName: input.toolName } : {}),
+    ...(input.target ? { target: redactSensitiveText(input.target) } : {}),
+    ...(input.rule ? { rule: redactSensitiveText(input.rule) } : {}),
   };
 }
 
@@ -622,6 +633,9 @@ function validateDecisionStateRecord(
     decision,
     persistedTo,
     ...(isString(parsed.reason) ? { reason: redactSensitiveText(parsed.reason) } : {}),
+    ...(isString(parsed.toolName) ? { toolName: parsed.toolName } : {}),
+    ...(isString(parsed.target) ? { target: redactSensitiveText(parsed.target) } : {}),
+    ...(isString(parsed.rule) ? { rule: redactSensitiveText(parsed.rule) } : {}),
   };
 }
 
