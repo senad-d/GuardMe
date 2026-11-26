@@ -330,11 +330,25 @@ export function expandStableShellVariables(command: string, variables: StableShe
   for (const name of ["HOME", "TMPDIR", "PWD"] as const) {
     const value = name === "PWD" ? cwd : variables[name];
     if (typeof value !== "string" || !SAFE_VARIABLE_VALUE.test(value)) continue;
-    if (new RegExp(String.raw`(^|[^$\w{])${name}\b`).test(command)) continue;
-    if (name === "PWD" && /(^|[\s;&|(])(cd|pushd|popd)\b/.test(command)) continue;
+    if (commandMayChangePathVariable(command, name)) continue;
     values.set(name, value);
   }
   return values.size === 0 ? command : replaceOutsideSpans(command, heredocs?.bodies ?? [], values);
+}
+
+function commandMayChangePathVariable(command: string, name: keyof StableShellVariables): boolean {
+  const namesVariable = new RegExp(String.raw`(^|[^$\w{])${name}\b`).test(command);
+  if (namesVariable && !(name === "TMPDIR" && onlyNarrowsTmpdir(command))) return true;
+  return name === "PWD" && /(^|[\s;&|(])(cd|pushd|popd)\b/.test(command);
+}
+
+// `TMPDIR="$TMPDIR/run" npm test`: every assignment keeps TMPDIR beneath the
+// session TMPDIR, so a later `$TMPDIR/x` is checked as the session TMPDIR.
+// ponytail: the checked path drops the subdirectory; exact once assignments are tracked in order.
+function onlyNarrowsTmpdir(command: string): boolean {
+  const names = command.match(/(^|[^$\w{])TMPDIR\b/gu) ?? [];
+  const narrowing = command.match(/(^|[^$\w{])TMPDIR=(?:"\$(?:\{TMPDIR\}|TMPDIR)\/[^"$`]*"|\$(?:\{TMPDIR\}|TMPDIR)\/[^\s"'$`;&|()]*)/gu) ?? [];
+  return narrowing.length === names.length && narrowing.every((assignment) => !assignment.split(/[/"]/u).includes(".."));
 }
 
 function replaceOutsideSpans(command: string, spans: readonly { readonly start: number; readonly end: number }[], values: ReadonlyMap<string, string>): string {

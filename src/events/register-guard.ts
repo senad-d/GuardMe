@@ -17,7 +17,7 @@ import {
   type LocalScriptExecution,
   type PackageScriptExecution,
 } from "../policy/commands.ts";
-import { createPolicyFingerprint, evaluatePolicyRequest, isAgentAutomaticApprovalEligible, scriptFindingDecision } from "../policy/evaluate.ts";
+import { ASK_BY_RETRY, createPolicyFingerprint, evaluatePolicyRequest, isAgentAutomaticApprovalEligible, scriptFindingDecision } from "../policy/evaluate.ts";
 import {
   analyzeInterpreterScript,
   detectInterpreterScriptExecutions,
@@ -1206,7 +1206,7 @@ async function scriptCommandPolicyRequest(
       fingerprintSeed: `${source.sourceKind}:${source.sourcePath ?? source.snippetLabel}:${command.context}:${command.lineStart}:${command.normalizedCommand}`,
       reasonCode: "script-content-denied",
       policyMissingReason: `${source.sourceKind === "local-script" ? "Local script" : "Proposed file content"} contains an unapproved command at line ${command.lineStart}: ${command.preview}.`,
-      policyMissingGuidance: "Do not write or run generated scripts with unapproved commands. Use safe built-in tools, ask the user for approval, or propose a narrow allowCommands rule.",
+      policyMissingGuidance: `Do not write or run generated scripts with unapproved commands. Use safe built-in tools when possible. ${ASK_BY_RETRY}`,
       policyMissingRecommendation: "Request user approval for the exact extracted command before retrying.",
       requiresExactCommandAllow: source.exactCommandAllow ?? true,
       ...(parentRequest.scratchRoots ? { scratchRoots: parentRequest.scratchRoots } : {}),

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 - Unreleased
+
+- Coaching tells the agent how to ask the user: retry the identical call, which opens the approval prompt; only a refused retry asks for an allowCommands rule. Before, "ask the user for approval" made agents hand off without reaching the prompt.
+- `TMPDIR="$TMPDIR/sub" cmd` and `export TMPDIR="$TMPDIR/sub"` no longer stop `$TMPDIR` from resolving in the rest of the command. Any other TMPDIR assignment, `unset` or `read` still does.
+- An outside-project refusal of a path with an unresolved variable (a loop variable, a name assigned in a branch or twice) says to write the path literally or assign it once on a top-level line.
+
 ## 0.4.0 - Unreleased
 
 Approval prompts for orchestrated agents (Mission guard cards).

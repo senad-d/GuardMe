@@ -59,6 +59,11 @@ const AGENT_AUTO_APPROVAL_DENIED_REASON_CODES: ReadonlySet<string> = new Set([
   "outside-project-path",
 ]);
 
+// How an agent asks the user: the identical retry opens the approval prompt.
+// Agents told to "ask the user" handed off instead and never reached it.
+export const ASK_BY_RETRY =
+  "To ask the user, retry this exact call unchanged: GuardMe then opens its approval prompt where one can be shown. Only when the retry is refused, ask the user for a narrow allowCommands rule.";
+
 export function evaluatePolicyRequest(options: EvaluatePolicyRequestOptions): PolicyDecision {
   const { policy, request } = options;
   const command = options.commandClassification ?? (request.command ? classifyShellCommand(request.command) : undefined);
@@ -934,7 +939,12 @@ function outsidePathLabel(paths: readonly NormalizedPolicyPath[]): string {
   const label = redactSensitiveText(first.rawPath);
   const action = first.action ? ` (${first.action})` : "";
   const more = paths.length > 1 ? ` (+${paths.length - 1} more)` : "";
-  return ` Blocked path: '${label}'${action}${more}.`;
+  // A loop variable or a name assigned in a branch stays unresolved; agents
+  // rephrased such commands several times before writing the path out.
+  const unresolved = paths.some((path) => path.rawPath.includes("$"))
+    ? " GuardMe cannot resolve a variable set in a loop, a branch or more than once: write the path literally, or assign it once on its own top-level line."
+    : "";
+  return ` Blocked path: '${label}'${action}${more}.${unresolved}`;
 }
 
 function firstCredentialLikePathDenial(
@@ -1131,7 +1141,7 @@ function commandSegmentPolicyRequest(parent: PolicyRequest, segment: ExecutableC
     targets: segment.targetPaths.map((targetPath) => ({ kind: "path" as const, raw: targetPath })),
     riskHint: segment.risk,
     ...(fingerprintSeed ? { fingerprintSeed } : {}),
-    policyMissingGuidance: parent.policyMissingGuidance ?? "Use guarded built-in tools when possible, ask the user for approval, or propose a narrow allowCommands rule for the exact segment.",
+    policyMissingGuidance: parent.policyMissingGuidance ?? `Use guarded built-in tools when possible. ${ASK_BY_RETRY}`,
     policyMissingRecommendation: parent.policyMissingRecommendation ?? `Request user approval or add an exact allowCommands rule for '${redactSensitiveText(segment.normalizedText)}'.`,
   };
 }
@@ -1331,7 +1341,7 @@ function policyMissingCommandDecision(
     ],
     warnedFingerprints,
     reasonCode: request.reasonCode ?? "policy-missing-command",
-    guidance: request.policyMissingGuidance ?? "Use a guarded built-in file tool when possible, ask the user for approval, or propose a narrow allowCommands rule for this exact command.",
+    guidance: request.policyMissingGuidance ?? `Use a guarded built-in file tool when possible. ${ASK_BY_RETRY}`,
     recommendation: request.policyMissingRecommendation ?? "Request user approval or add a narrow command policy rule before retrying.",
   });
 }

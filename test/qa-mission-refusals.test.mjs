@@ -101,3 +101,28 @@ test('"$(command -v name)" in command position is that command', async () => {
   assert.equal(await outcome('"$(command -v aws)" s3 ls'), "deny");
   assert.notEqual(await outcome('rm "$(command -v node)"'), "allow");
 });
+
+test("TMPDIR narrowed beneath itself still resolves, any other TMPDIR assignment does not", async () => {
+  await assertOutcomes("allow", [
+    `mkdir -p "$TMPDIR/q"; TMPDIR="$TMPDIR/q" cp package.json "$TMPDIR/q/p.json" > "$TMPDIR/q.log" 2>&1`,
+    `cd "$TMPDIR/copy" && export TMPDIR="$TMPDIR/tmp with spaces" && cp a "$TMPDIR/b"`,
+  ]);
+  for (const command of [`TMPDIR=/etc; cp x "$TMPDIR/passwd"`, `TMPDIR="$TMPDIR/../.."; cp x "$TMPDIR/y"`, `unset TMPDIR; cp x "$TMPDIR/y"`, `TMPDIR="$TMPDIR/$(id -u)"; cp x "$TMPDIR/y"`]) {
+    assert.notEqual(await outcome(command), "allow", command);
+  }
+});
+
+test("coaching tells the agent to ask the user by retrying the identical call", async () => {
+  const mapped = await mapToolCallToPolicyRequest({ toolName: "bash", input: { command: "pdftotext -v" } }, cwd);
+  const decision = evaluatePolicyRequest({ policy, ...mapped });
+  assert.equal(decision.outcome, "coach");
+  assert.match(decision.guidance, /retry this exact call unchanged/);
+});
+
+test("an outside-project refusal of an unresolved variable says how to write the path", async () => {
+  const command = `for tag in a b; do dest="${T}/args-$tag.js"; curl -fsSL https://example.org -o "$dest"; done`;
+  const mapped = await mapToolCallToPolicyRequest({ toolName: "bash", input: { command } }, cwd);
+  const decision = evaluatePolicyRequest({ policy, ...mapped });
+  assert.equal(decision.outcome, "deny");
+  assert.match(decision.reason, /write the path literally/);
+});
