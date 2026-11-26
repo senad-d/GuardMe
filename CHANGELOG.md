@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.16 - Unreleased
+
+Fixes from the Mission refusal review 2026-11-26: 116 refusals in two weeks, about 100 of them harmless.
+
+- A name assigned once, on a top-level line, to a plain absolute path resolves in the rest of the command: `scratch="$TMPDIR/a"; node server.js > "$scratch/server.log"` is checked as the literal path, like the `mktemp` form. A second assignment, `unset`, `read` or a conditional assignment keeps the name unresolved. `b="$a/build"` resolves when `a` does.
+- `rsync` without `--delete` is judged like `cp`: sources are read, the last operand is written.
+- The credential keyword rule (`token`, `secret`, `credential`) no longer judges the name of a JavaScript or TypeScript source file (`backward-token-cursor.js`); the directories above it and every other file type are judged as before. `.env.local.ts` is source, not an env file.
+- Credential store markers that are dotfiles (`.aws`, `.ssh`, `.azure`) must start a path segment, so `mxgraph.aws4` in inline code is no longer a credential reference.
+- A cloud CLI name in inline code is denied only when the code can start a process (`child_process`, `exec`, `spawn`, `subprocess`, `os.system`, backticks); `search("aws lambda")` is data.
+- A code heredoc may be followed by a pipe or `&&` (`python3 - <<'PY' | tee log`), and may follow `&&` or `||`; its body is still inspected. A data heredoc piped onward (`cat <<'EOF' | sh`) and a heredoc after a pipe stay denied.
+- `"$(command -v node)" app.mjs` is judged as `node app.mjs`. Only the quoted form in command position is resolved.
+- `script` and `zutty -e` are wrappers: the command they run is checked segment by segment. `script` without a command is judged as a bare `sh`.
+- Allowed by default: `script *`, `zutty *`, `stty *`, `fc-list *`, `ldconfig -p *`, `dpkg-query *`, `patch --dry-run *`.
+
 ## 0.3.15 - Unreleased
 
 - Apply path policy to shell function redirects and distinguish file targets from descriptor targets in `>&` redirects.

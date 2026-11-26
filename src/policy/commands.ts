@@ -778,7 +778,25 @@ export function tokenizeShellCommand(command: string): readonly string[] {
     advanceShellTokenizer(command, state);
   }
   pushShellTokenizerCurrent(state);
-  return state.tokens;
+  return resolveCommandLookups(state.tokens);
+}
+
+const COMMAND_LOOKUP_TOKEN = /^\$\(\s*command\s+-v\s+([\w.+-]+)\s*\)$/u;
+const COMMAND_START_TOKENS = new Set([";", "&&", "||", "|", "&", "(", "{", "then", "do", "else", "elif", "!"]);
+
+// `"$(command -v node)" app.mjs` runs node: the lookup prints the path the
+// name resolves to. Only the quoted form (one token) in command position is
+// rewritten; as an argument it stays a path GuardMe cannot know.
+function resolveCommandLookups(tokens: string[]): readonly string[] {
+  let commandPosition = true;
+  for (const [index, token] of tokens.entries()) {
+    const lookedUp = commandPosition ? COMMAND_LOOKUP_TOKEN.exec(token)?.[1] : undefined;
+    if (lookedUp) {
+      tokens[index] = lookedUp;
+    }
+    commandPosition = COMMAND_START_TOKENS.has(token) || (commandPosition && (isEnvAssignment(token) || PREFIX_WRAPPERS.has(token)));
+  }
+  return tokens;
 }
 
 function createShellTokenizerState(): ShellTokenizerState {
@@ -1104,7 +1122,7 @@ function createSegmentClassificationContext(
     targetPaths,
     credentialAccess,
     credentialLiteralAccess: !credentialAccess && credentialScanArgs(commandName, args, isGrepCommand(commandName)).some(containsCredentialLikeLiteral),
-    cloudCliLiteralAccess: inlineCode.some(containsCloudCliLiteral),
+    cloudCliLiteralAccess: inlineCode.some(runsCloudCliLiteral),
     envDumpLiteralAccess: inlineCode.some(containsEnvDumpLiteral),
   };
 }
@@ -1406,7 +1424,8 @@ function classifyMutationSegment(context: ExecutableSegmentClassificationContext
 }
 
 function classifyFilesystemMutationCommand(context: ExecutableSegmentClassificationContext): CommandClassification | undefined {
-  if (COPY_COMMANDS.has(context.commandName)) {
+  // rsync without --delete (handled above) copies like cp: sources are read, the last operand is written.
+  if (COPY_COMMANDS.has(context.commandName) || context.commandName === "rsync") {
     return copyClassification(context);
   }
   if (ARCHIVE_COMMANDS.has(context.commandName)) {
@@ -2512,6 +2531,12 @@ function wrapperInvokedCommandText(commandName: string, args: readonly string[])
   if (commandName === "xvfb-run") {
     return commandTextAfterOptions(args, XVFB_RUN_OPTIONS_WITH_VALUES);
   }
+  if (commandName === "script") {
+    return scriptCommandText(args);
+  }
+  if (commandName === "zutty") {
+    return terminalCommandText(args);
+  }
   if (commandName === "uvx") {
     return commandTextAfterOptions(args, UVX_OPTIONS_WITH_VALUES);
   }
@@ -2519,6 +2544,7 @@ function wrapperInvokedCommandText(commandName: string, args: readonly string[])
 }
 
 const EMPTY_OPTIONS_WITH_VALUES = new Set<string>();
+const SCRIPT_OPTIONS_WITH_VALUES = new Set(["-t", "-T", "-I", "-O", "-B", "-E", "-m", "-o", "--log-in", "--log-out", "--log-io", "--log-timing", "--timing", "--echo", "--logging-format", "--output-limit"]);
 const XVFB_RUN_OPTIONS_WITH_VALUES = new Set(["-n", "-s", "-f", "-e", "-p", "-w", "--server-num", "--server-args", "--auth-file", "--error-file", "--xauth-protocol", "--wait"]);
 const UVX_OPTIONS_WITH_VALUES = new Set(["--from", "--with", "--with-editable", "--with-requirements", "--python", "-p", "--index", "--index-url", "--extra-index-url", "--default-index", "--cache-dir", "--directory", "--project", "--config-file"]);
 const EXEC_OPTIONS_WITH_VALUES = new Set(["-a"]);
@@ -2698,6 +2724,29 @@ function isNegativeIntegerOption(arg: string): boolean {
     }
   }
   return true;
+}
+
+// script(1) gives a TUI under test a pseudo-terminal. util-linux takes the
+// command as one shell string (`-c`, also last in a cluster such as `-qefc`);
+// BSD takes it as words after the typescript file. Without a command it
+// starts a shell that reads its input, judged as a bare `sh`.
+function scriptCommandText(args: readonly string[]): string | undefined {
+  for (const [index, arg] of args.entries()) {
+    if (arg === "--command" || /^-[A-Za-z]*c$/u.test(arg)) {
+      return args[index + 1] ?? "sh";
+    }
+    if (arg.startsWith("--command=")) {
+      return arg.slice("--command=".length);
+    }
+  }
+  const fileIndex = firstNonOptionIndex(args, SCRIPT_OPTIONS_WITH_VALUES);
+  return (fileIndex === undefined ? undefined : joinTokensAsCommand(args.slice(fileIndex + 1))) ?? "sh";
+}
+
+// `zutty -e cmd args`: everything after -e is the command the terminal runs; without -e it only opens a window.
+function terminalCommandText(args: readonly string[]): string | undefined {
+  const index = args.indexOf("-e");
+  return index < 0 ? undefined : joinTokensAsCommand(args.slice(index + 1));
 }
 
 function timeoutCommandText(args: readonly string[]): string | undefined {
@@ -3114,6 +3163,14 @@ function isDynamicExecutableName(commandName: string): boolean {
   return false;
 }
 
+// Inline code reaches a CLI only by starting a process; without such a call
+// "aws" is data (`search("aws lambda")`).
+const INLINE_PROCESS_START = /child_process|exec|spawn|subprocess|\bsystem\b|popen|proc_open|passthru|`|%x|Bun\.\$|Deno\.Command|\bzx\b|\bopen\s*\(/iu;
+
+function runsCloudCliLiteral(snippet: string): boolean {
+  return containsCloudCliLiteral(snippet) && INLINE_PROCESS_START.test(snippet);
+}
+
 function containsCloudCliLiteral(value: string): boolean {
   const lower = value.toLowerCase();
   for (const command of CLOUD_CLI_COMMANDS) {
@@ -3132,7 +3189,20 @@ function containsCredentialLikeLiteral(value: string): boolean {
 /** Credential-store markers (`.ssh`, `.aws`, `id_rsa`, `.npmrc`, …) without the `.env` family. */
 export function containsCredentialStoreLiteral(value: string): boolean {
   const lower = value.toLowerCase();
-  return CREDENTIAL_LITERAL_MARKERS.some((marker) => lower.includes(marker));
+  return CREDENTIAL_LITERAL_MARKERS.some((marker) => containsCredentialStoreMarker(lower, marker));
+}
+
+// A dotfile name starts a path segment: `~/.aws` and `'.ssh'` match, `mxgraph.aws4` does not.
+function containsCredentialStoreMarker(lower: string, marker: string): boolean {
+  let index = lower.indexOf(marker);
+  while (index >= 0) {
+    const previous = lower[index - 1] ?? "";
+    if (!marker.startsWith(".") || !(isAsciiLetter(previous) || isAsciiDigit(previous))) {
+      return true;
+    }
+    index = lower.indexOf(marker, index + 1);
+  }
+  return false;
 }
 
 /** True when the text names a protected (non-template) `.env` file. */

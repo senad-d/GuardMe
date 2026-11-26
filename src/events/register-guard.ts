@@ -28,7 +28,7 @@ import {
 import { expandStableShellVariables, normalizePolicyPath, pathTargetFromNormalizedPath, resolveScriptDirnameZero } from "../policy/paths.ts";
 import { nativeExecutableTokens, sessionScratchRoots, trackedRemovalTargets } from "../policy/shell-target-facts.ts";
 import { analyzeScriptShellFacts, substituteResolvedVariables, type ScriptShellFacts } from "../policy/script-variables.ts";
-import { expandMktempVariables } from "../policy/temp-variables.ts";
+import { expandAssignedPathVariables } from "../policy/temp-variables.ts";
 import { isHiddenBelow, recursiveSearchRoots, type RecursiveSearchRoot } from "../policy/recursive-search.ts";
 import { containsCredentialKeyword, isProtectedEnvFileSegment } from "../policy/sensitive-paths.ts";
 import { redactSensitiveText } from "../policy/redact.ts";
@@ -220,7 +220,7 @@ export async function mapToolCallToPolicyRequest(
     // The shell expands these from the agent's own environment; the literal
     // path is what gets checked, so scratch under $TMPDIR passes like its path.
     // Names assigned from mktemp resolve to their template path for the same reason.
-    const command = expandMktempVariables(expandStableShellVariables(rawCommand, process.env, cwd), process.env, cwd);
+    const command = expandAssignedPathVariables(expandStableShellVariables(rawCommand, process.env, cwd), process.env, cwd);
     const commandClassification = classifyShellCommand(command);
     const targets = await shellCommandTargets(commandClassification, cwd, homeDir);
     if ("error" in targets) {

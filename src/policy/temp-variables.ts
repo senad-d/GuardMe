@@ -7,14 +7,16 @@ import { prepareShellHeredocs } from "./heredocs.ts";
 // write, read and clean up "$d". An unresolved "$d" counts as an outside-project
 // path, so every such command was blocked. This pass rewrites "$d" to the
 // mktemp template path (X's included) when the shell is sure to have assigned
-// it, so the normal temp-directory allowPaths decide.
+// it, so the normal temp-directory allowPaths decide. A name assigned a plain
+// absolute path (`log=/tmp/run/server.log`, or `s="$TMPDIR/s"` once $TMPDIR
+// is expanded) is rewritten the same way.
 
 interface Span {
   readonly start: number;
   readonly end: number;
 }
 
-interface MktempAssignment {
+interface PathAssignment {
   readonly value: string;
   readonly position: number;
 }
@@ -33,6 +35,12 @@ export interface MktempVariableEnvironment {
 const SAFE_PATH_VALUE = /^\/[\w@%+=:,./-]*$/u;
 const ASSIGNMENT_TOKEN = /^([A-Za-z_]\w*)=\$$/u;
 const QUOTED_ASSIGNMENT_TOKEN = /^([A-Za-z_]\w*)=\$\((.*)\)$/su;
+const LITERAL_ASSIGNMENT_TOKEN = /^([A-Za-z_]\w*)=(\/.*)$/su;
+// What follows `name=` in the command text for each kind of assignment.
+const MKTEMP_VALUE_START = String.raw`"?\$\(\s*mktemp\b`;
+const LITERAL_VALUE_START = `["']?/`;
+// `b="$a/build"` resolves one pass after `a`; deeper chains stay unresolved.
+const MAX_PASSES = 3;
 const TMPDIR_PREFIX = /^(?:\$\{TMPDIR(?::-([^}]*))?\}|\$TMPDIR(?!\w))/u;
 const PWD_PREFIX = /^(?:\$\{PWD\}|\$PWD(?!\w))/u;
 const KEYWORD_OPENERS = new Set(["if", "for", "while", "until", "case", "select"]);
@@ -43,8 +51,20 @@ const MKTEMP_FLAGS = new Set(["d", "q", "u"]);
 const MKTEMP_LONG_FLAGS = new Set(["--directory", "--quiet", "--dry-run"]);
 const TRAP_PREFIX = /(^|[\s;&|(])trap\s+$/u;
 
-export function expandMktempVariables(command: string, environment: MktempVariableEnvironment, cwd: string): string {
-  if (!command.includes("mktemp") || !command.includes("$")) {
+export function expandAssignedPathVariables(command: string, environment: MktempVariableEnvironment, cwd: string): string {
+  let expanded = command;
+  for (let pass = 0; pass < MAX_PASSES; pass += 1) {
+    const next = expandAssignedPathVariablesOnce(expanded, environment, cwd);
+    if (next === expanded) {
+      break;
+    }
+    expanded = next;
+  }
+  return expanded;
+}
+
+function expandAssignedPathVariablesOnce(command: string, environment: MktempVariableEnvironment, cwd: string): string {
+  if (!command.includes("$")) {
     return command;
   }
   const heredocs = prepareShellHeredocs(command);
@@ -55,7 +75,7 @@ export function expandMktempVariables(command: string, environment: MktempVariab
   const visible = blankSpans(command, bodies);
   // Tokens come from the analysis form, where each heredoc body is one quoted
   // word, so an assignment inside a body never looks like a top-level one.
-  const assignments = findMktempAssignments(heredocs.command, visible, environment, cwd);
+  const assignments = findPathAssignments(heredocs.command, visible, environment, cwd);
   return assignments.size === 0 ? command : substituteAssignedVariables(command, assignments, bodies);
 }
 
@@ -68,15 +88,15 @@ function blankSpans(command: string, spans: readonly Span[]): string {
   return output;
 }
 
-function findMktempAssignments(
+function findPathAssignments(
   analysisCommand: string,
   visible: string,
   environment: MktempVariableEnvironment,
   cwd: string,
-): Map<string, MktempAssignment> {
+): Map<string, PathAssignment> {
   const tokens = tokenizeShellCommand(analysisCommand);
   const changesDirectory = tokens.some((token, index) => DIRECTORY_CHANGE_COMMANDS.has(token) && isCommandPosition(tokens, index));
-  const candidates = new Map<string, string>();
+  const candidates = new Map<string, { readonly value: string; readonly valueStart: string }>();
   let depth = 0;
   for (let index = 0; index < tokens.length; index += 1) {
     depth += depthChange(tokens, index);
@@ -86,15 +106,19 @@ function findMktempAssignments(
     const candidate = readMktempAssignment(tokens, index);
     const value = candidate ? mktempValue(candidate.args, environment, cwd, changesDirectory) : undefined;
     if (candidate && value) {
-      candidates.set(candidate.name, value);
+      candidates.set(candidate.name, { value, valueStart: MKTEMP_VALUE_START });
+    }
+    const literal = readLiteralAssignment(tokens, index);
+    if (literal) {
+      candidates.set(literal.name, { value: literal.value, valueStart: LITERAL_VALUE_START });
     }
   }
 
-  const assignments = new Map<string, MktempAssignment>();
-  for (const [name, value] of candidates) {
-    const position = assignmentPosition(visible, name);
+  const assignments = new Map<string, PathAssignment>();
+  for (const [name, candidate] of candidates) {
+    const position = assignmentPosition(visible, name, candidate.valueStart);
     if (position !== undefined && isSingleAssignment(tokens, name)) {
-      assignments.set(name, { value, position });
+      assignments.set(name, { value: candidate.value, position });
     }
   }
   return assignments;
@@ -149,6 +173,17 @@ function readMktempAssignment(tokens: readonly string[], index: number): { reado
   return { name: bare[1] ?? "", args: tokens.slice(index + 3, close) };
 }
 
+// `log=/tmp/run/server.log`: the token holds the value with its quotes removed,
+// so a value that needed them (a space, `$`, a glob) is not a safe path and is skipped.
+function readLiteralAssignment(tokens: readonly string[], index: number): { readonly name: string; readonly value: string } | undefined {
+  const match = LITERAL_ASSIGNMENT_TOKEN.exec(tokens[index] ?? "");
+  const value = match ? safePath(match[2] ?? "") : undefined;
+  if (!match || !value || value.split("/").includes("..") || !followsWithSeparator(tokens, index + 1)) {
+    return undefined;
+  }
+  return { name: match[1] ?? "", value };
+}
+
 // `d=$(mktemp) cmd` sets d only for cmd; the shell keeps it only when a
 // separator or the end of the command follows.
 function followsWithSeparator(tokens: readonly string[], index: number): boolean {
@@ -169,8 +204,8 @@ function isSingleAssignment(tokens: readonly string[], name: string): boolean {
   return assignments === 1;
 }
 
-function assignmentPosition(visible: string, name: string): number | undefined {
-  const match = new RegExp(String.raw`(^|[\s;])${name}="?\$\(\s*mktemp\b`, "u").exec(visible);
+function assignmentPosition(visible: string, name: string, valueStart: string): number | undefined {
+  const match = new RegExp(String.raw`(^|[\s;])${name}=${valueStart}`, "u").exec(visible);
   return match ? match.index + (match[1]?.length ?? 0) : undefined;
 }
 
@@ -267,7 +302,7 @@ function safePath(value: string): string | undefined {
   return SAFE_PATH_VALUE.test(normalized) ? normalized : undefined;
 }
 
-function substituteAssignedVariables(command: string, assignments: ReadonlyMap<string, MktempAssignment>, bodies: readonly Span[]): string {
+function substituteAssignedVariables(command: string, assignments: ReadonlyMap<string, PathAssignment>, bodies: readonly Span[]): string {
   const state: ScanState = { singleQuoted: false, doubleQuoted: false, trapQuoted: false };
   let output = "";
   for (let index = 0; index < command.length; index += 1) {
@@ -312,7 +347,7 @@ function updateQuoteState(state: ScanState, character: string, output: string): 
 function variableReplacement(
   command: string,
   offset: number,
-  assignments: ReadonlyMap<string, MktempAssignment>,
+  assignments: ReadonlyMap<string, PathAssignment>,
 ): { readonly value: string; readonly length: number } | undefined {
   const match = /^\$(?:\{(\w+)\}|(\w+))/u.exec(command.slice(offset));
   if (!match) {

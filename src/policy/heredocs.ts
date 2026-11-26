@@ -31,6 +31,12 @@ interface HeredocScan {
   quote?: "'" | '"';
   escaped: boolean;
   complexLine: boolean;
+  /**
+   * A pipe, group or substitution came before a heredoc header on this line
+   * (its consumer is unknown), or after a data heredoc (`cat <<'EOF' | sh`
+   * hands the body on to a command that runs it).
+   */
+  unsafeRouting: boolean;
   pending: Heredoc[];
   replacements: Replacement[];
   error?: string;
@@ -61,7 +67,7 @@ export function prepareShellHeredocs(command: string): PreparedHeredocs {
   if (!command.includes("<<")) {
     return { command };
   }
-  const state: HeredocScan = { index: 0, commandStart: 0, lineStart: 0, ranges: [], bodies: [], escaped: false, complexLine: false, pending: [], replacements: [] };
+  const state: HeredocScan = { index: 0, commandStart: 0, lineStart: 0, ranges: [], bodies: [], escaped: false, complexLine: false, unsafeRouting: false, pending: [], replacements: [] };
   while (state.index < command.length && !state.error) {
     advanceHeredocScan(command, state);
   }
@@ -112,6 +118,7 @@ function advanceUnquotedHeredocScan(command: string, state: HeredocScan, char: s
     state.commandStart = state.index;
     state.lineStart = state.index;
     state.complexLine = false;
+    state.unsafeRouting = false;
     return;
   }
   if (char === "<" && command[state.index + 1] === "<") {
@@ -122,8 +129,15 @@ function advanceUnquotedHeredocScan(command: string, state: HeredocScan, char: s
     }
     return;
   }
+  // `a && python3 - <<'PY'`: the heredoc feeds the command after the operator.
+  if ((char === "&" || char === "|") && command[state.index + 1] === char && state.pending.length === 0) {
+    state.commandStart = state.index + 2;
+    state.index += 2;
+    return;
+  }
   if ("|&()`".includes(char)) {
     state.complexLine = true;
+    state.unsafeRouting ||= state.pending.some(isDataHeredoc);
   }
   if (char === ";") {
     state.commandStart = state.index + 1;
@@ -131,8 +145,15 @@ function advanceUnquotedHeredocScan(command: string, state: HeredocScan, char: s
   state.index += 1;
 }
 
+function isDataHeredoc(heredoc: Heredoc): boolean {
+  return !Object.hasOwn(STDIN_CODE_OPTIONS, heredoc.consumer);
+}
+
 function consumeHeredocHeader(command: string, state: HeredocScan): void {
   const operator = state.index;
+  // `python3 - <<'PY' | tee log`: the body is inspected as inline code and
+  // what follows the header is ordinary shell, classified like any other.
+  state.unsafeRouting ||= state.complexLine;
   const stripTabs = command[operator + 2] === "-";
   let start = operator;
   while (start > state.commandStart && /\d/u.test(command[start - 1] ?? "")) {
@@ -231,7 +252,7 @@ function consumeHeredocBodies(command: string, state: HeredocScan): void {
   const start = state.index + 1;
   state.index = start;
   if (state.pending.length === 0) return;
-  if (state.complexLine) {
+  if (state.unsafeRouting) {
     state.error = "Heredocs combined with pipelines, substitutions or compound routing cannot be inspected safely.";
     return;
   }
